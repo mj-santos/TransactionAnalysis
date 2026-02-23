@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "finance-etl-api",
+      "runtimeExecutable": ".venv/bin/python3",
+      "runtimeArgs": ["run_dev.py"],
+      "port": 8000
+    }
+  ]
+}

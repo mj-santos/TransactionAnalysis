@@ -1,0 +1,21 @@
+services:
+  finance-etl-api:
+    build: .
+    container_name: finance-etl-api
+    command: sh -c "finance_etl api --host ${FINANCE_ETL_API_HOST:-0.0.0.0} --port ${FINANCE_ETL_API_PORT:-8000} --db data/db/finance.duckdb --mappings-dir config/mappings --reports-dir data/reports"
+    ports:
+      - "${FINANCE_ETL_API_PORT:-8000}:${FINANCE_ETL_API_PORT:-8000}"
+    environment:
+      - FINANCE_ETL_API_HOST=${FINANCE_ETL_API_HOST:-0.0.0.0}
+      - FINANCE_ETL_API_PORT=${FINANCE_ETL_API_PORT:-8000}
+      - FINANCE_ETL_UI_PORT=${FINANCE_ETL_UI_PORT:-3000}
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${FINANCE_ETL_API_PORT:-8000}/reports', timeout=2)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped

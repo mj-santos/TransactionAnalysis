@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: finance_etl
+Version: 2.0.0
+Summary: Local deterministic ETL + analytics for bank/credit-card transaction CSVs
+Requires-Python: >=3.11
+Requires-Dist: duckdb>=0.10.0
+Requires-Dist: pyarrow>=14.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: click>=8.1
+Requires-Dist: chardet>=5.0
+Requires-Dist: fastapi>=0.115
+Requires-Dist: uvicorn>=0.30
+Requires-Dist: python-multipart>=0.0.9

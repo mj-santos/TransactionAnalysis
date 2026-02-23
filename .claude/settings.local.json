@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker build:*)",
+      "Bash(xargs cat:*)",
+      "Bash(git -C /Users/joematamoros/Documents/GitHub/TransactionAnalysis ls-files:*)",
+      "Bash(python3:*)",
+      "Bash(git -C /Users/joematamoros/Documents/GitHub/TransactionAnalysis diff --stat HEAD)",
+      "Bash(git -C /Users/joematamoros/Documents/GitHub/TransactionAnalysis remote get-url origin)",
+      "Bash(chmod:*)",
+      "Bash(bash -n /Users/joematamoros/Documents/GitHub/TransactionAnalysis/install.sh)",
+      "Bash(git -C /Users/joematamoros/Documents/GitHub/TransactionAnalysis status --short)",
+      "Bash(bash -c 'source /Users/joematamoros/Documents/GitHub/TransactionAnalysis/install.sh --dry-run 2>&1 | head -5')",
+      "Bash(bash -c ':*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(.venv/bin/pip list:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs:*)"
+    ]
+  }
+}

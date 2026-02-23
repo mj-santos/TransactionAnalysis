@@ -1,0 +1,39 @@
+# Example mapping: Single signed amount column (e.g. Chase, many US credit cards)
+# amount_format_family: signed
+# Positive = inflow (payment/refund), Negative = outflow (purchase)
+
+bank_key: example_signed
+bank_name: "Example Bank (Signed)"
+account_name: "Personal Checking"
+account_id: "CHK-XXXX-1234"  # Use a safe token, never full account number
+
+amount_format_family: signed
+
+# Map source CSV column names → canonical names
+column_map:
+  "Transaction Date": transaction_date
+  "Post Date": posted_date
+  "Description": description
+  "Amount": amount
+
+drop_columns:
+  - "Category"   # drop bank's own category; we'll apply our own rules
+
+date:
+  transaction_date: "Transaction Date"
+  posted_date: "Post Date"
+  date_format: "%m/%d/%Y"   # explicit format to avoid ambiguity
+
+amount:
+  signed_amount: "Amount"
+
+currency_default: "USD"
+
+locale:
+  decimal_separator: "."
+  thousands_separator: ","
+  parentheses_negative: false
+  date_locale: "US"
+
+# --- Expected CSV headers (for reference / documentation) ---
+# Transaction Date, Post Date, Description, Category, Amount

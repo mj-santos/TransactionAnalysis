@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>finance_etl</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- ══════════════ SIDEBAR ══════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <h1>finance_etl</h1>
+    <p>Transaction Pipeline v2.0</p>
+  </div>
+  <nav>
+    <a href="#" class="active" data-page="import">
+      <span class="icon">📥</span> Import
+    </a>
+    <a href="#" data-page="history">
+      <span class="icon">📋</span> History
+    </a>
+    <a href="#" data-page="reports">
+      <span class="icon">📊</span> Reports
+    </a>
+    <a href="#" data-page="settings">
+      <span class="icon">⚙️</span> Settings
+    </a>
+  </nav>
+  <div class="sidebar-footer">
+    <a href="/docs" target="_blank">API docs ↗</a>
+  </div>
+</aside>
+
+<!-- ══════════════ CONTENT ══════════════ -->
+<div class="content">
+
+  <div class="topbar">
+    <h2 id="topbar-title">Import Transactions</h2>
+    <div id="api-status" style="font-size:12px; color: var(--text-muted);">
+      <span class="status-dot"></span>API connected
+    </div>
+  </div>
+
+  <!-- ─── IMPORT PAGE ─── -->
+  <section id="page-import" class="page active">
+
+    <div class="card">
+      <div class="card-title">1 — Upload CSV file(s)</div>
+      <div class="drop-zone" id="drop-zone">
+        <div class="dz-icon">📂</div>
+        <p>Drag &amp; drop your bank export CSV here, or</p>
+        <label class="btn btn-secondary" style="cursor:pointer">
+          Browse files
+          <input type="file" id="file-input" accept=".csv" multiple hidden />
+        </label>
+      </div>
+      <div class="file-chips" id="file-chips"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">2 — Configure mapping</div>
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div class="form-row">
+          <label for="mapping-select">Bank mapping</label>
+          <select id="mapping-select">
+            <option value="">— Loading mappings… —</option>
+          </select>
+        </div>
+        <label class="toggle-row">
+          <input type="checkbox" id="preview-toggle" checked />
+          Preview transactions before committing to ledger
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">3 — Run pipeline</div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn btn-primary" id="import-btn" disabled onclick="startImport()">
+          Start import
+        </button>
+        <span id="import-hint" style="font-size:12px; color:var(--text-muted);">
+          Upload a file and select a mapping to continue.
+        </span>
+      </div>
+    </div>
+
+    <!-- Run status card -->
+    <div class="run-status" id="run-status">
+      <div class="rs-header">
+        <span id="rs-icon">⏳</span>
+        <span id="rs-label">Processing…</span>
+        <span class="rs-id" id="rs-id"></span>
+      </div>
+      <div class="rs-counts" id="rs-counts"></div>
+      <div class="rs-actions" id="rs-actions"></div>
+    </div>
+
+    <!-- Preview panel (shown when staged) -->
+    <div id="preview-container" style="display:none">
+      <div class="preview-panel">
+        <div class="preview-header">
+          <span>Transaction Preview</span>
+          <span class="preview-meta" id="preview-meta"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="preview-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Amount</th>
+                <th>Currency</th>
+                <th>Account</th>
+              </tr>
+            </thead>
+            <tbody id="preview-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ─── HISTORY PAGE ─── -->
+  <section id="page-history" class="page">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:13px; color:var(--text-muted);">All import runs, most recent first.</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadHistory()">↻ Refresh</button>
+    </div>
+
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Run ID</th>
+              <th>Started</th>
+              <th>Status</th>
+              <th class="text-right">In</th>
+              <th class="text-right">Staged</th>
+              <th class="text-right">Loaded</th>
+              <th class="text-right">Errors</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody">
+            <tr><td colspan="8" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Inline preview for history runs -->
+    <div id="history-preview-container" style="display:none">
+      <div class="preview-panel">
+        <div class="preview-header">
+          <span>Staged Transactions — <span id="history-preview-id" class="mono"></span></span>
+          <span class="preview-meta" id="history-preview-meta"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>Date</th><th>Description</th>
+                <th>Amount</th><th>Currency</th><th>Account</th>
+              </tr>
+            </thead>
+            <tbody id="history-preview-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── REPORTS PAGE ─── -->
+  <section id="page-reports" class="page">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:13px; color:var(--text-muted);">Analytics generated after each successful import.</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadReports()">↻ Refresh</button>
+    </div>
+
+    <div class="reports-grid" id="reports-grid">
+      <div class="empty"><div class="empty-icon">📊</div>No reports yet. Run an import first.</div>
+    </div>
+
+    <div id="chart-area" style="display:none">
+      <div class="chart-header">
+        <strong id="chart-title"></strong>
+        <button class="btn btn-secondary btn-sm" onclick="closeChart()">✕ Close</button>
+      </div>
+      <div class="table-wrap" style="max-height:420px; overflow-y:auto;">
+        <table>
+          <thead><tr id="chart-head"></tr></thead>
+          <tbody id="chart-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── SETTINGS PAGE ─── -->
+  <section id="page-settings" class="page">
+    <div class="card">
+      <div class="card-title">Debug &amp; Support Settings</div>
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <label class="toggle-row">
+          <input type="checkbox" id="verbose-logs-toggle" />
+          Verbose API error messages (include backend exception details)
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="show-logs-toggle" />
+          Show logs panel when an operation fails
+        </label>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save settings</button>
+          <button class="btn btn-secondary btn-sm" onclick="refreshLogs()">Refresh logs</button>
+          <span id="settings-status" class="text-muted" style="font-size:12px;"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="logs-panel" style="display:none;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Backend Logs</span>
+        <span id="logs-file" class="mono text-muted" style="font-size:11px;"></span>
+      </div>
+      <pre id="logs-output" class="logs-output">No logs loaded yet.</pre>
+    </div>
+  </section>
+
+</div><!-- .content -->
+
+<!-- Toast container -->
+<div id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

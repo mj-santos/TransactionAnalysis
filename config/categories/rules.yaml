@@ -1,0 +1,36 @@
+# Category assignment rules (optional, keyword-based)
+# Applied to description (case-insensitive substring match)
+# First match wins.
+
+rules:
+  - category: "Groceries"
+    keywords: ["WHOLE FOODS", "TRADER JOE", "SAFEWAY", "KROGER", "WALMART GROCERY", "ALDI"]
+
+  - category: "Dining"
+    keywords: ["STARBUCKS", "MCDONALD", "CHIPOTLE", "DOORDASH", "GRUBHUB", "UBEREATS",
+               "RESTAURANT", "CAFE", "PIZZA", "SUSHI"]
+
+  - category: "Transport"
+    keywords: ["UBER", "LYFT", "TRANSIT", "METRO", "PARKING", "TOLLWAY", "GAS STATION",
+               "SHELL", "CHEVRON", "BP OIL", "EXXON"]
+
+  - category: "Utilities"
+    keywords: ["ELECTRIC", "GAS BILL", "WATER BILL", "INTERNET", "COMCAST", "AT&T",
+               "VERIZON", "T-MOBILE"]
+
+  - category: "Subscriptions"
+    keywords: ["NETFLIX", "SPOTIFY", "APPLE.COM", "AMAZON PRIME", "HULU", "YOUTUBE PREMIUM",
+               "DROPBOX", "GOOGLE ONE"]
+
+  - category: "Healthcare"
+    keywords: ["CVS PHARMACY", "WALGREENS", "HOSPITAL", "CLINIC", "DOCTOR", "DENTAL",
+               "PHARMACY", "MEDICAL"]
+
+  - category: "Shopping"
+    keywords: ["AMAZON", "TARGET", "BEST BUY", "HOME DEPOT", "COSTCO", "IKEA"]
+
+  - category: "Income"
+    keywords: ["PAYROLL", "DIRECT DEP", "SALARY", "WAGE", "VENMO PAYMENT", "ZELLE CREDIT"]
+
+  - category: "Transfer"
+    keywords: ["TRANSFER", "ZELLE", "ACH CREDIT", "ACH DEBIT", "WIRE TRANSFER"]
