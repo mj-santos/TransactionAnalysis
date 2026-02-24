@@ -519,6 +519,10 @@ async function refreshLogs() {
 
 async function maybeShowLogsOnError() {
   if (!state.settings.show_logs) return;
+  // Navigate to Settings so the logs panel (which lives inside that section)
+  // is actually visible to the user. Without this the panel would be inside
+  // the inactive (hidden) Settings section while the user stays on Import.
+  navigate('settings');
   document.getElementById('logs-panel').style.display = 'block';
   await refreshLogs();
 }

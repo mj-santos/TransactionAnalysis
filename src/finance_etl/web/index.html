@@ -225,7 +225,13 @@
     <div class="card" id="logs-panel" style="display:none;">
       <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
         <span>Backend Logs</span>
-        <span id="logs-file" class="mono text-muted" style="font-size:11px;"></span>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span id="logs-file" class="mono text-muted" style="font-size:11px;"></span>
+          <a id="logs-download-btn" class="btn btn-secondary btn-sm" href="/logs/download" download
+             title="Download the current log file as a text file">
+            ⬇ Download
+          </a>
+        </div>
       </div>
       <pre id="logs-output" class="logs-output">No logs loaded yet.</pre>
     </div>
