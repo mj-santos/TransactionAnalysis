@@ -178,6 +178,60 @@ def suggest_mappings(headers: list[str]) -> dict[str, str | None]:
 
 
 # ---------------------------------------------------------------------------
+# Date format detection
+# ---------------------------------------------------------------------------
+
+# Ordered list of strptime formats to try (most common / unambiguous first)
+_CANDIDATE_DATE_FORMATS: list[str] = [
+    "%Y-%m-%d",    # ISO 8601       — always unambiguous
+    "%m/%d/%Y",    # US slash       — e.g. 01/15/2024
+    "%d/%m/%Y",    # EU slash       — e.g. 15/01/2024
+    "%m-%d-%Y",    # US dash        — e.g. 01-15-2024
+    "%d-%m-%Y",    # EU dash        — e.g. 15-01-2024
+    "%Y/%m/%d",    # ISO slash      — e.g. 2024/01/15
+    "%d %b %Y",    # e.g. 15 Jan 2024
+    "%b %d, %Y",   # e.g. Jan 15, 2024
+    "%d %B %Y",    # e.g. 15 January 2024
+    "%B %d, %Y",   # e.g. January 15, 2024
+]
+
+
+def detect_date_format(values: list[str]) -> str | None:
+    """
+    Infer a strptime date_format from a list of sample date strings.
+
+    Tries each candidate format in order and returns the first one that
+    successfully parses *all* non-empty sample values.  Returns None when
+    the list is empty or no single format matches every value.
+
+    Example
+    -------
+    >>> detect_date_format(["01/05/2024", "01/15/2024"])
+    '%m/%d/%Y'
+    """
+    import datetime as _dt
+
+    clean = [v.strip() for v in values if v and v.strip()]
+    if not clean:
+        return None
+
+    for fmt in _CANDIDATE_DATE_FORMATS:
+        if all(_try_strptime(v, fmt) for v in clean):
+            return fmt
+
+    return None
+
+
+def _try_strptime(value: str, fmt: str) -> bool:
+    import datetime as _dt
+    try:
+        _dt.datetime.strptime(value, fmt)
+        return True
+    except ValueError:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Header extraction
 # ---------------------------------------------------------------------------
 
@@ -190,12 +244,13 @@ def extract_csv_headers(
 
     Returns:
       {
-        "headers":            list[str],
-        "sample_rows":        list[dict[str, str]],
-        "encoding":           str,
-        "delimiter":          str,
-        "row_count_estimate": int,
-        "suggestions":        dict[str, str | None],
+        "headers":               list[str],
+        "sample_rows":           list[dict[str, str]],
+        "encoding":              str,
+        "delimiter":             str,
+        "row_count_estimate":    int,
+        "suggestions":           dict[str, str | None],
+        "suggested_date_format": str | None,   # inferred from date column samples
       }
     """
     from finance_etl.utils.csv_sniff import sniff_csv
@@ -219,13 +274,26 @@ def extract_csv_headers(
     except Exception:
         pass
 
+    suggestions = suggest_mappings(headers)
+
+    # Try to detect the date format from a date column's sample values.
+    # Use the transaction_date suggestion first; fall back to posted_date so
+    # files like "Posting Date,…" (which keyword-match to posted_date) still
+    # get a useful format hint.
+    date_col = suggestions.get("transaction_date") or suggestions.get("posted_date")
+    date_values: list[str] = []
+    if date_col and sample_rows:
+        date_values = [row.get(date_col, "") for row in sample_rows]
+    suggested_date_format = detect_date_format(date_values)
+
     return {
-        "headers":            headers,
-        "sample_rows":        sample_rows,
-        "encoding":           encoding,
-        "delimiter":          delimiter,
-        "row_count_estimate": row_count,
-        "suggestions":        suggest_mappings(headers),
+        "headers":               headers,
+        "sample_rows":           sample_rows,
+        "encoding":              encoding,
+        "delimiter":             delimiter,
+        "row_count_estimate":    row_count,
+        "suggestions":           suggestions,
+        "suggested_date_format": suggested_date_format,
     }
 
 
