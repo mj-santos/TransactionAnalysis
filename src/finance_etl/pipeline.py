@@ -64,6 +64,7 @@ def run_with_options(
     mappings_dir="config/mappings",
     mapping_path=None,
     bank_key=None,
+    mapping_dict=None,
     account_name=None,
     account_id=None,
     raw_dir="data/raw",
@@ -89,13 +90,18 @@ def run_with_options(
 
     csv_paths = [Path(p) for p in inputs]
 
-    if mapping_path:
+    if mapping_dict is not None:
+        # Inline dict supplied by the wizard — validate then use directly
+        from finance_etl.models import parse_mapping_config
+        parse_mapping_config(mapping_dict, "<wizard>")
+        mapping = mapping_dict
+    elif mapping_path:
         mapping = load_mapping(mapping_path)
     elif bank_key:
         mp = find_mapping(mappings_dir, bank_key)
         mapping = load_mapping(mp)
     else:
-        raise ValueError("Provide mapping_path or bank_key")
+        raise ValueError("Provide mapping_path, bank_key, or mapping_dict")
 
     conn = get_connection(db_path)
     counts = dict(rows_in=0, rows_staged=0, rows_normalized=0, rows_loaded=0, errors_count=0)

@@ -1,4 +1,5 @@
 """FastAPI service — uploads, async runs, preview/commit, reports, and web UI."""
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,9 +18,16 @@ try:
     from pydantic import BaseModel, Field
 
     class UploadResponse(BaseModel):
-        filename: str = Field(..., description="Original filename as uploaded")
-        path: str     = Field(..., description="Server-side path to pass as input to POST /runs")
-        size: int     = Field(..., description="File size in bytes")
+        filename:           str             = Field(..., description="Original filename as uploaded")
+        path:               str             = Field(..., description="Server-side path to pass as input to POST /runs")
+        size:               int             = Field(..., description="File size in bytes")
+        headers:            list[str]       = Field(default_factory=list, description="Detected CSV column headers")
+        sample_rows:        list[dict]      = Field(default_factory=list, description="First few data rows for preview")
+        encoding:           Optional[str]   = Field(None, description="Detected file encoding")
+        delimiter:          Optional[str]   = Field(None, description="Detected CSV delimiter character")
+        row_count_estimate: Optional[int]   = Field(None, description="Estimated data row count (excludes header)")
+        suggestions:        Optional[dict]  = Field(None, description="Fuzzy-matched canonical-field suggestions {field: csv_header}")
+        matched_profile:    Optional[dict]  = Field(None, description="Auto-detected wizard profile (if score ≥ threshold)")
 
     class MappingInfo(BaseModel):
         name:    str  = Field(..., description="Mapping key (YAML stem)")
@@ -39,12 +47,17 @@ try:
         mapping_path: Optional[str] = Field(
             None,
             description="Absolute path to a bank mapping YAML (from GET /mappings). "
-                        "Provide this OR bank_key, not both.",
+                        "Provide this OR bank_key or mapping_dict, not multiple.",
         )
         bank_key: Optional[str] = Field(
             None,
             description="Bank key (YAML stem) to auto-locate a mapping. "
-                        "Alternative to mapping_path.",
+                        "Alternative to mapping_path or mapping_dict.",
+        )
+        mapping_dict: Optional[dict] = Field(
+            None,
+            description="Inline pipeline mapping dict produced by the wizard. "
+                        "Alternative to mapping_path and bank_key.",
         )
         preview_only: bool = Field(
             False,
@@ -52,6 +65,31 @@ try:
                         "but NOT written to the ledger. Call POST /runs/{run_id}/commit "
                         "to finalise, or simply discard.",
         )
+
+    # ---- Wizard Pydantic models ------------------------------------------------
+
+    class WizardDetectRequest(BaseModel):
+        file_path: str = Field(..., description="Server-side file path returned by POST /upload")
+
+    class WizardValidateRequest(BaseModel):
+        canonical_map: dict = Field(
+            ...,
+            description="Mapping from canonical field names to selected CSV header names. "
+                        "Use null/empty-string for unmapped fields.",
+        )
+
+    class WizardSaveAndRunRequest(BaseModel):
+        file_paths:        list[str]    = Field(..., description="Server-side file paths to process")
+        canonical_map:     dict         = Field(..., description="canonical_field → csv_header selections")
+        institution:       str          = Field(..., description="Institution name (e.g. 'chase')")
+        account_id:        str          = Field(..., description="Account identifier (e.g. 'checking_1234')")
+        account_name:      str          = Field("",  description="Human-readable account name")
+        bank_name:         str          = Field("",  description="Bank display name")
+        profile_name:      str          = Field("default", description="Profile variant name")
+        date_format:       Optional[str]= Field(None, description="strptime format, e.g. '%m/%d/%Y'")
+        currency_default:  str          = Field("USD")
+        drop_columns:      list[str]    = Field(default_factory=list)
+        preview_only:      bool         = Field(False)
 
     class RunStartedResponse(BaseModel):
         run_id:  str = Field(..., description="Unique run identifier — poll GET /runs/{run_id} for progress")
@@ -142,10 +180,11 @@ _ALL_DATA_DIRS = [
 
 
 def create_app(
-    db_path:      str = "data/db/finance.duckdb",
-    mappings_dir: str = "config/mappings",
-    reports_dir:  str = "data/reports",
-    upload_dir:   str = "data/uploads",
+    db_path:            str = "data/db/finance.duckdb",
+    mappings_dir:       str = "config/mappings",
+    reports_dir:        str = "data/reports",
+    upload_dir:         str = "data/uploads",
+    wizard_profiles_dir: str = "config/wizard_profiles",
 ):
     try:
         from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
@@ -184,6 +223,7 @@ def create_app(
         Path(upload_dir).mkdir(parents=True, exist_ok=True)
         Path(reports_dir).mkdir(parents=True, exist_ok=True)
         Path(mappings_dir).mkdir(parents=True, exist_ok=True)
+        Path(wizard_profiles_dir).mkdir(parents=True, exist_ok=True)
 
         # ------------------------------------------------------------------
         # Attach a persistent file handler to the API logger so that upload
@@ -275,6 +315,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         },
         openapi_tags=[
             {"name": "files",    "description": "Upload CSV files before starting a run."},
+            {"name": "wizard",   "description": "Mapping wizard — detect headers, validate, save profiles, run."},
             {"name": "mappings", "description": "Bank column-mapping configurations (YAML files)."},
             {"name": "runs",     "description": "Import pipeline runs — create, monitor, preview, and commit."},
             {"name": "reports",  "description": "Analytics reports generated after each successful run."},
@@ -314,7 +355,8 @@ No cloud services, no external dependencies — all data stays on your machine.
     # Background task helpers
     # -----------------------------------------------------------------------
 
-    def _run_bg(run_id: str, inputs: list, mapping_path, bank_key, preview_only: bool):
+    def _run_bg(run_id: str, inputs: list, mapping_path, bank_key, preview_only: bool,
+                mapping_dict=None):
         _async_runs[run_id] = {"status": "running", "run_id": run_id}
         try:
             result = run_with_options(
@@ -323,6 +365,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 mappings_dir=mappings_dir,
                 mapping_path=mapping_path,
                 bank_key=bank_key,
+                mapping_dict=mapping_dict,
                 reports_dir=reports_dir,
                 preview_only=preview_only,
                 run_id=run_id,
@@ -378,7 +421,44 @@ No cloud services, no external dependencies — all data stays on your machine.
             if not content:
                 raise HTTPException(status_code=400, detail="Uploaded file is empty.")
             dest.write_bytes(content)
-            return {"filename": safe_original, "path": str(dest), "size": len(content)}
+
+            # --- Extract headers + suggestions ---
+            try:
+                from finance_etl.wizard_mapping import extract_csv_headers, find_matching_profile
+                header_info = extract_csv_headers(dest)
+                matched = find_matching_profile(
+                    header_info["headers"],
+                    Path(wizard_profiles_dir),
+                )
+                # Omit full profile data from matched to keep response lean
+                matched_summary = None
+                if matched:
+                    matched_summary = {
+                        "score":        matched["score"],
+                        "institution":  matched["institution"],
+                        "account_id":   matched["account_id"],
+                        "account_name": matched["account_name"],
+                        "bank_name":    matched["bank_name"],
+                        "profile_name": matched["profile_name"],
+                        "suggested_mapping": matched.get("suggested_mapping"),
+                    }
+            except Exception:
+                header_info = {"headers": [], "sample_rows": [], "encoding": None,
+                               "delimiter": None, "row_count_estimate": None, "suggestions": None}
+                matched_summary = None
+
+            return {
+                "filename":           safe_original,
+                "path":               str(dest),
+                "size":               len(content),
+                "headers":            header_info.get("headers", []),
+                "sample_rows":        header_info.get("sample_rows", []),
+                "encoding":           header_info.get("encoding"),
+                "delimiter":          header_info.get("delimiter"),
+                "row_count_estimate": header_info.get("row_count_estimate"),
+                "suggestions":        header_info.get("suggestions"),
+                "matched_profile":    matched_summary,
+            }
         except HTTPException:
             raise
         except Exception as exc:
@@ -496,8 +576,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         """
         if not payload.inputs:
             raise HTTPException(status_code=400, detail="inputs must contain at least one file path.")
-        if not payload.mapping_path and not payload.bank_key:
-            raise HTTPException(status_code=400, detail="Provide mapping_path or bank_key.")
+        if not payload.mapping_path and not payload.bank_key and not payload.mapping_dict:
+            raise HTTPException(status_code=400, detail="Provide mapping_path, bank_key, or mapping_dict.")
 
         run_id = uuid.uuid4().hex[:16]
         _async_runs[run_id] = {"status": "pending", "run_id": run_id}
@@ -509,6 +589,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             payload.mapping_path,
             payload.bank_key,
             payload.preview_only,
+            payload.mapping_dict,
         )
         return {"run_id": run_id, "status": "pending"}
 
@@ -619,6 +700,183 @@ No cloud services, no external dependencies — all data stays on your machine.
         _async_runs[run_id] = {"status": "committing", "run_id": run_id}
         background_tasks.add_task(_commit_bg, run_id)
         return {"run_id": run_id, "status": "committing"}
+
+    # -----------------------------------------------------------------------
+    # Wizard — header detection, mapping validation, save-and-run
+    # -----------------------------------------------------------------------
+
+    @app.post(
+        "/wizard/detect",
+        tags=["wizard"],
+        summary="Detect CSV headers and find matching mapping profile",
+    )
+    def wizard_detect(payload: WizardDetectRequest):
+        """
+        Given a server-side CSV file path, extract its headers and attempt to
+        find an existing wizard mapping profile that matches them.
+
+        Returns:
+        - `headers`: list of detected column names
+        - `sample_rows`: first 5 data rows
+        - `encoding` / `delimiter`: detected CSV dialect
+        - `suggestions`: fuzzy-matched {canonical_field: csv_header} hints
+        - `matched_profile`: best-matching saved profile (score ≥ 0.6), or null
+        - `canonical_fields`: ordered list of all mappable canonical field names
+        - `canonical_labels`: human-readable label per canonical field
+        """
+        from finance_etl.wizard_mapping import (
+            CANONICAL_FIELDS,
+            CANONICAL_LABELS,
+            extract_csv_headers,
+            find_matching_profile,
+        )
+        file_path = Path(payload.file_path)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {payload.file_path}")
+        try:
+            info = extract_csv_headers(file_path)
+            matched = find_matching_profile(info["headers"], Path(wizard_profiles_dir))
+            matched_out = None
+            if matched:
+                matched_out = {
+                    "score":             matched["score"],
+                    "institution":       matched["institution"],
+                    "account_id":        matched["account_id"],
+                    "account_name":      matched["account_name"],
+                    "bank_name":         matched["bank_name"],
+                    "profile_name":      matched["profile_name"],
+                    "suggested_mapping": matched.get("suggested_mapping"),
+                }
+            return {
+                **info,
+                "matched_profile":  matched_out,
+                "canonical_fields": CANONICAL_FIELDS,
+                "canonical_labels": CANONICAL_LABELS,
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.post(
+        "/wizard/validate",
+        tags=["wizard"],
+        summary="Validate a wizard mapping selection",
+    )
+    def wizard_validate(payload: WizardValidateRequest):
+        """
+        Validate that a canonical field mapping satisfies minimum pipeline requirements:
+        - `transaction_date` must be mapped
+        - At least one amount group must be fully covered
+
+        Returns `{ok: true}` or `{ok: false, errors: [...]}`.
+        """
+        from finance_etl.wizard_mapping import validate_wizard_mapping
+        errors = validate_wizard_mapping(payload.canonical_map)
+        if errors:
+            raise HTTPException(status_code=422, detail={"ok": False, "errors": errors})
+        return {"ok": True, "errors": []}
+
+    @app.post(
+        "/wizard/save-and-run",
+        tags=["wizard"],
+        summary="Save wizard mapping profile and start the pipeline",
+        status_code=202,
+    )
+    async def wizard_save_and_run(
+        payload: WizardSaveAndRunRequest,
+        background_tasks: BackgroundTasks,
+    ):
+        """
+        1. Validate the canonical_map.
+        2. Merge/append new header aliases into the wizard profile YAML (additive).
+        3. Convert selections to a pipeline-compatible mapping dict.
+        4. Start the pipeline run (preview_only or full).
+
+        On subsequent uploads the merged YAML will auto-match and pre-fill the wizard.
+        """
+        from finance_etl.wizard_mapping import (
+            infer_amount_mode,
+            load_wizard_profile,
+            merge_wizard_profile,
+            save_wizard_profile,
+            validate_wizard_mapping,
+            wizard_to_pipeline_mapping,
+        )
+
+        if not payload.file_paths:
+            raise HTTPException(status_code=400, detail="file_paths must contain at least one path.")
+
+        # Validate mapping
+        errors = validate_wizard_mapping(payload.canonical_map)
+        if errors:
+            raise HTTPException(status_code=422, detail={"ok": False, "errors": errors})
+
+        # Merge wizard profile (additive)
+        try:
+            profiles_path = Path(wizard_profiles_dir)
+            existing = load_wizard_profile(profiles_path, payload.institution, payload.account_id)
+            amount_mode = infer_amount_mode(payload.canonical_map)
+            merged = merge_wizard_profile(
+                existing=existing,
+                institution=payload.institution,
+                account_id=payload.account_id,
+                account_name=payload.account_name,
+                bank_name=payload.bank_name,
+                profile_name=payload.profile_name,
+                canonical_map=payload.canonical_map,
+                amount_mode=amount_mode,
+                date_format=payload.date_format,
+                currency_default=payload.currency_default,
+                drop_columns=payload.drop_columns,
+            )
+            saved_path = save_wizard_profile(profiles_path, merged)
+        except Exception as exc:
+            import logging
+            logging.getLogger("finance_etl.api").exception("Wizard profile save failed: %s", exc)
+            raise HTTPException(status_code=500, detail=f"Failed to save mapping profile: {exc}") from exc
+
+        # Build inline pipeline mapping dict
+        bank_key = re.sub(r"[^a-z0-9_]", "_",
+                          f"{payload.institution}_{payload.account_id}".lower())
+        mapping_dict = wizard_to_pipeline_mapping(
+            canonical_map=payload.canonical_map,
+            bank_name=payload.bank_name or payload.institution,
+            bank_key=bank_key,
+            account_name=payload.account_name,
+            account_id=payload.account_id,
+            date_format=payload.date_format,
+            currency_default=payload.currency_default,
+            drop_columns=payload.drop_columns,
+        )
+
+        # Kick off pipeline run
+        run_id = uuid.uuid4().hex[:16]
+        _async_runs[run_id] = {"status": "pending", "run_id": run_id}
+        background_tasks.add_task(
+            _run_bg,
+            run_id,
+            payload.file_paths,
+            None,           # mapping_path
+            None,           # bank_key
+            payload.preview_only,
+            mapping_dict,   # mapping_dict
+        )
+        return {
+            "run_id":       run_id,
+            "status":       "pending",
+            "profile_path": str(saved_path),
+        }
+
+    @app.get(
+        "/wizard/profiles",
+        tags=["wizard"],
+        summary="List saved wizard mapping profiles",
+    )
+    def wizard_list_profiles():
+        """Return all saved wizard profile summaries for the UI profile picker."""
+        from finance_etl.wizard_mapping import list_wizard_profiles
+        return {"profiles": list_wizard_profiles(Path(wizard_profiles_dir))}
 
     # -----------------------------------------------------------------------
     # Settings + Logs
