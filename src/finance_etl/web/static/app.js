@@ -444,13 +444,23 @@ async function viewChart(name) {
   document.getElementById('chart-head').innerHTML = '';
   document.getElementById('chart-body').innerHTML =
     '<tr><td class="text-center text-muted" style="padding:20px">Loading…</td></tr>';
+  document.getElementById('chart-foot').innerHTML = '';
+  // Store name for grouping controls and reset their state
+  document.getElementById('chart-current-name').value = name;
+  document.getElementById('chart-group-field').value  = '';
+  document.getElementById('chart-group-bucket').value = '';
   area.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  await _loadChartData(name, '');
+}
 
+async function _loadChartData(name, queryParams) {
+  const url = `/charts/${encodeURIComponent(name)}` + (queryParams ? `?${queryParams}` : '');
   try {
-    const data = await api('GET', `/charts/${name}`);
+    const data = await api('GET', url);
     if (!data.rows.length) {
       document.getElementById('chart-body').innerHTML =
         '<tr><td class="text-center text-muted" style="padding:20px">No data.</td></tr>';
+      document.getElementById('chart-foot').innerHTML = '';
       return;
     }
     const cols = Object.keys(data.rows[0]);
@@ -458,14 +468,128 @@ async function viewChart(name) {
     document.getElementById('chart-body').innerHTML = data.rows.map(row =>
       `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
     ).join('');
+    _renderTotalsRow('chart-foot', cols, data.rows);
   } catch (err) {
     document.getElementById('chart-body').innerHTML =
       `<tr><td class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+    document.getElementById('chart-foot').innerHTML = '';
   }
+}
+
+function _renderTotalsRow(tfootId, cols, rows) {
+  const foot = document.getElementById(tfootId);
+  if (!foot) return;
+  const totals = {};
+  let hasNumeric = false;
+  cols.forEach(c => {
+    const nums = rows.map(r => { const v = parseFloat(r[c]); return isNaN(v) ? null : v; }).filter(v => v !== null);
+    if (nums.length > 0) { totals[c] = nums.reduce((a, b) => a + b, 0); hasNumeric = true; }
+  });
+  if (!hasNumeric) { foot.innerHTML = ''; return; }
+  foot.innerHTML = `<tr style="font-weight:600; border-top:2px solid var(--border); background:var(--surface);">
+    ${cols.map((c, i) => {
+      if (totals[c] !== undefined) return `<td class="mono text-right">${totals[c].toFixed(2)}</td>`;
+      return `<td>${i === 0 ? '<span style="color:var(--text-muted);font-size:11px;">TOTAL</span>' : ''}</td>`;
+    }).join('')}
+  </tr>`;
+}
+
+async function applyChartGrouping() {
+  const name   = document.getElementById('chart-current-name').value;
+  const field  = document.getElementById('chart-group-field').value;
+  const bucket = document.getElementById('chart-group-bucket').value;
+  if (!name) return;
+  const params = [];
+  if (field)  params.push(`group_by=${encodeURIComponent(field)}`);
+  if (bucket) params.push(`bucket=${encodeURIComponent(bucket)}`);
+  await _loadChartData(name, params.join('&'));
+}
+
+async function resetChartGrouping() {
+  const name = document.getElementById('chart-current-name').value;
+  document.getElementById('chart-group-field').value  = '';
+  document.getElementById('chart-group-bucket').value = '';
+  if (name) await _loadChartData(name, '');
 }
 
 function closeChart() {
   document.getElementById('chart-area').style.display = 'none';
+}
+
+// ── Custom report builder ──────────────────────────────────────
+
+const REPORT_FIELD_LABELS = {
+  transaction_date: 'Transaction Date', description: 'Description', merchant: 'Merchant',
+  category: 'Category', amount: 'Amount', currency: 'Currency',
+  bank_name: 'Bank', account_name: 'Account', account_id: 'Account ID',
+};
+const REPORT_OPS = ['=','contains','>=','<=','is_null','not_null','in','between'];
+
+function toggleCustomReport() {
+  const card = document.getElementById('custom-report-card');
+  card.style.display = card.style.display === 'none' ? '' : 'none';
+}
+
+function addReportFilter() {
+  const container = document.getElementById('report-filter-rows');
+  const idx = container.children.length;
+  const fieldOpts = Object.entries(REPORT_FIELD_LABELS).map(([v,l]) =>
+    `<option value="${v}">${esc(l)}</option>`).join('');
+  const opOpts = REPORT_OPS.map(o => `<option value="${o}">${esc(o)}</option>`).join('');
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex; gap:6px; align-items:center;';
+  row.dataset.filterIdx = idx;
+  row.innerHTML = `
+    <select class="rf-field" style="flex:2;">${fieldOpts}</select>
+    <select class="rf-op"    style="flex:1;">${opOpts}</select>
+    <input  class="rf-val"   style="flex:3;" type="text" placeholder="value" />
+    <button class="btn btn-secondary btn-sm" onclick="this.parentElement.remove()">✕</button>`;
+  container.appendChild(row);
+}
+
+async function runCustomReport() {
+  const filters = [];
+  document.querySelectorAll('#report-filter-rows > div').forEach(row => {
+    const field = row.querySelector('.rf-field')?.value;
+    const op    = row.querySelector('.rf-op')?.value;
+    const val   = row.querySelector('.rf-val')?.value;
+    if (field && op) {
+      let value = val;
+      if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
+      if (op === 'between') value = val.split(',').map(s => s.trim());
+      if (op === 'is_null' || op === 'not_null') value = null;
+      filters.push({ field, op, value });
+    }
+  });
+
+  const groupByEl = document.getElementById('report-group-by');
+  const group_by  = [...groupByEl.selectedOptions].map(o => o.value);
+  const bucket    = document.getElementById('report-bucket').value || null;
+  const date_from = document.getElementById('report-date-from').value || null;
+  const date_to   = document.getElementById('report-date-to').value   || null;
+
+  document.getElementById('custom-report-results').style.display = '';
+  document.getElementById('custom-report-body').innerHTML =
+    '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">Running…</td></tr>';
+  document.getElementById('custom-report-foot').innerHTML = '';
+
+  try {
+    const data = await api('POST', '/reports/query', { filters, group_by, bucket, date_from, date_to, limit: 1000 });
+    const cols = data.columns || (data.rows.length ? Object.keys(data.rows[0]) : []);
+    document.getElementById('custom-report-meta').textContent =
+      `${data.count ?? data.rows.length} row(s)`;
+    document.getElementById('custom-report-head').innerHTML =
+      `<tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr>`;
+    document.getElementById('custom-report-body').innerHTML = data.rows.length
+      ? data.rows.map(row =>
+          `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
+        ).join('')
+      : '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">No results.</td></tr>';
+    _renderTotalsRow('custom-report-foot', cols, data.rows);
+  } catch (err) {
+    document.getElementById('custom-report-body').innerHTML =
+      `<tr><td colspan="99" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+  }
 }
 
 // ── Settings page ──────────────────────────────────────────────
@@ -547,15 +671,17 @@ loadSettings();
 // ═══════════════════════════════════════════════════════════════
 
 const wizard = {
-  step:                1,        // current step (1-3)
-  files:               [],       // [{filename, path, size, headers, ...}] — one per upload
-  headers:             [],       // union of headers from all uploaded files
-  suggestions:         {},       // {canonical_field: csv_header}
-  matchedProfile:      null,     // matched profile summary or null
-  canonicalFields:     [],       // ordered list from /wizard/detect
-  canonicalLabels:     {},       // {field: label}
-  mapping:             {},       // {canonical_field: selected_csv_header}
-  suggestedDateFormat: null,     // server-inferred date format hint (e.g. '%m/%d/%Y')
+  step:                 1,        // current step (1-3)
+  files:                [],       // [{filename, path, size, headers, ...}] — one per upload
+  headers:              [],       // union of headers from all uploaded files
+  suggestions:          {},       // {canonical_field: csv_header}
+  matchedProfile:       null,     // matched profile summary or null
+  canonicalFields:      [],       // ordered list from /wizard/detect
+  canonicalLabels:      {},       // {field: label}
+  mapping:              {},       // {canonical_field: selected_csv_header}
+  suggestedDateFormat:  null,     // server-inferred date format hint (e.g. '%m/%d/%Y')
+  includeCustomHeaders: false,    // whether "Include custom headers" checkbox is ticked
+  customHeadersSelected: [],      // CSV headers user has checked for custom persistence
 };
 
 // Required canonical fields for UI validation hints
@@ -603,6 +729,14 @@ function wizardOpen(uploadInfo) {
     wizard.suggestedDateFormat = uploadInfo.suggested_date_format;
   }
 
+  // Custom headers: read checkbox state and merge persisted headers from matched profile
+  wizard.includeCustomHeaders = !!(document.getElementById('custom-headers-toggle')?.checked);
+  const profCustom = uploadInfo.matched_profile?.custom_headers || [];
+  if (profCustom.length) {
+    const seen = new Set(wizard.customHeadersSelected.map(h => h.toLowerCase()));
+    profCustom.forEach(h => { if (!seen.has(h.toLowerCase())) { wizard.customHeadersSelected.push(h); seen.add(h.toLowerCase()); } });
+  }
+
   // Initialize mapping from suggestions
   wizard.mapping = { ...wizard.suggestions };
 
@@ -615,12 +749,14 @@ function wizardClose() {
   // Reset for next upload session
   wizard.files              = [];
   wizard.headers            = [];
-  wizard.suggestions        = {};
-  wizard.matchedProfile     = null;
-  wizard.mapping            = {};
-  wizard.canonicalFields    = [];
-  wizard.canonicalLabels    = {};
-  wizard.suggestedDateFormat = null;
+  wizard.suggestions          = {};
+  wizard.matchedProfile       = null;
+  wizard.mapping              = {};
+  wizard.canonicalFields      = [];
+  wizard.canonicalLabels      = {};
+  wizard.suggestedDateFormat  = null;
+  wizard.includeCustomHeaders = false;
+  wizard.customHeadersSelected = [];
 }
 
 // ── Navigation ────────────────────────────────────────────────
@@ -679,6 +815,12 @@ async function wizardNext() {
             }
           }
           wizard.mapping = { ...wizard.suggestions };
+        }
+        // Merge persisted custom headers from the newly-detected profile
+        const detectedCustom = info.matched_profile?.custom_headers || [];
+        if (detectedCustom.length) {
+          const seen = new Set(wizard.customHeadersSelected.map(h => h.toLowerCase()));
+          detectedCustom.forEach(h => { if (!seen.has(h.toLowerCase())) { wizard.customHeadersSelected.push(h); seen.add(h.toLowerCase()); } });
         }
       } catch (err) {
         toast(`Could not fetch field info: ${err.message}`, 'error');
@@ -778,10 +920,6 @@ function renderWizardStep2() {
   const labels = wizard.canonicalLabels;
   const isReq = f => WIZARD_REQUIRED_FIELDS.has(f);
 
-  const headerOptions = ['', ...wizard.headers].map(h =>
-    `<option value="${esc(h)}">${h ? esc(h) : '(none)'}</option>`
-  ).join('');
-
   const tbody = document.getElementById('w-mapping-rows');
   tbody.innerHTML = fields.map(field => {
     const label = labels[field] || field;
@@ -802,6 +940,42 @@ function renderWizardStep2() {
         </td>
       </tr>`;
   }).join('');
+
+  // Custom headers panel — only visible when "Include custom headers" is checked
+  const panel = document.getElementById('w-custom-headers-panel');
+  if (!panel) return;
+  if (wizard.includeCustomHeaders) {
+    const mappedSet = new Set(Object.values(wizard.mapping).filter(Boolean));
+    const unmapped  = wizard.headers.filter(h => !mappedSet.has(h));
+    // Union with any profile-persisted custom headers present in the current CSV
+    const toShow = [...new Set([
+      ...unmapped,
+      ...wizard.customHeadersSelected.filter(h => wizard.headers.includes(h)),
+    ])];
+    if (toShow.length) {
+      panel.style.display = '';
+      document.getElementById('w-custom-headers-list').innerHTML = toShow.map(h => {
+        const chk = wizard.customHeadersSelected.includes(h) ? 'checked' : '';
+        return `<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+          <input type="checkbox" value="${esc(h)}" ${chk} onchange="onCustomHeaderChange(this)">
+          <span class="header-chip" style="margin:0;">${esc(h)}</span>
+        </label>`;
+      }).join('');
+    } else {
+      panel.style.display = 'none';
+    }
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+function onCustomHeaderChange(el) {
+  const h = el.value;
+  if (el.checked) {
+    if (!wizard.customHeadersSelected.includes(h)) wizard.customHeadersSelected.push(h);
+  } else {
+    wizard.customHeadersSelected = wizard.customHeadersSelected.filter(x => x !== h);
+  }
 }
 
 function onMappingChange(sel) {
@@ -890,6 +1064,7 @@ async function wizardSaveAndRun() {
       date_format:      dateFormat,
       currency_default: currency,
       preview_only:     previewOnly,
+      custom_headers:   wizard.customHeadersSelected,
     });
 
     wizardClose();

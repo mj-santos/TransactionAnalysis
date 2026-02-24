@@ -672,3 +672,41 @@ class TestWizardPipelineNoBugsWithoutDateFormat:
         )
         assert len(valid_rows) == 5
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Feature 1: custom_headers persistence in merge_wizard_profile
+# ---------------------------------------------------------------------------
+
+class TestMergeWizardProfileCustomHeaders:
+    def test_custom_headers_persisted_and_deduped(self):
+        """merge_wizard_profile with custom_headers persists them and deduplicates on re-call."""
+        base = dict(
+            existing=None,
+            institution="testbank",
+            account_id="acc1",
+            account_name="Checking",
+            bank_name="Test Bank",
+            profile_name="default",
+            canonical_map={"transaction_date": "Date", "amount": "Amount"},
+            amount_mode="signed",
+            date_format=None,
+        )
+
+        # First call: add two custom headers
+        profile = merge_wizard_profile(
+            **base, custom_headers=["Balance", "IBAN"]
+        )
+        stored = profile["profiles"]["default"]["custom_headers"]
+        assert stored == ["Balance", "IBAN"], "Both headers must be persisted"
+
+        # Second call: repeat with case-insensitive duplicate — must not add again
+        profile2 = merge_wizard_profile(
+            **{**base, "existing": profile},
+            custom_headers=["balance", "IBAN", "Reference"],
+        )
+        stored2 = profile2["profiles"]["default"]["custom_headers"]
+        assert "Reference" in stored2, "New header must be appended"
+        assert stored2.count("Balance") == 1, "Duplicate 'balance' (case-insensitive) must not be added"
+        assert stored2.count("IBAN") == 1, "Duplicate 'IBAN' must not be added"
+        assert len(stored2) == 3

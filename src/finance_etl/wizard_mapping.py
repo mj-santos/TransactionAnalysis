@@ -384,6 +384,7 @@ def merge_wizard_profile(
     date_format: str | None,
     currency_default: str = "USD",
     drop_columns: list[str] | None = None,
+    custom_headers: list[str] | None = None,
 ) -> dict:
     """
     Merge a new wizard selection into an existing profile (additive).
@@ -441,6 +442,15 @@ def merge_wizard_profile(
         if csv_header.lower() not in existing_lower:
             aliases.append(csv_header)
         entry["aliases"] = aliases
+
+    # Persist non-canonical CSV column names — additive, case-insensitive dedup
+    if custom_headers:
+        saved: list[str] = prof.setdefault("custom_headers", [])
+        saved_lower = {h.lower() for h in saved}
+        for h in custom_headers:
+            if h and h.lower() not in saved_lower:
+                saved.append(h)
+                saved_lower.add(h.lower())
 
     return existing
 
