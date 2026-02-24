@@ -12,6 +12,15 @@ from typing import Any, Optional
 _async_runs: dict[str, dict] = {}
 
 # ---------------------------------------------------------------------------
+# Whitelisted fields + buckets for safe custom report SQL generation
+# ---------------------------------------------------------------------------
+_REPORT_FIELDS = frozenset({
+    "transaction_date", "description", "merchant", "category",
+    "amount", "currency", "bank_name", "account_name", "account_id",
+})
+_REPORT_BUCKETS = frozenset({"day", "week", "month", "year"})
+
+# ---------------------------------------------------------------------------
 # Pydantic models — these power the /docs schema and enforce types at runtime
 # ---------------------------------------------------------------------------
 try:
@@ -91,6 +100,7 @@ try:
         currency_default:  str          = Field("USD")
         drop_columns:      list[str]    = Field(default_factory=list)
         preview_only:      bool         = Field(False)
+        custom_headers:    list[str]    = Field(default_factory=list, description="Non-canonical CSV column names to persist in the profile")
 
     class RunStartedResponse(BaseModel):
         run_id:  str = Field(..., description="Unique run identifier — poll GET /runs/{run_id} for progress")
@@ -146,6 +156,14 @@ try:
         name: str
         rows: list[dict[str, Any]]
 
+    class CustomReportRequest(BaseModel):
+        filters:   list[dict]  = Field(default_factory=list, description="[{field, op, value}]")
+        group_by:  list[str]   = Field(default_factory=list, description="Fields to group by")
+        bucket:    Optional[str] = Field(None, description="Time bucket for transaction_date: day|week|month|year")
+        date_from: Optional[str] = Field(None, description="ISO date lower bound (inclusive)")
+        date_to:   Optional[str] = Field(None, description="ISO date upper bound (inclusive)")
+        limit:     int           = Field(500, le=2000, description="Max rows (capped at 2000)")
+
     class SettingsResponse(BaseModel):
         verbose_logs: bool = Field(..., description="Enable verbose API error details in responses")
         show_logs: bool = Field(..., description="Whether the UI should auto-show backend logs panel")
@@ -178,6 +196,94 @@ _ALL_DATA_DIRS = [
     "data/validation",
     "data/logs",
 ]
+
+
+def _isoformat(v: Any) -> str:
+    """Convert date/datetime to ISO string for JSON serialisation."""
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+
+def _build_report_sql(payload: Any) -> tuple[list, list, list[str]]:
+    """
+    Build a safe, parameterised SQL query from a custom-report payload.
+
+    Returns (sql, params, column_names).
+    Raises ValueError for any unknown field or operator name.
+    """
+    params: list = []
+    where: list[str] = []
+
+    for f in (payload.filters or []):
+        field = f.get("field", "")
+        op    = f.get("op", "")
+        value = f.get("value")
+        if field not in _REPORT_FIELDS:
+            raise ValueError(f"Invalid filter field: {field!r}")
+        if op == "=":
+            where.append(f"{field} = ?"); params.append(value)
+        elif op == "contains":
+            where.append(f"LOWER(CAST({field} AS VARCHAR)) LIKE ?")
+            params.append(f"%{str(value).lower()}%")
+        elif op == ">=":
+            where.append(f"{field} >= ?"); params.append(value)
+        elif op == "<=":
+            where.append(f"{field} <= ?"); params.append(value)
+        elif op == "is_null":
+            where.append(f"{field} IS NULL")
+        elif op == "not_null":
+            where.append(f"{field} IS NOT NULL")
+        elif op == "in":
+            vals = value if isinstance(value, list) else [value]
+            if not vals:
+                raise ValueError("'in' operator requires a non-empty list")
+            where.append(f"{field} IN ({', '.join('?' * len(vals))})"); params.extend(vals)
+        elif op == "between":
+            if not isinstance(value, list) or len(value) != 2:
+                raise ValueError("'between' operator requires [from, to]")
+            where.append(f"{field} BETWEEN ? AND ?"); params.extend(value)
+        else:
+            raise ValueError(f"Invalid operator: {op!r}")
+
+    if payload.date_from:
+        where.append("transaction_date >= ?"); params.append(payload.date_from)
+    if payload.date_to:
+        where.append("transaction_date <= ?"); params.append(payload.date_to)
+
+    group_fields = [f for f in (getattr(payload, "group_by", None) or []) if f in _REPORT_FIELDS]
+    safe_bucket  = (getattr(payload, "bucket", None) or "")
+    safe_bucket  = safe_bucket if safe_bucket in _REPORT_BUCKETS else None
+
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    if group_fields:
+        sel, grp, col_names = [], [], []
+        for field in group_fields:
+            if field == "transaction_date" and safe_bucket:
+                expr = f"date_trunc('{safe_bucket}', transaction_date)"
+                sel.append(f"{expr} AS transaction_date")
+                grp.append(expr)
+            else:
+                sel.append(field); grp.append(field)
+            col_names.append(field)
+        sel += [
+            "COUNT(*) AS row_count",
+            "SUM(amount) AS net_amount",
+            "SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS total_spend",
+            "SUM(CASE WHEN amount > 0 THEN  amount ELSE 0 END) AS total_income",
+        ]
+        col_names += ["row_count", "net_amount", "total_spend", "total_income"]
+        sql = (f"SELECT {', '.join(sel)} FROM transactions_norm{where_sql}"
+               f" GROUP BY {', '.join(grp)} ORDER BY 1")
+    else:
+        col_names = [
+            "transaction_date", "description", "merchant", "category",
+            "amount", "currency", "bank_name", "account_name", "account_id",
+        ]
+        sql = f"SELECT {', '.join(col_names)} FROM transactions_norm{where_sql} ORDER BY transaction_date DESC"
+
+    limit = max(1, min(int(getattr(payload, "limit", 500)), 2000))
+    sql += f" LIMIT {limit}"
+    return sql, params, col_names
 
 
 def create_app(
@@ -748,6 +854,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                     "bank_name":         matched["bank_name"],
                     "profile_name":      matched["profile_name"],
                     "suggested_mapping": matched.get("suggested_mapping"),
+                    "custom_headers":    (matched.get("profile") or {}).get("custom_headers", []),
                 }
             return {
                 **info,
@@ -848,6 +955,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 date_format=date_format,
                 currency_default=payload.currency_default,
                 drop_columns=payload.drop_columns,
+                custom_headers=payload.custom_headers or None,
             )
             saved_path = save_wizard_profile(profiles_path, merged)
         except Exception as exc:
@@ -1002,22 +1110,79 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=404, detail=f"Report '{name}' not found. Run an import first.")
         return FileResponse(path, media_type="text/csv", filename=path.name)
 
+    @app.post(
+        "/reports/query",
+        tags=["reports"],
+        summary="Run a custom parameterized report query",
+    )
+    def custom_report_query(payload: CustomReportRequest):
+        """
+        Execute a safe, parameterized SQL query against the ledger (transactions_norm).
+
+        Supported operators: `=`, `contains`, `>=`, `<=`, `is_null`, `in`, `between`.
+        When `group_by` is set the result is aggregated with row_count, net_amount,
+        total_spend, and total_income columns.  The `bucket` parameter (day/week/month/year)
+        controls how `transaction_date` is truncated in grouped queries.
+        """
+        try:
+            sql, params, col_names = _build_report_sql(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            conn = get_connection(db_path)
+            rows_raw = conn.execute(sql, params).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Query failed: {exc}") from exc
+        rows = [
+            {col_names[i]: (_isoformat(r[i]) if hasattr(r[i], "isoformat") else r[i])
+             for i in range(len(col_names))}
+            for r in rows_raw
+        ]
+        return {"columns": col_names, "rows": rows, "count": len(rows)}
+
     @app.get(
         "/charts/{name}",
         tags=["reports"],
-        summary="Get a report as JSON rows",
+        summary="Get a report as JSON rows (optionally re-grouped)",
         response_model=ChartResponse if _PYDANTIC_OK else None,
     )
-    def chart_json(name: str):
+    def chart_json(
+        name: str,
+        group_by: str = "",
+        bucket: str = "",
+    ):
         """
-        Return the contents of a report CSV as a JSON array of row objects.
-
-        Useful for building charts or tables in a frontend without parsing CSV.
-        Keys are taken from the CSV header row.
+        Return a report CSV as a JSON array.  Pass `group_by=field1,field2` and
+        optionally `bucket=month` to re-aggregate directly from the ledger instead of
+        the pre-built CSV.  Numeric totals columns are added automatically when grouping.
         """
         path = Path(reports_dir) / name
         if path.suffix.lower() != ".csv" or not path.exists():
             raise HTTPException(status_code=404, detail=f"Report '{name}' not found. Run an import first.")
+        if group_by.strip():
+            fields = [f.strip() for f in group_by.split(",") if f.strip() in _REPORT_FIELDS]
+            if not fields:
+                raise HTTPException(status_code=400, detail="No valid group_by fields provided.")
+            safe_bucket = bucket.strip() if bucket.strip() in _REPORT_BUCKETS else None
+
+            class _P:  # lightweight payload for _build_report_sql
+                filters = []; date_from = None; date_to = None; limit = 2000
+
+            _p = _P(); _p.group_by = fields; _p.bucket = safe_bucket
+            try:
+                sql, params, col_names = _build_report_sql(_p)
+                conn = get_connection(db_path)
+                rows_raw = conn.execute(sql, params).fetchall()
+                conn.close()
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Grouping query failed: {exc}") from exc
+            rows = [
+                {col_names[i]: (_isoformat(r[i]) if hasattr(r[i], "isoformat") else r[i])
+                 for i in range(len(col_names))}
+                for r in rows_raw
+            ]
+            return {"name": path.name, "rows": rows}
         return {"name": path.name, "rows": chart_from_report_csv(path)}
 
     # -----------------------------------------------------------------------

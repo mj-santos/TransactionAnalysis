@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,3 +48,34 @@ def test_run_with_options_honors_supplied_run_id(monkeypatch, tmp_path: Path):
             mapping_path=str(tmp_path / "mapping.yaml"),
             run_id=supplied_run_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# Feature 2: _build_report_sql generates correct grouped SQL
+# ---------------------------------------------------------------------------
+
+def test_build_report_sql_grouped_by_category():
+    """_build_report_sql with group_by=category produces valid aggregation SQL."""
+    from finance_etl.api import _build_report_sql
+
+    payload = SimpleNamespace(
+        filters=[{"field": "category", "op": "not_null", "value": None}],
+        group_by=["category"],
+        bucket=None,
+        date_from=None,
+        date_to=None,
+        limit=100,
+    )
+    sql, params, col_names = _build_report_sql(payload)
+
+    assert "GROUP BY" in sql, "Grouped query must contain GROUP BY"
+    assert "category" in sql
+    assert "COUNT(*)" in sql
+    assert "SUM(amount)" in sql
+    assert "category" in col_names
+    assert "row_count" in col_names
+    assert "net_amount" in col_names
+    # WHERE clause for not_null filter
+    assert "IS NOT NULL" in sql
+    # No params for is_null / not_null operators
+    assert params == []
