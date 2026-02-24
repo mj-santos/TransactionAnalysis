@@ -10,6 +10,7 @@ for full determinism and auditability.
 from __future__ import annotations
 
 import datetime
+import json
 from decimal import Decimal
 from typing import Any
 
@@ -108,6 +109,11 @@ def _normalize_row(
     # --- Currency ---
     currency = (row.get("currency_raw") or "USD").strip().upper() or "USD"
 
+    # --- Merchant / Category (carried through extra_json by mapping stage) ---
+    _extra = json.loads(row.get("extra_json") or "{}")
+    merchant = (_extra.get("merchant") or "").strip() or None
+    category = (_extra.get("category") or "").strip() or None
+
     # --- Fingerprint ---
     fingerprint = compute_fingerprint(
         bank_name=row["bank_name"],
@@ -122,8 +128,8 @@ def _normalize_row(
         "transaction_date": tx_date,
         "posted_date": posted_date,
         "description": description,
-        "merchant": None,
-        "category": None,
+        "merchant": merchant,
+        "category": category,
         "amount": amount,
         "currency": currency,
         "bank_name": row["bank_name"],

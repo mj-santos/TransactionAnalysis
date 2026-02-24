@@ -358,6 +358,7 @@ async function loadHistory() {
       } else {
         actions.push(`<button class="btn btn-secondary btn-sm" onclick="showHistoryPreview('${r.run_id}')">👁 View</button>`);
       }
+      actions.push(`<button class="btn btn-danger btn-sm" onclick="showDeleteModal('${r.run_id}')">🗑 Delete</button>`);
       return `<tr>
         <td class="mono">${esc(r.run_id)}</td>
         <td>${fmtDate(r.started_at)}</td>
@@ -400,6 +401,31 @@ async function commitRunFromHistory(runId) {
   } catch (err) {
     toast(`Commit failed: ${err.message}`, 'error');
     maybeShowLogsOnError();
+  }
+}
+
+let _deleteRunId = null;
+function showDeleteModal(runId) {
+  _deleteRunId = runId;
+  document.getElementById('delete-run-modal-id').textContent = runId;
+  document.getElementById('delete-keep-tx').checked = false;
+  document.getElementById('delete-run-modal').classList.remove('hidden');
+}
+function hideDeleteModal() {
+  _deleteRunId = null;
+  document.getElementById('delete-run-modal').classList.add('hidden');
+}
+async function confirmDeleteRun() {
+  if (!_deleteRunId) return;
+  const keepTx = document.getElementById('delete-keep-tx').checked;
+  const runId  = _deleteRunId;
+  hideDeleteModal();
+  try {
+    await api('DELETE', `/runs/${runId}?keep_transactions=${keepTx}`);
+    toast(`Run ${runId} deleted.`, 'success');
+    loadHistory();
+  } catch (err) {
+    toast(`Delete failed: ${err.message}`, 'error');
   }
 }
 

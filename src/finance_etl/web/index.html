@@ -490,6 +490,25 @@
   </div><!-- .wizard-modal -->
 </div><!-- #wizard-overlay -->
 
+<!-- Delete Run confirmation modal -->
+<div id="delete-run-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideDeleteModal()">
+  <div class="modal-dialog" style="max-width:420px;">
+    <div class="modal-title" style="font-size:16px; font-weight:600; margin-bottom:12px;">Delete Import Run?</div>
+    <p style="margin:0 0 14px; color:var(--text-muted); font-size:13px;">
+      Run <strong id="delete-run-modal-id" class="mono"></strong> will be permanently removed,
+      including its staged rows.
+    </p>
+    <label class="toggle-row" style="font-size:13px; margin-bottom:18px;">
+      <input type="checkbox" id="delete-keep-tx" />
+      Keep imported transactions in the ledger
+    </label>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn btn-secondary" onclick="hideDeleteModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDeleteRun()">Delete</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

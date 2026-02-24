@@ -809,6 +809,51 @@ No cloud services, no external dependencies — all data stays on your machine.
         background_tasks.add_task(_commit_bg, run_id)
         return {"run_id": run_id, "status": "committing"}
 
+    @app.delete(
+        "/runs/{run_id}",
+        tags=["runs"],
+        summary="Delete an import run and its data",
+    )
+    def delete_run(
+        run_id: str,
+        keep_transactions: bool = Query(
+            False,
+            description="Set true to keep loaded transactions in transactions_norm; "
+                        "by default they are also removed.",
+        ),
+    ):
+        """
+        Delete an import run record, its staged rows, and (by default) any
+        transactions loaded from that run.
+
+        Passing `keep_transactions=true` removes only the run record and staged
+        rows while leaving transactions_norm untouched (useful when the same file
+        was imported multiple times and you only want to remove one run entry).
+        """
+        conn = get_connection(db_path)
+        try:
+            if not keep_transactions:
+                file_hashes = [
+                    r[0] for r in conn.execute(
+                        "SELECT DISTINCT file_hash FROM transactions_stage WHERE run_id = ?",
+                        [run_id],
+                    ).fetchall()
+                ]
+                if file_hashes:
+                    placeholders = ", ".join("?" * len(file_hashes))
+                    conn.execute(
+                        f"DELETE FROM transactions_norm WHERE file_hash IN ({placeholders})",
+                        file_hashes,
+                    )
+            conn.execute("DELETE FROM transactions_stage WHERE run_id = ?", [run_id])
+            conn.execute("DELETE FROM runs WHERE run_id = ?", [run_id])
+            _async_runs.pop(run_id, None)
+            from finance_etl.pipeline import _staged_runs
+            _staged_runs.pop(run_id, None)
+            return {"deleted": True, "run_id": run_id}
+        finally:
+            conn.close()
+
     # -----------------------------------------------------------------------
     # Wizard — header detection, mapping validation, save-and-run
     # -----------------------------------------------------------------------
