@@ -123,7 +123,7 @@ def finalize_run(
     notes: str = "",
 ) -> None:
     """Update the run record on completion or failure."""
-    if status not in {"running", "success", "fail"}:
+    if status not in {"running", "success", "fail", "staged"}:
         raise ValueError(f"Invalid run status: {status}")
 
     conn.execute(
@@ -152,6 +152,11 @@ def finalize_run(
         ],
     )
 
-    updated = conn.execute("SELECT changes()").fetchone()
-    if not updated or updated[0] == 0:
+    # DuckDB does not have a changes() function (that is SQLite-specific).
+    # Verify the row exists instead — a missing run_id is the only failure
+    # mode the UPDATE could silently swallow.
+    exists = conn.execute(
+        "SELECT 1 FROM runs WHERE run_id = ?", [run_id]
+    ).fetchone()
+    if not exists:
         raise ValueError(f"Run not found for finalize_run: {run_id}")
