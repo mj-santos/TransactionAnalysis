@@ -242,6 +242,140 @@
 <!-- Toast container -->
 <div id="toasts"></div>
 
+<!-- ══════════════ MAPPING WIZARD MODAL ══════════════ -->
+<div id="wizard-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+  <div class="wizard-modal">
+
+    <!-- Header -->
+    <div class="wm-header">
+      <h2 id="wizard-title">Map CSV Columns</h2>
+      <button class="wm-close" onclick="wizardClose()" title="Close">&times;</button>
+    </div>
+
+    <!-- Steps indicator -->
+    <div class="wm-steps">
+      <div class="wm-step active" id="wstep-ind-1">
+        <span class="step-num">1</span> Detected Headers
+      </div>
+      <div class="wm-step" id="wstep-ind-2">
+        <span class="step-num">2</span> Map Fields
+      </div>
+      <div class="wm-step" id="wstep-ind-3">
+        <span class="step-num">3</span> Review &amp; Run
+      </div>
+    </div>
+
+    <!-- Body (panels) -->
+    <div class="wm-body">
+
+      <!-- Step 1 — Detected Headers -->
+      <div class="wm-panel active" id="wstep-1">
+        <div id="w-detect-banner"></div>
+
+        <div class="info-grid" id="w-info-grid"></div>
+
+        <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">
+          Detected Columns
+        </div>
+        <div class="header-chips" id="w-header-chips"></div>
+
+        <div id="w-sample-block" style="margin-top:16px; display:none;">
+          <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">
+            Sample Data (first 3 rows)
+          </div>
+          <div class="table-wrap" style="max-height:160px; overflow:auto;">
+            <table id="w-sample-table" style="font-size:12px;">
+              <thead><tr id="w-sample-head"></tr></thead>
+              <tbody id="w-sample-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 — Map Fields -->
+      <div class="wm-panel" id="wstep-2">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+          For each canonical field, select the matching column from your CSV.
+          Fields marked <span style="color:var(--danger)">*</span> are required.
+          Highlighted selections were auto-suggested.
+        </p>
+        <div id="w-validation-errors" style="display:none" class="validation-errors"></div>
+        <table class="mapping-table">
+          <thead>
+            <tr>
+              <th>Canonical Field</th>
+              <th>CSV Column</th>
+            </tr>
+          </thead>
+          <tbody id="w-mapping-rows"></tbody>
+        </table>
+      </div>
+
+      <!-- Step 3 — Review & Run -->
+      <div class="wm-panel" id="wstep-3">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+          Name this mapping profile. It will be saved and auto-detected on future uploads.
+        </p>
+
+        <div class="review-grid">
+          <div class="form-group">
+            <label for="w-bank-name">Bank / Institution Name</label>
+            <input id="w-bank-name" type="text" placeholder="e.g. Chase" />
+          </div>
+          <div class="form-group">
+            <label for="w-account-name">Account Name</label>
+            <input id="w-account-name" type="text" placeholder="e.g. My Checking" />
+          </div>
+          <div class="form-group">
+            <label for="w-institution-key">Institution Key (slug)</label>
+            <input id="w-institution-key" type="text" placeholder="e.g. chase" />
+          </div>
+          <div class="form-group">
+            <label for="w-account-id">Account ID / Suffix</label>
+            <input id="w-account-id" type="text" placeholder="e.g. checking_1234" />
+          </div>
+          <div class="form-group">
+            <label for="w-date-format">Date Format (optional)</label>
+            <input id="w-date-format" type="text" placeholder="e.g. %m/%d/%Y" />
+          </div>
+          <div class="form-group">
+            <label for="w-currency">Default Currency</label>
+            <select id="w-currency">
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+              <option value="CAD">CAD</option>
+              <option value="AUD">AUD</option>
+            </select>
+          </div>
+        </div>
+
+        <label class="toggle-row" style="margin-bottom:14px;">
+          <input type="checkbox" id="w-preview-toggle" checked />
+          Preview transactions before committing to ledger
+        </label>
+
+        <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">
+          Field Mapping Summary
+        </div>
+        <div class="mapping-summary" id="w-mapping-summary"></div>
+      </div>
+
+    </div><!-- .wm-body -->
+
+    <!-- Footer -->
+    <div class="wm-footer">
+      <button class="btn btn-secondary" id="w-btn-back" onclick="wizardBack()" style="display:none;">← Back</button>
+      <span style="font-size:12px; color:var(--text-muted);" id="w-footer-hint"></span>
+      <div class="wm-footer-right">
+        <button class="btn btn-secondary" onclick="wizardClose()">Cancel</button>
+        <button class="btn btn-primary" id="w-btn-next" onclick="wizardNext()">Next →</button>
+      </div>
+    </div>
+
+  </div><!-- .wizard-modal -->
+</div><!-- #wizard-overlay -->
+
 <script src="/static/app.js"></script>
 </body>
 </html>

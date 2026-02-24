@@ -115,6 +115,8 @@ async function uploadFile(file) {
     updateChip(chipId, 'done');
     toast(`${file.name} uploaded`, 'success', 2500);
     checkImportReady();
+    // Open the mapping wizard automatically after upload
+    wizardOpen(data);
   } catch (err) {
     updateChip(chipId, 'error');
     toast(`Upload failed: ${err.message}`, 'error');
@@ -539,3 +541,358 @@ function esc(str) {
 // ── Boot ───────────────────────────────────────────────────────
 loadMappings();
 loadSettings();
+
+// ═══════════════════════════════════════════════════════════════
+//  MAPPING WIZARD
+// ═══════════════════════════════════════════════════════════════
+
+const wizard = {
+  step:          1,        // current step (1-3)
+  files:         [],       // [{filename, path, size, headers, ...}] — one per upload
+  headers:       [],       // union of headers from all uploaded files
+  suggestions:   {},       // {canonical_field: csv_header}
+  matchedProfile: null,    // matched profile summary or null
+  canonicalFields: [],     // ordered list from /wizard/detect
+  canonicalLabels: {},     // {field: label}
+  mapping:       {},       // {canonical_field: selected_csv_header}
+};
+
+// Required canonical fields for UI validation hints
+const WIZARD_REQUIRED_FIELDS = new Set(['transaction_date']);
+const WIZARD_AMOUNT_GROUPS   = [
+  ['debit_amount', 'credit_amount'],
+  ['money_in', 'money_out'],
+  ['amount'],
+];
+
+// ── Open / Close ─────────────────────────────────────────────
+
+function wizardOpen(uploadInfo) {
+  // uploadInfo: response from POST /upload (extended with headers etc.)
+  wizard.files.push(uploadInfo);
+
+  // Union headers across all uploaded files
+  const allHeaders = new Set(wizard.headers);
+  (uploadInfo.headers || []).forEach(h => allHeaders.add(h));
+  wizard.headers = [...allHeaders];
+
+  // Merge suggestions — use first file's suggestions if not yet set
+  if (uploadInfo.suggestions) {
+    for (const [field, hdr] of Object.entries(uploadInfo.suggestions)) {
+      if (hdr && !wizard.suggestions[field]) {
+        wizard.suggestions[field] = hdr;
+      }
+    }
+  }
+
+  // Keep best matched profile
+  const mp = uploadInfo.matched_profile;
+  if (mp && mp.score > (wizard.matchedProfile?.score || 0)) {
+    wizard.matchedProfile = mp;
+    // Overlay profile's suggested_mapping on top of keyword suggestions
+    if (mp.suggested_mapping) {
+      for (const [field, hdr] of Object.entries(mp.suggested_mapping)) {
+        if (hdr) wizard.suggestions[field] = hdr;
+      }
+    }
+  }
+
+  // Initialize mapping from suggestions
+  wizard.mapping = { ...wizard.suggestions };
+
+  wizardGoTo(1);
+  document.getElementById('wizard-overlay').classList.remove('hidden');
+}
+
+function wizardClose() {
+  document.getElementById('wizard-overlay').classList.add('hidden');
+  // Reset for next upload session
+  wizard.files        = [];
+  wizard.headers      = [];
+  wizard.suggestions  = {};
+  wizard.matchedProfile = null;
+  wizard.mapping      = {};
+  wizard.canonicalFields = [];
+  wizard.canonicalLabels = {};
+}
+
+// ── Navigation ────────────────────────────────────────────────
+
+function wizardGoTo(step) {
+  wizard.step = step;
+
+  // Update step indicators
+  ['1','2','3'].forEach(n => {
+    const ind = document.getElementById(`wstep-ind-${n}`);
+    ind.classList.remove('active', 'done');
+    if (+n < step)  ind.classList.add('done');
+    if (+n === step) ind.classList.add('active');
+  });
+
+  // Show correct panel
+  document.querySelectorAll('.wm-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`wstep-${step}`).classList.add('active');
+
+  // Back button
+  document.getElementById('w-btn-back').style.display = step > 1 ? '' : 'none';
+
+  // Next / Finish button
+  const nextBtn = document.getElementById('w-btn-next');
+  nextBtn.textContent = step === 3 ? 'Save & Run' : 'Next →';
+
+  // Footer hint
+  const hint = document.getElementById('w-footer-hint');
+  hint.textContent = step === 1 ? `${wizard.headers.length} columns detected across ${wizard.files.length} file(s)` :
+                     step === 2 ? 'Map required fields then click Next' :
+                                  'Review your settings and click Save & Run';
+
+  if (step === 1) renderWizardStep1();
+  if (step === 2) renderWizardStep2();
+  if (step === 3) renderWizardStep3();
+}
+
+function wizardBack() {
+  if (wizard.step > 1) wizardGoTo(wizard.step - 1);
+}
+
+async function wizardNext() {
+  if (wizard.step === 1) {
+    // Fetch canonical fields from server if not yet loaded
+    if (!wizard.canonicalFields.length && wizard.files.length) {
+      try {
+        const info = await api('POST', '/wizard/detect', { file_path: wizard.files[0].path });
+        wizard.canonicalFields = info.canonical_fields || [];
+        wizard.canonicalLabels = info.canonical_labels || {};
+        // Override matched profile if server found a better one
+        if (info.matched_profile && info.matched_profile.score > (wizard.matchedProfile?.score || 0)) {
+          wizard.matchedProfile = info.matched_profile;
+          if (info.matched_profile.suggested_mapping) {
+            for (const [f, h] of Object.entries(info.matched_profile.suggested_mapping)) {
+              if (h) wizard.suggestions[f] = h;
+            }
+          }
+          wizard.mapping = { ...wizard.suggestions };
+        }
+      } catch (err) {
+        toast(`Could not fetch field info: ${err.message}`, 'error');
+      }
+    }
+    wizardGoTo(2);
+  } else if (wizard.step === 2) {
+    // Collect current selections
+    collectMappingSelections();
+    // Validate
+    const errors = validateMappingLocally();
+    const errEl = document.getElementById('w-validation-errors');
+    if (errors.length) {
+      errEl.innerHTML = errors.map(e => `<p>• ${esc(e)}</p>`).join('');
+      errEl.style.display = 'block';
+      return;
+    }
+    errEl.style.display = 'none';
+    wizardGoTo(3);
+  } else if (wizard.step === 3) {
+    await wizardSaveAndRun();
+  }
+}
+
+// ── Step 1 render ─────────────────────────────────────────────
+
+function renderWizardStep1() {
+  // Auto-detect banner
+  const banner = document.getElementById('w-detect-banner');
+  if (wizard.matchedProfile) {
+    const mp = wizard.matchedProfile;
+    const score = Math.round(mp.score * 100);
+    banner.innerHTML = `
+      <div class="auto-detect-banner match">
+        <span style="font-size:18px">✅</span>
+        <div>
+          <strong>Mapping auto-detected</strong> (${score}% match) —
+          <em>${esc(mp.bank_name || mp.institution)}</em> /
+          <em>${esc(mp.account_name || mp.account_id)}</em>
+          (profile: ${esc(mp.profile_name)}).
+          Fields are pre-filled below. Review and adjust if needed.
+        </div>
+      </div>`;
+  } else {
+    banner.innerHTML = `
+      <div class="auto-detect-banner nomatch">
+        <span style="font-size:18px">ℹ️</span>
+        <div>No saved mapping found for these headers. Complete the wizard to create one.</div>
+      </div>`;
+  }
+
+  // Info grid
+  const firstFile = wizard.files[0] || {};
+  document.getElementById('w-info-grid').innerHTML = [
+    { label: 'Files',    value: wizard.files.length },
+    { label: 'Columns',  value: wizard.headers.length },
+    { label: 'Encoding', value: firstFile.encoding || '—' },
+    { label: 'Delimiter', value: firstFile.delimiter === '\t' ? 'TAB' : (firstFile.delimiter || '—') },
+    { label: 'Est. rows', value: firstFile.row_count_estimate ?? '—' },
+  ].map(({ label, value }) => `
+    <div class="info-cell">
+      <div class="ic-label">${label}</div>
+      <div class="ic-value">${esc(String(value))}</div>
+    </div>`).join('');
+
+  // Header chips
+  document.getElementById('w-header-chips').innerHTML =
+    wizard.headers.map(h => `<span class="header-chip">${esc(h)}</span>`).join('');
+
+  // Sample table — use first file's sample_rows
+  const samples = firstFile.sample_rows || [];
+  if (samples.length && wizard.headers.length) {
+    const sampleBlock = document.getElementById('w-sample-block');
+    sampleBlock.style.display = 'block';
+    const dispHeaders = wizard.headers.slice(0, 8); // cap columns for readability
+    document.getElementById('w-sample-head').innerHTML =
+      dispHeaders.map(h => `<th>${esc(h)}</th>`).join('');
+    document.getElementById('w-sample-body').innerHTML =
+      samples.slice(0, 3).map(row =>
+        `<tr>${dispHeaders.map(h => `<td>${esc(row[h] || '')}</td>`).join('')}</tr>`
+      ).join('');
+  }
+}
+
+// ── Step 2 render ─────────────────────────────────────────────
+
+function renderWizardStep2() {
+  // Use server-provided canonical fields if available, else fall back to wizard.suggestions keys
+  const fields = wizard.canonicalFields.length
+    ? wizard.canonicalFields
+    : Object.keys(wizard.suggestions).concat(
+        ['transaction_date','debit_amount','credit_amount','amount','money_in','money_out',
+         'dc_flag','description','posted_date','merchant','category','account','notes','currency']
+          .filter(f => !Object.keys(wizard.suggestions).includes(f))
+      );
+
+  const labels = wizard.canonicalLabels;
+  const isReq = f => WIZARD_REQUIRED_FIELDS.has(f);
+
+  const headerOptions = ['', ...wizard.headers].map(h =>
+    `<option value="${esc(h)}">${h ? esc(h) : '(none)'}</option>`
+  ).join('');
+
+  const tbody = document.getElementById('w-mapping-rows');
+  tbody.innerHTML = fields.map(field => {
+    const label = labels[field] || field;
+    const current = wizard.mapping[field] || '';
+    const isSuggested = !!wizard.suggestions[field] && wizard.suggestions[field] === current;
+    const opts = ['', ...wizard.headers].map(h =>
+      `<option value="${esc(h)}" ${h === current ? 'selected' : ''}>${h ? esc(h) : '(none)'}</option>`
+    ).join('');
+    return `
+      <tr>
+        <td class="field-label${isReq(field) ? ' required' : ''}">${esc(label)}</td>
+        <td>
+          <select data-field="${esc(field)}"
+                  class="${isSuggested ? 'suggested' : ''}"
+                  onchange="onMappingChange(this)">
+            ${opts}
+          </select>
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+function onMappingChange(sel) {
+  const field = sel.dataset.field;
+  wizard.mapping[field] = sel.value;
+  sel.classList.toggle('suggested', false);
+}
+
+function collectMappingSelections() {
+  document.querySelectorAll('#w-mapping-rows select').forEach(sel => {
+    wizard.mapping[sel.dataset.field] = sel.value || null;
+  });
+}
+
+function validateMappingLocally() {
+  const errors = [];
+  if (!wizard.mapping.transaction_date) {
+    errors.push('transaction_date is required — select the column containing the transaction date.');
+  }
+  const mapped = new Set(Object.entries(wizard.mapping).filter(([,v]) => v).map(([k]) => k));
+  const ok = WIZARD_AMOUNT_GROUPS.some(group => group.every(f => mapped.has(f)));
+  if (!ok) {
+    errors.push('Amount mapping required: map (debit_amount + credit_amount), (money_in + money_out), or (amount).');
+  }
+  return errors;
+}
+
+// ── Step 3 render ─────────────────────────────────────────────
+
+function renderWizardStep3() {
+  // Pre-fill institution / account from matched profile
+  const mp = wizard.matchedProfile;
+  if (mp) {
+    setVal('w-bank-name',       mp.bank_name    || '');
+    setVal('w-account-name',    mp.account_name || '');
+    setVal('w-institution-key', mp.institution  || '');
+    setVal('w-account-id',      mp.account_id   || '');
+  }
+
+  // Mapping summary — show only mapped fields
+  const mapped = Object.entries(wizard.mapping).filter(([,v]) => v);
+  document.getElementById('w-mapping-summary').innerHTML = mapped.length
+    ? mapped.map(([field, hdr]) => `
+        <div class="ms-row">
+          <span class="ms-field">${esc(field)}</span>
+          <span class="ms-val">${esc(hdr)}</span>
+        </div>`).join('')
+    : '<em style="color:var(--text-muted)">No fields mapped.</em>';
+}
+
+function setVal(id, val) {
+  const el = document.getElementById(id);
+  if (el && !el.value) el.value = val;
+}
+
+// ── Save & Run ────────────────────────────────────────────────
+
+async function wizardSaveAndRun() {
+  const btn = document.getElementById('w-btn-next');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  const institution  = document.getElementById('w-institution-key').value.trim() || 'unknown';
+  const accountId    = document.getElementById('w-account-id').value.trim()      || 'default';
+  const accountName  = document.getElementById('w-account-name').value.trim();
+  const bankName     = document.getElementById('w-bank-name').value.trim();
+  const dateFormat   = document.getElementById('w-date-format').value.trim() || null;
+  const currency     = document.getElementById('w-currency').value;
+  const previewOnly  = document.getElementById('w-preview-toggle').checked;
+
+  const filePaths = wizard.files.map(f => f.path);
+
+  try {
+    const res = await api('POST', '/wizard/save-and-run', {
+      file_paths:       filePaths,
+      canonical_map:    wizard.mapping,
+      institution,
+      account_id:       accountId,
+      account_name:     accountName,
+      bank_name:        bankName,
+      date_format:      dateFormat,
+      currency_default: currency,
+      preview_only:     previewOnly,
+    });
+
+    wizardClose();
+    toast(`Mapping saved. Run ${res.run_id} started.`, 'success');
+
+    // Hand off to existing run-status machinery
+    state.currentRunId = res.run_id;
+    setRunStatus('pending', res.run_id, null, 'Queued — starting pipeline…');
+    navigate('import');
+    pollRun(res.run_id, onRunComplete);
+
+  } catch (err) {
+    toast(`Save & Run failed: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save & Run';
+  }
+}
