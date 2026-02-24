@@ -301,6 +301,11 @@ def get_run_status(db_path: str | Path, run_id: str) -> dict:
                 out["notes"] = json.loads(out["notes"])
             except Exception:
                 pass
+        # Serialize datetime objects to ISO strings for JSON / Pydantic str fields
+        for dt_key in ("started_at", "finished_at"):
+            v = out.get(dt_key)
+            if v is not None and hasattr(v, "isoformat"):
+                out[dt_key] = v.isoformat()
         # Surface whether this run is currently staged in memory
         out["staged"] = run_id in _staged_runs
         return out

@@ -1,6 +1,4 @@
 """FastAPI service — uploads, async runs, preview/commit, reports, and web UI."""
-from __future__ import annotations
-
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -186,6 +184,35 @@ def create_app(
         Path(upload_dir).mkdir(parents=True, exist_ok=True)
         Path(reports_dir).mkdir(parents=True, exist_ok=True)
         Path(mappings_dir).mkdir(parents=True, exist_ok=True)
+
+        # ------------------------------------------------------------------
+        # Attach a persistent file handler to the API logger so that upload
+        # errors and other API-level events are captured in data/logs/api.log
+        # and become visible via GET /logs even before any pipeline run.
+        # ------------------------------------------------------------------
+        import logging as _logging
+        _api_log_path = Path("data/logs") / "api.log"
+        _api_logger = _logging.getLogger("finance_etl.api")
+        _api_logger.setLevel(_logging.DEBUG)
+        if not any(
+            isinstance(h, _logging.FileHandler) and
+            getattr(h, "baseFilename", None) == str(_api_log_path.resolve())
+            for h in _api_logger.handlers
+        ):
+            _fmt = _logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            # Stream handler (INFO+) for console output
+            if not any(isinstance(h, _logging.StreamHandler) and not isinstance(h, _logging.FileHandler)
+                       for h in _api_logger.handlers):
+                _ch = _logging.StreamHandler()
+                _ch.setLevel(_logging.INFO)
+                _ch.setFormatter(_fmt)
+                _api_logger.addHandler(_ch)
+            # File handler (DEBUG+) writes every API event to api.log
+            _fh = _logging.FileHandler(_api_log_path, encoding="utf-8")
+            _fh.setLevel(_logging.DEBUG)
+            _fh.setFormatter(_fmt)
+            _api_logger.addHandler(_fh)
+            _api_logger.info("finance_etl API started — log file: %s", _api_log_path)
 
         # Bootstrap the DB schema so the first GET /runs never fails
         try:
@@ -625,9 +652,36 @@ No cloud services, no external dependencies — all data stays on your machine.
         summary="Read latest backend log lines",
         response_model=LogsResponse if _PYDANTIC_OK else None,
     )
-    def read_logs(limit: int = Query(120, description="Maximum log lines to return")):
+    def read_logs(limit: int = Query(200, description="Maximum log lines to return")):
         file_name, lines = _tail_latest_log_lines(limit)
         return {"file": file_name, "lines": lines}
+
+    @app.get(
+        "/logs/download",
+        tags=["ui"],
+        summary="Download the latest backend log file",
+        include_in_schema=True,
+    )
+    def download_logs():
+        """
+        Download the most recently modified log file from data/logs/ as a
+        plain-text attachment.  Useful for sharing error details for support.
+
+        Returns 404 when no log files exist yet (i.e. before the first run
+        or API startup with logging enabled).
+        """
+        file_name, _ = _tail_latest_log_lines(limit=1)
+        if not file_name:
+            raise HTTPException(status_code=404, detail="No log files available yet.")
+        log_path = _logs_path() / file_name
+        if not log_path.exists():
+            raise HTTPException(status_code=404, detail="Log file not found on disk.")
+        return FileResponse(
+            path=str(log_path),
+            media_type="text/plain",
+            filename=file_name,
+            headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+        )
 
     # -----------------------------------------------------------------------
     # Reports
