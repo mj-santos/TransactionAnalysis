@@ -209,6 +209,15 @@ def _build_stage_row(
     } | set(col_map.keys())
     extra = {k: v for k, v in row.items() if k not in canonical_cols and v}
 
+    # Carry merchant, category, and notes through extra_json with canonical keys
+    # so normalize.py can populate transactions_norm.merchant / .category.
+    for _canon in ("merchant", "category", "notes"):
+        _src = canon_to_source.get(_canon)
+        if _src:
+            _val = get(_src)
+            if _val:
+                extra[_canon] = _val
+
     return {
         "run_id": run_id,
         "file_hash": file_hash,
@@ -227,7 +236,7 @@ def _build_stage_row(
         "money_in_raw": get(amount_cfg.get("money_in_col")) if family == "money_in_out" else "",
         "money_out_raw": get(amount_cfg.get("money_out_col")) if family == "money_in_out" else "",
         "dc_flag_raw": get(amount_cfg.get("dc_flag_col")) if family == "amount_plus_flag" else "",
-        "currency_raw": get("currency") or currency_default,
+        "currency_raw": get(canon_to_source.get("currency")) or currency_default,
         "extra_json": json.dumps(extra) if extra else "{}",
     }
 
