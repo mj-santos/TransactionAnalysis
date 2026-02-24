@@ -18,16 +18,17 @@ try:
     from pydantic import BaseModel, Field
 
     class UploadResponse(BaseModel):
-        filename:           str             = Field(..., description="Original filename as uploaded")
-        path:               str             = Field(..., description="Server-side path to pass as input to POST /runs")
-        size:               int             = Field(..., description="File size in bytes")
-        headers:            list[str]       = Field(default_factory=list, description="Detected CSV column headers")
-        sample_rows:        list[dict]      = Field(default_factory=list, description="First few data rows for preview")
-        encoding:           Optional[str]   = Field(None, description="Detected file encoding")
-        delimiter:          Optional[str]   = Field(None, description="Detected CSV delimiter character")
-        row_count_estimate: Optional[int]   = Field(None, description="Estimated data row count (excludes header)")
-        suggestions:        Optional[dict]  = Field(None, description="Fuzzy-matched canonical-field suggestions {field: csv_header}")
-        matched_profile:    Optional[dict]  = Field(None, description="Auto-detected wizard profile (if score ≥ threshold)")
+        filename:              str             = Field(..., description="Original filename as uploaded")
+        path:                  str             = Field(..., description="Server-side path to pass as input to POST /runs")
+        size:                  int             = Field(..., description="File size in bytes")
+        headers:               list[str]       = Field(default_factory=list, description="Detected CSV column headers")
+        sample_rows:           list[dict]      = Field(default_factory=list, description="First few data rows for preview")
+        encoding:              Optional[str]   = Field(None, description="Detected file encoding")
+        delimiter:             Optional[str]   = Field(None, description="Detected CSV delimiter character")
+        row_count_estimate:    Optional[int]   = Field(None, description="Estimated data row count (excludes header)")
+        suggestions:           Optional[dict]  = Field(None, description="Fuzzy-matched canonical-field suggestions {field: csv_header}")
+        suggested_date_format: Optional[str]   = Field(None, description="Inferred strptime date format for the transaction date column")
+        matched_profile:       Optional[dict]  = Field(None, description="Auto-detected wizard profile (if score ≥ threshold)")
 
     class MappingInfo(BaseModel):
         name:    str  = Field(..., description="Mapping key (YAML stem)")
@@ -448,16 +449,17 @@ No cloud services, no external dependencies — all data stays on your machine.
                 matched_summary = None
 
             return {
-                "filename":           safe_original,
-                "path":               str(dest),
-                "size":               len(content),
-                "headers":            header_info.get("headers", []),
-                "sample_rows":        header_info.get("sample_rows", []),
-                "encoding":           header_info.get("encoding"),
-                "delimiter":          header_info.get("delimiter"),
-                "row_count_estimate": header_info.get("row_count_estimate"),
-                "suggestions":        header_info.get("suggestions"),
-                "matched_profile":    matched_summary,
+                "filename":              safe_original,
+                "path":                  str(dest),
+                "size":                  len(content),
+                "headers":               header_info.get("headers", []),
+                "sample_rows":           header_info.get("sample_rows", []),
+                "encoding":              header_info.get("encoding"),
+                "delimiter":             header_info.get("delimiter"),
+                "row_count_estimate":    header_info.get("row_count_estimate"),
+                "suggestions":           header_info.get("suggestions"),
+                "suggested_date_format": header_info.get("suggested_date_format"),
+                "matched_profile":       matched_summary,
             }
         except HTTPException:
             raise
@@ -812,6 +814,23 @@ No cloud services, no external dependencies — all data stays on your machine.
         if errors:
             raise HTTPException(status_code=422, detail={"ok": False, "errors": errors})
 
+        # Resolve date_format: use the user-provided value, or auto-detect from
+        # the first uploaded file's date column so ambiguous dates (e.g. 01/05/2024)
+        # don't fail the pipeline when the user leaves the field blank.
+        date_format = payload.date_format or None
+        if not date_format and payload.file_paths:
+            date_col = payload.canonical_map.get("transaction_date")
+            if date_col:
+                try:
+                    from finance_etl.wizard_mapping import detect_date_format, extract_csv_headers
+                    _info = extract_csv_headers(Path(payload.file_paths[0]))
+                    _date_values = [
+                        row.get(date_col, "") for row in _info.get("sample_rows", [])
+                    ]
+                    date_format = detect_date_format(_date_values)
+                except Exception:
+                    pass
+
         # Merge wizard profile (additive)
         try:
             profiles_path = Path(wizard_profiles_dir)
@@ -826,7 +845,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 profile_name=payload.profile_name,
                 canonical_map=payload.canonical_map,
                 amount_mode=amount_mode,
-                date_format=payload.date_format,
+                date_format=date_format,
                 currency_default=payload.currency_default,
                 drop_columns=payload.drop_columns,
             )
@@ -845,7 +864,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             bank_key=bank_key,
             account_name=payload.account_name,
             account_id=payload.account_id,
-            date_format=payload.date_format,
+            date_format=date_format,
             currency_default=payload.currency_default,
             drop_columns=payload.drop_columns,
         )

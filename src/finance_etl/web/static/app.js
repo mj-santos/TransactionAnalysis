@@ -547,14 +547,15 @@ loadSettings();
 // ═══════════════════════════════════════════════════════════════
 
 const wizard = {
-  step:          1,        // current step (1-3)
-  files:         [],       // [{filename, path, size, headers, ...}] — one per upload
-  headers:       [],       // union of headers from all uploaded files
-  suggestions:   {},       // {canonical_field: csv_header}
-  matchedProfile: null,    // matched profile summary or null
-  canonicalFields: [],     // ordered list from /wizard/detect
-  canonicalLabels: {},     // {field: label}
-  mapping:       {},       // {canonical_field: selected_csv_header}
+  step:                1,        // current step (1-3)
+  files:               [],       // [{filename, path, size, headers, ...}] — one per upload
+  headers:             [],       // union of headers from all uploaded files
+  suggestions:         {},       // {canonical_field: csv_header}
+  matchedProfile:      null,     // matched profile summary or null
+  canonicalFields:     [],       // ordered list from /wizard/detect
+  canonicalLabels:     {},       // {field: label}
+  mapping:             {},       // {canonical_field: selected_csv_header}
+  suggestedDateFormat: null,     // server-inferred date format hint (e.g. '%m/%d/%Y')
 };
 
 // Required canonical fields for UI validation hints
@@ -597,6 +598,11 @@ function wizardOpen(uploadInfo) {
     }
   }
 
+  // Capture the server-inferred date format hint (first file wins)
+  if (uploadInfo.suggested_date_format && !wizard.suggestedDateFormat) {
+    wizard.suggestedDateFormat = uploadInfo.suggested_date_format;
+  }
+
   // Initialize mapping from suggestions
   wizard.mapping = { ...wizard.suggestions };
 
@@ -607,13 +613,14 @@ function wizardOpen(uploadInfo) {
 function wizardClose() {
   document.getElementById('wizard-overlay').classList.add('hidden');
   // Reset for next upload session
-  wizard.files        = [];
-  wizard.headers      = [];
-  wizard.suggestions  = {};
-  wizard.matchedProfile = null;
-  wizard.mapping      = {};
-  wizard.canonicalFields = [];
-  wizard.canonicalLabels = {};
+  wizard.files              = [];
+  wizard.headers            = [];
+  wizard.suggestions        = {};
+  wizard.matchedProfile     = null;
+  wizard.mapping            = {};
+  wizard.canonicalFields    = [];
+  wizard.canonicalLabels    = {};
+  wizard.suggestedDateFormat = null;
 }
 
 // ── Navigation ────────────────────────────────────────────────
@@ -832,6 +839,11 @@ function renderWizardStep3() {
     setVal('w-account-name',    mp.account_name || '');
     setVal('w-institution-key', mp.institution  || '');
     setVal('w-account-id',      mp.account_id   || '');
+  }
+
+  // Pre-fill date format from server-inferred hint if the field is empty
+  if (wizard.suggestedDateFormat) {
+    setVal('w-date-format', wizard.suggestedDateFormat);
   }
 
   // Mapping summary — show only mapped fields

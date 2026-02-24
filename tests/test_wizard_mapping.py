@@ -19,6 +19,7 @@ import yaml
 
 from finance_etl.wizard_mapping import (
     CANONICAL_FIELDS,
+    detect_date_format,
     extract_csv_headers,
     find_matching_profile,
     infer_amount_mode,
@@ -559,3 +560,115 @@ class TestListWizardProfiles:
         assert len(result) == 1
         assert result[0]["institution"] == "mybank"
         assert result[0]["profile_name"] == "default"
+
+
+# ---------------------------------------------------------------------------
+# detect_date_format — regression for wizard RuntimeError on missing date_format
+# ---------------------------------------------------------------------------
+
+class TestDetectDateFormat:
+    def test_us_slash_unambiguous(self):
+        """01/15/2024 has day=15 > 12 so %m/%d/%Y is the only valid format."""
+        assert detect_date_format(["01/15/2024", "02/20/2024"]) == "%m/%d/%Y"
+
+    def test_eu_slash_unambiguous(self):
+        """15/01/2024 has day=15 > 12 so %d/%m/%Y is the only valid format."""
+        assert detect_date_format(["15/01/2024", "20/02/2024"]) == "%d/%m/%Y"
+
+    def test_iso_format(self):
+        assert detect_date_format(["2024-01-05", "2024-12-31"]) == "%Y-%m-%d"
+
+    def test_mixed_disambiguating_values(self):
+        """Nonstandard CSV fixture: first four rows are ambiguous, last has day=15."""
+        values = ["01/05/2024", "01/07/2024", "01/10/2024", "01/12/2024", "01/15/2024"]
+        result = detect_date_format(values)
+        assert result == "%m/%d/%Y"
+
+    def test_empty_input_returns_none(self):
+        assert detect_date_format([]) is None
+
+    def test_all_empty_strings_returns_none(self):
+        assert detect_date_format(["", "  ", ""]) is None
+
+    def test_us_dash_format(self):
+        assert detect_date_format(["01-15-2024", "02-20-2024"]) == "%m-%d-%Y"
+
+    def test_returns_none_for_unrecognised_format(self):
+        assert detect_date_format(["not-a-date", "still-not"]) is None
+
+
+class TestExtractCsvHeadersSuggestedDateFormat:
+    def test_nonstandard_csv_suggests_us_format(self):
+        """extract_csv_headers on the nonstandard fixture must return '%m/%d/%Y'
+        because 01/15/2024 disambiguates US vs EU format."""
+        result = extract_csv_headers(NONSTANDARD_CSV)
+        assert result["suggested_date_format"] == "%m/%d/%Y"
+
+    def test_result_includes_suggested_date_format_key(self):
+        result = extract_csv_headers(NONSTANDARD_CSV)
+        assert "suggested_date_format" in result
+
+
+# ---------------------------------------------------------------------------
+# Regression: wizard pipeline without date_format must not raise RuntimeError
+# ---------------------------------------------------------------------------
+
+class TestWizardPipelineNoBugsWithoutDateFormat:
+    """End-to-end regression: wizard mapping without explicit date_format must
+    succeed when detect_date_format can infer the format from sample rows."""
+
+    def test_full_pipeline_no_date_format_succeeds(self, tmp_path):
+        """Regression for: RuntimeError: Run failed validation with N critical errors
+        when user leaves date_format blank and CSV has ambiguous dates."""
+        from finance_etl.db import get_connection
+        from finance_etl.ingest import create_run, register_files
+        from finance_etl.profile import profile_file
+        from finance_etl.mapping import map_and_stage
+        from finance_etl.normalize import normalize_staged_rows
+        from finance_etl.validate import validate_normalized
+
+        canonical_map = {
+            "transaction_date": "Posting Date",
+            "debit_amount":     "Withdrawals",
+            "credit_amount":    "Deposits",
+            "description":      "Narrative",
+        }
+
+        # detect_date_format provides the fallback; user did NOT set date_format
+        from finance_etl.wizard_mapping import detect_date_format, extract_csv_headers
+        info = extract_csv_headers(NONSTANDARD_CSV)
+        date_values = [row.get("Posting Date", "") for row in info["sample_rows"]]
+        auto_fmt = detect_date_format(date_values)
+        assert auto_fmt == "%m/%d/%Y", "auto-detection must resolve format"
+
+        mapping_dict = wizard_to_pipeline_mapping(
+            canonical_map=canonical_map,
+            bank_name="Test Bank",
+            bank_key="test_bank_chk001",
+            account_name="Test Checking",
+            account_id="chk001",
+            date_format=auto_fmt,   # as wizard_save_and_run now sets it
+            currency_default="USD",
+        )
+
+        db_path = tmp_path / "test.duckdb"
+        conn = get_connection(db_path)
+        run_id = "reg_no_datefmt"
+        create_run(conn, run_id, 1)
+        regs = register_files(conn, [NONSTANDARD_CSV], run_id, tmp_path / "raw")
+        for reg in regs:
+            profile_file(conn, reg["file_hash"], reg["ingested_path"], tmp_path / "profiles")
+            map_and_stage(conn, reg["ingested_path"], reg["file_hash"], run_id, mapping_dict)
+
+        normalized, norm_errors = normalize_staged_rows(conn, run_id, mapping_dict)
+        assert norm_errors == [], f"Unexpected normalization errors: {norm_errors}"
+        assert len(normalized) == 5
+
+        valid_rows, report = validate_normalized(
+            normalized, norm_errors, run_id, tmp_path / "validation"
+        )
+        assert report["rows_with_critical_errors"] == 0, (
+            f"Pipeline must not fail validation; got: {report['critical_errors']}"
+        )
+        assert len(valid_rows) == 5
+        conn.close()
