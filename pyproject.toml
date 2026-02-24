@@ -18,6 +18,12 @@ dependencies = [
     "python-multipart>=0.0.9",
 ]
 
+[project.optional-dependencies]
+# Install with:  pip install -e ".[wizard]"
+wizard = [
+    "scikit-learn>=1.3",
+]
+
 [project.scripts]
 finance_etl = "finance_etl.cli:main"
 

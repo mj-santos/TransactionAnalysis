@@ -7,6 +7,7 @@ Commands:
   validate  — show validation report for a run
   parquet   — refresh Parquet snapshot
   analytics — export analytics CSVs
+  wizard    — first-run setup wizard (automated header mapping + config generation)
 """
 from __future__ import annotations
 
@@ -207,3 +208,54 @@ def cmd_api(host, port, db_path, mappings_dir, reports_dir):
 
     app = create_app(db_path=db_path, mappings_dir=mappings_dir, reports_dir=reports_dir)
     uvicorn.run(app, host=host, port=port)
+
+
+# ---------------------------------------------------------------------------
+# finance_etl wizard
+# ---------------------------------------------------------------------------
+@main.command("wizard")
+@click.option(
+    "--raw-data-dir", default="raw_data", show_default=True,
+    help="Directory containing the bank CSV export to analyse.",
+)
+@click.option(
+    "--output-config", default=None, metavar="PATH",
+    help="Destination for the generated config.yaml "
+         "(default: config/mappings/<bank_key>.yaml).",
+)
+@click.option(
+    "--yes", "-y", "auto_yes", is_flag=True, default=False,
+    help="Accept all suggestions automatically (non-interactive / CI mode).",
+)
+def cmd_wizard(raw_data_dir, output_config, auto_yes):
+    """
+    First-run setup wizard: scan a CSV, infer headers, suggest categories,
+    auto-generate vendor rules, and produce a ready-to-use config.yaml.
+
+    \b
+    Steps
+    -----
+    1. Scan --raw-data-dir for a bank CSV.
+    2. Infer column → canonical-field mapping (keyword matching).
+    3. Cluster transaction descriptions into suggested categories.
+    4. Identify high-frequency vendors and generate keyword rules.
+    5. Preview the generated config.yaml and ask for confirmation.
+    """
+    try:
+        from finance_etl.wizard.setup_wizard import run_wizard
+    except ImportError as exc:
+        click.echo(f"ERROR: could not import wizard: {exc}", err=True)
+        sys.exit(1)
+
+    try:
+        run_wizard(
+            raw_data_dir=raw_data_dir,
+            output_config=output_config,
+            auto_yes=auto_yes,
+        )
+    except FileNotFoundError as exc:
+        click.echo(f"ERROR: {exc}", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        click.echo(f"ERROR: {exc}", err=True)
+        sys.exit(1)
