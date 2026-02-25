@@ -149,6 +149,19 @@ function removeChip(id) {
   checkImportReady();
 }
 
+function resetImports() {
+  state.uploadedFiles = [];
+  clearTimeout(state.pollTimer);
+  state.currentRunId = null;
+  document.getElementById('file-chips').innerHTML = '';
+  document.getElementById('run-status').className = 'run-status'; // hide (no 'visible')
+  document.getElementById('rs-counts').innerHTML = '';
+  document.getElementById('rs-actions').innerHTML = '';
+  document.getElementById('preview-container').style.display = 'none';
+  checkImportReady();
+  toast('Import reset — upload a new file to start again.', 'info', 2500);
+}
+
 // ── Mappings ────────────────────────────────────────────────
 async function loadMappings() {
   const sel = document.getElementById('mapping-select');
@@ -169,17 +182,22 @@ async function loadMappings() {
 
 // ── Import button guard ──────────────────────────────────────
 function checkImportReady() {
+  const customHeaders = !!(document.getElementById('custom-headers-toggle')?.checked);
+  const mappingSelect = document.getElementById('mapping-select');
+  mappingSelect.disabled = customHeaders;
+
   const hasFiles   = state.uploadedFiles.some(f => {
     const chip = document.getElementById(f.chipId);
     return chip && chip.classList.contains('done');
   });
-  const hasMapping = !!document.getElementById('mapping-select').value;
+  const hasMapping = customHeaders || !!mappingSelect.value;
   const btn  = document.getElementById('import-btn');
   const hint = document.getElementById('import-hint');
   btn.disabled = !(hasFiles && hasMapping);
   if (!hasFiles && !hasMapping) hint.textContent = 'Upload a file and select a mapping to continue.';
   else if (!hasFiles)           hint.textContent = 'Upload a CSV file to continue.';
   else if (!hasMapping)         hint.textContent = 'Select a bank mapping to continue.';
+  else if (customHeaders)       hint.textContent = 'Complete the mapping wizard after uploading.';
   else                          hint.textContent = '';
 }
 
@@ -286,35 +304,58 @@ function setRunStatus(status, runId, counts, label) {
 async function loadPreview(runId) {
   document.getElementById('preview-container').style.display = 'block';
   document.getElementById('preview-tbody').innerHTML =
-    '<tr><td colspan="6" class="text-center text-muted" style="padding:20px">Loading…</td></tr>';
+    '<tr><td colspan="9" class="text-center text-muted" style="padding:20px">Loading…</td></tr>';
 
   try {
     const data = await api('GET', `/runs/${runId}/preview`);
-    renderPreviewRows('preview-tbody', data.rows);
+    renderPreviewRows('preview-tbody', data.rows, 'preview-head');
     document.getElementById('preview-meta').textContent =
       `${data.count} row(s)${data.truncated ? ' (truncated)' : ''}`;
   } catch (err) {
     document.getElementById('preview-tbody').innerHTML =
-      `<tr><td colspan="6" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+      `<tr><td colspan="9" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
   }
 }
 
-function renderPreviewRows(tbodyId, rows) {
+// Ordered column config for preview tables; optional columns shown only when present in data
+const _PREVIEW_COL_DEFS = [
+  { key: 'source_row',           label: '#',           cls: 'mono text-muted', style: '' },
+  { key: 'transaction_date_raw', label: 'Date',        cls: '',                style: '' },
+  { key: 'description_raw',      label: 'Description', cls: '',                style: 'max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' },
+  { key: 'amount_raw',           label: 'Amount',      cls: 'mono text-right', style: '' },
+  { key: 'currency_raw',         label: 'Currency',    cls: '',                style: '' },
+  { key: 'account_name',         label: 'Account',     cls: 'text-muted',      style: '' },
+  { key: 'merchant',             label: 'Merchant',    cls: '',                style: '' },
+  { key: 'category',             label: 'Category',    cls: '',                style: '' },
+  { key: 'notes',                label: 'Notes',       cls: 'text-muted',      style: '' },
+];
+
+function renderPreviewRows(tbodyId, rows, theadId) {
   const tbody = document.getElementById(tbodyId);
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding:20px">No rows found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted" style="padding:20px">No rows found.</td></tr>';
     return;
   }
+  // Determine which columns are present (have at least one non-empty value)
+  const activeCols = _PREVIEW_COL_DEFS.filter(c =>
+    rows.some(r => r[c.key] != null && r[c.key] !== '')
+  );
+  // Update thead if provided
+  if (theadId) {
+    const thead = document.getElementById(theadId);
+    if (thead) {
+      thead.innerHTML = activeCols.map(c => `<th>${esc(c.label)}</th>`).join('');
+    }
+  }
+  const span = activeCols.length || 1;
   tbody.innerHTML = rows.map(r => `
-    <tr>
-      <td class="mono text-muted">${r.source_row}</td>
-      <td>${esc(r.transaction_date_raw || '')}</td>
-      <td style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"
-          title="${esc(r.description_raw || '')}">${esc(r.description_raw || '')}</td>
-      <td class="mono text-right">${esc(r.amount_raw || '')}</td>
-      <td>${esc(r.currency_raw || '')}</td>
-      <td class="text-muted">${esc(r.account_name || '')}</td>
-    </tr>`).join('');
+    <tr>${activeCols.map(c => {
+      const val = r[c.key] != null ? String(r[c.key]) : '';
+      const style = c.style ? ` style="${c.style}"` : '';
+      const title = c.style.includes('ellipsis') ? ` title="${esc(val)}"` : '';
+      const cls   = c.cls ? ` class="${c.cls}"` : '';
+      return `<td${cls}${style}${title}>${esc(val)}</td>`;
+    }).join('')}</tr>`).join('');
 }
 
 // ── Commit / discard ─────────────────────────────────────────
@@ -385,11 +426,11 @@ async function showHistoryPreview(runId) {
 
   try {
     const data = await api('GET', `/runs/${runId}/preview`);
-    renderPreviewRows('history-preview-tbody', data.rows);
+    renderPreviewRows('history-preview-tbody', data.rows, 'history-preview-head');
     document.getElementById('history-preview-meta').textContent =
       `${data.count} row(s)${data.truncated ? ' (truncated to 200)' : ''}`;
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
   }
 }
 
@@ -450,6 +491,12 @@ async function loadReports() {
           <div class="rc-actions">
             <a class="btn btn-secondary btn-sm" href="/reports/${esc(name)}" download onclick="event.stopPropagation()">
               ↓ Download
+            </a>
+            <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); editReport('${esc(name)}')" title="Open as template in Custom Report Builder">
+              ✏ Edit report
+            </button>
+            <a class="btn btn-secondary btn-sm" href="/docs#tag/reports" target="_blank" onclick="event.stopPropagation()" title="Open report documentation in new tab">
+              ℹ Info
             </a>
             <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); viewChart('${esc(name)}')">
               Preview
@@ -542,7 +589,54 @@ function closeChart() {
   document.getElementById('chart-area').style.display = 'none';
 }
 
+function editReport(name) {
+  // Open custom report builder pre-filled as template from built-in report
+  const card = document.getElementById('custom-report-card');
+  card.style.display = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  const tmpl = REPORT_TEMPLATES[name] || { group_by: [], bucket: null, filters: [] };
+
+  // Clear and rebuild filters
+  document.getElementById('report-filter-rows').innerHTML = '';
+  tmpl.filters.forEach(f => {
+    addReportFilter();
+    const rows = document.getElementById('report-filter-rows').children;
+    const last = rows[rows.length - 1];
+    if (last) {
+      const fld = last.querySelector('.rf-field');
+      const op  = last.querySelector('.rf-op');
+      const val = last.querySelector('.rf-val');
+      if (fld) fld.value = f.field;
+      if (op)  op.value  = f.op;
+      if (val) val.value = f.value ?? '';
+    }
+  });
+
+  // Set group-by selections
+  const groupSel = document.getElementById('report-group-by');
+  [...groupSel.options].forEach(o => { o.selected = tmpl.group_by.includes(o.value); });
+
+  // Set bucket
+  document.getElementById('report-bucket').value = tmpl.bucket || '';
+}
+
 // ── Custom report builder ──────────────────────────────────────
+
+const REPORT_COL_TOOLTIPS = {
+  net_amount:   'NET AMOUNT — Sum of all signed amounts (income minus spend). Positive = net income.',
+  row_count:    'ROW COUNT — Number of transactions matched in this group.',
+  total_spend:  'TOTAL SPEND — Sum of negative (outflow) amounts, shown as a positive number.',
+  total_income: 'TOTAL INCOME — Sum of positive (inflow) amounts.',
+};
+
+const REPORT_TEMPLATES = {
+  'spend_by_month_category.csv': { group_by: ['transaction_date', 'category'], bucket: 'month',  filters: [] },
+  'cashflow_by_month.csv':        { group_by: ['transaction_date'],             bucket: 'month',  filters: [] },
+  'spend_by_merchant.csv':        { group_by: ['merchant'],                     bucket: null,     filters: [{ field: 'amount', op: '<=', value: '0' }] },
+  'totals_by_account.csv':        { group_by: ['account_name'],                 bucket: null,     filters: [] },
+  'top_merchants.csv':            { group_by: ['merchant'],                     bucket: null,     filters: [{ field: 'amount', op: '<=', value: '0' }] },
+};
 
 const REPORT_FIELD_LABELS = {
   transaction_date: 'Transaction Date', description: 'Description', merchant: 'Merchant',
@@ -566,6 +660,9 @@ function addReportFilter() {
   row.style.cssText = 'display:flex; gap:6px; align-items:center;';
   row.dataset.filterIdx = idx;
   row.innerHTML = `
+    <label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap;cursor:pointer;" title="Include all values (no filter applied for this field)">
+      <input type="checkbox" class="rf-all" onchange="onFilterAllChange(this)"> All
+    </label>
     <select class="rf-field" style="flex:2;">${fieldOpts}</select>
     <select class="rf-op"    style="flex:1;">${opOpts}</select>
     <input  class="rf-val"   style="flex:3;" type="text" placeholder="value" />
@@ -573,9 +670,18 @@ function addReportFilter() {
   container.appendChild(row);
 }
 
+function onFilterAllChange(el) {
+  const row = el.closest('div');
+  const op  = row.querySelector('.rf-op');
+  const val = row.querySelector('.rf-val');
+  if (op)  op.disabled  = el.checked;
+  if (val) val.disabled = el.checked;
+}
+
 async function runCustomReport() {
   const filters = [];
   document.querySelectorAll('#report-filter-rows > div').forEach(row => {
+    if (row.querySelector('.rf-all')?.checked) return; // "Include all" — skip this filter
     const field = row.querySelector('.rf-field')?.value;
     const op    = row.querySelector('.rf-op')?.value;
     const val   = row.querySelector('.rf-val')?.value;
@@ -605,7 +711,12 @@ async function runCustomReport() {
     document.getElementById('custom-report-meta').textContent =
       `${data.count ?? data.rows.length} row(s)`;
     document.getElementById('custom-report-head').innerHTML =
-      `<tr>${cols.map(c => `<th>${esc(c)}</th>`).join('')}</tr>`;
+      `<tr>${cols.map(c => {
+        const tip = REPORT_COL_TOOLTIPS[c];
+        const attrs = tip ? ` title="${esc(tip)}" style="cursor:help;"` : '';
+        const icon  = tip ? ' <span style="font-size:10px;opacity:.7;">ℹ</span>' : '';
+        return `<th${attrs}>${esc(c)}${icon}</th>`;
+      }).join('')}</tr>`;
     document.getElementById('custom-report-body').innerHTML = data.rows.length
       ? data.rows.map(row =>
           `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
@@ -616,6 +727,27 @@ async function runCustomReport() {
     document.getElementById('custom-report-body').innerHTML =
       `<tr><td colspan="99" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
   }
+}
+
+function downloadReportResults() {
+  const head = document.getElementById('custom-report-head');
+  const body = document.getElementById('custom-report-body');
+  if (!head || !body) return;
+  const headers = [...head.querySelectorAll('th')].map(th => th.textContent.replace(/\s*ℹ\s*$/, '').trim());
+  const dataRows = [...body.querySelectorAll('tr')].map(tr =>
+    [...tr.querySelectorAll('td')].map(td => td.textContent.trim())
+  ).filter(r => r.length);
+  if (!headers.length || !dataRows.length) { toast('No results to download.', 'info', 2000); return; }
+  const csvLines = [headers, ...dataRows].map(r =>
+    r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+  );
+  const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `custom_report_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Settings page ──────────────────────────────────────────────
@@ -691,6 +823,7 @@ function esc(str) {
 // ── Boot ───────────────────────────────────────────────────────
 loadMappings();
 loadSettings();
+document.getElementById('custom-headers-toggle')?.addEventListener('change', checkImportReady);
 
 // ═══════════════════════════════════════════════════════════════
 //  MAPPING WIZARD
@@ -712,6 +845,8 @@ const wizard = {
 
 // Required canonical fields for UI validation hints
 const WIZARD_REQUIRED_FIELDS = new Set(['transaction_date']);
+// Fields removed from step 2 display (uncommon / confusing for most users)
+const STEP2_HIDDEN = new Set(['debit_amount', 'credit_amount', 'dc_flag', 'posted_date']);
 const WIZARD_AMOUNT_GROUPS   = [
   ['debit_amount', 'credit_amount'],
   ['money_in', 'money_out'],
@@ -772,6 +907,9 @@ function wizardOpen(uploadInfo) {
 
 function wizardClose() {
   document.getElementById('wizard-overlay').classList.add('hidden');
+  // Re-enable main preview toggle (wizard step 3 may have locked it)
+  const mainTog = document.getElementById('preview-toggle');
+  if (mainTog) mainTog.disabled = false;
   // Reset for next upload session
   wizard.files              = [];
   wizard.headers            = [];
@@ -821,7 +959,14 @@ function wizardGoTo(step) {
 }
 
 function wizardBack() {
-  if (wizard.step > 1) wizardGoTo(wizard.step - 1);
+  if (wizard.step > 1) {
+    if (wizard.step === 3) {
+      // Re-enable main preview toggle when leaving step 3
+      const mainTog = document.getElementById('preview-toggle');
+      if (mainTog) mainTog.disabled = false;
+    }
+    wizardGoTo(wizard.step - 1);
+  }
 }
 
 async function wizardNext() {
@@ -921,7 +1066,7 @@ function renderWizardStep1() {
   if (samples.length && wizard.headers.length) {
     const sampleBlock = document.getElementById('w-sample-block');
     sampleBlock.style.display = 'block';
-    const dispHeaders = wizard.headers.slice(0, 8); // cap columns for readability
+    const dispHeaders = wizard.headers;
     document.getElementById('w-sample-head').innerHTML =
       dispHeaders.map(h => `<th>${esc(h)}</th>`).join('');
     document.getElementById('w-sample-body').innerHTML =
@@ -935,13 +1080,14 @@ function renderWizardStep1() {
 
 function renderWizardStep2() {
   // Use server-provided canonical fields if available, else fall back to wizard.suggestions keys
-  const fields = wizard.canonicalFields.length
+  const fields = (wizard.canonicalFields.length
     ? wizard.canonicalFields
     : Object.keys(wizard.suggestions).concat(
         ['transaction_date','debit_amount','credit_amount','amount','money_in','money_out',
          'dc_flag','description','posted_date','merchant','category','account','notes','currency']
           .filter(f => !Object.keys(wizard.suggestions).includes(f))
-      );
+      )
+  ).filter(f => !STEP2_HIDDEN.has(f));
 
   const labels = wizard.canonicalLabels;
   const isReq = f => WIZARD_REQUIRED_FIELDS.has(f);
@@ -1044,6 +1190,14 @@ function renderWizardStep3() {
   // Pre-fill date format from server-inferred hint if the field is empty
   if (wizard.suggestedDateFormat) {
     setVal('w-date-format', wizard.suggestedDateFormat);
+  }
+
+  // Sync wizard preview toggle with main Configure Mapping toggle and lock main toggle
+  const mainTog = document.getElementById('preview-toggle');
+  const wizTog  = document.getElementById('w-preview-toggle');
+  if (wizTog && mainTog) {
+    wizTog.onchange = () => { mainTog.disabled = wizTog.checked; };
+    mainTog.disabled = wizTog.checked;
   }
 
   // Mapping summary — show only mapped fields

@@ -1,4 +1,5 @@
 """FastAPI service — uploads, async runs, preview/commit, reports, and web UI."""
+import json
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -138,6 +139,9 @@ try:
         description_raw:       Optional[str] = None
         amount_raw:            Optional[str] = None
         currency_raw:          Optional[str] = None
+        merchant:              Optional[str] = None
+        category:              Optional[str] = None
+        notes:                 Optional[str] = None
 
     class PreviewResponse(BaseModel):
         run_id:    str
@@ -753,7 +757,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 """
                 SELECT source_row, bank_name, account_name, account_id,
                        transaction_date_raw, description_raw,
-                       amount_raw, currency_raw
+                       amount_raw, currency_raw, extra_json
                 FROM transactions_stage
                 WHERE run_id = ?
                 ORDER BY source_row
@@ -768,13 +772,26 @@ No cloud services, no external dependencies — all data stays on your machine.
         cols = [
             "source_row", "bank_name", "account_name", "account_id",
             "transaction_date_raw", "description_raw",
-            "amount_raw", "currency_raw",
+            "amount_raw", "currency_raw", "extra_json",
         ]
+        row_dicts = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            try:
+                extra = json.loads(d.pop("extra_json") or "{}")
+            except Exception:
+                extra = {}
+                d.pop("extra_json", None)
+            for k in ("merchant", "category", "notes"):
+                v = (extra.get(k) or "").strip()
+                if v:
+                    d[k] = v
+            row_dicts.append(d)
         return {
             "run_id":    run_id,
-            "rows":      [dict(zip(cols, r)) for r in rows],
-            "count":     len(rows),
-            "truncated": len(rows) == limit,
+            "rows":      row_dicts,
+            "count":     len(row_dicts),
+            "truncated": len(row_dicts) == limit,
         }
 
     @app.post(
