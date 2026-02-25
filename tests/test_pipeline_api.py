@@ -169,3 +169,65 @@ def test_category_flows_through_pipeline(tmp_path: Path):
     assert normalized[0]["category"] == "Food", (
         "category must be populated from CSV; was None (pipeline bug fixed)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Preview endpoint: merchant/category surfaced from extra_json
+# ---------------------------------------------------------------------------
+
+def test_preview_endpoint_returns_merchant_and_category(tmp_path: Path):
+    """GET /runs/{run_id}/preview includes merchant/category parsed from extra_json."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "prev_test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO runs (run_id, started_at, status, files_count) VALUES (?, NOW(), 'staged', 0)",
+        ["prevtest01"],
+    )
+    import json as _json
+    extra = _json.dumps({"merchant": "Starbucks", "category": "Coffee"})
+    conn.execute(
+        "INSERT INTO transactions_stage (run_id, file_hash, source_file, source_row, "
+        "bank_name, account_name, account_id, transaction_date_raw, posted_date_raw, "
+        "description_raw, amount_raw, debit_raw, credit_raw, money_in_raw, money_out_raw, "
+        "dc_flag_raw, currency_raw, extra_json) VALUES "
+        "(?, 'fhash02', 'f.csv', 2, 'MyBank', 'Checking', 'chk01', "
+        "'2024-03-01', '', 'Starbucks coffee', '-5.50', '', '', '', '', '', 'USD', ?)",
+        ["prevtest01", extra],
+    )
+    conn.close()
+
+    resp = client.get("/runs/prevtest01/preview")
+    assert resp.status_code == 200
+    rows = resp.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0].get("merchant") == "Starbucks", "merchant must be surfaced from extra_json"
+    assert rows[0].get("category") == "Coffee", "category must be surfaced from extra_json"
+
+
+# ---------------------------------------------------------------------------
+# Custom report builder: _build_report_sql "include all" path (no filter)
+# ---------------------------------------------------------------------------
+
+def test_build_report_sql_no_filters_returns_all_rows():
+    """_build_report_sql with empty filters list returns ungrouped select without WHERE."""
+    from finance_etl.api import _build_report_sql
+
+    payload = SimpleNamespace(
+        filters=[],
+        group_by=[],
+        bucket=None,
+        date_from=None,
+        date_to=None,
+        limit=50,
+    )
+    sql, params, col_names = _build_report_sql(payload)
+
+    assert "WHERE" not in sql, "No WHERE clause expected when filters list is empty"
+    assert "GROUP BY" not in sql, "No GROUP BY expected when group_by is empty"
+    assert params == []

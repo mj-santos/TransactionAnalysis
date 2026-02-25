@@ -46,6 +46,10 @@
   <!-- ─── IMPORT PAGE ─── -->
   <section id="page-import" class="page active">
 
+    <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+      <button class="btn btn-secondary btn-sm" onclick="resetImports()" title="Clear all uploads and reset the import flow">↺ Reset Imports</button>
+    </div>
+
     <div class="card">
       <div class="card-title">1 — Upload CSV file(s)</div>
       <div class="drop-zone" id="drop-zone">
@@ -113,16 +117,7 @@
         </div>
         <div class="table-wrap">
           <table id="preview-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Date</th>
-                <th>Description</th>
-                <th>Amount</th>
-                <th>Currency</th>
-                <th>Account</th>
-              </tr>
-            </thead>
+            <thead><tr id="preview-head"><th>#</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Account</th></tr></thead>
             <tbody id="preview-tbody"></tbody>
           </table>
         </div>
@@ -169,12 +164,7 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead>
-              <tr>
-                <th>#</th><th>Date</th><th>Description</th>
-                <th>Amount</th><th>Currency</th><th>Account</th>
-              </tr>
-            </thead>
+            <thead><tr id="history-preview-head"><th>#</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Account</th></tr></thead>
             <tbody id="history-preview-tbody"></tbody>
           </table>
         </div>
@@ -240,8 +230,9 @@
           </div>
         </div>
 
-        <div>
+        <div style="display:flex; gap:8px; align-items:center;">
           <button class="btn btn-primary btn-sm" onclick="runCustomReport()">▶ Run report</button>
+          <button class="btn btn-secondary btn-sm" onclick="downloadReportResults()" title="Download current results as CSV">⬇ Download results</button>
         </div>
 
         <!-- Results -->
