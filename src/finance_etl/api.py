@@ -1248,6 +1248,116 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {"name": path.name, "rows": chart_from_report_csv(path)}
 
     # -----------------------------------------------------------------------
+    # Metric docs — slug-based documentation pages for report columns
+    # -----------------------------------------------------------------------
+
+    _METRIC_DOCS: dict[str, dict] = {
+        "net_amount": {
+            "title": "Net Amount",
+            "summary": "Signed total: income minus spend. Positive means net income.",
+            "body": (
+                "<p><strong>Net Amount</strong> is the algebraic sum of all transaction amounts "
+                "within a group.</p>"
+                "<ul>"
+                "<li><strong>Positive</strong> — net inflow (received more than spent)</li>"
+                "<li><strong>Negative</strong> — net outflow (spent more than received)</li>"
+                "</ul>"
+                "<p>Formula: <code>SUM(amount)</code> where inflows are positive, outflows negative.</p>"
+                "<p>Use this to assess overall financial position for any period, category, or account.</p>"
+            ),
+        },
+        "total_spend": {
+            "title": "Total Spend",
+            "summary": "Sum of outflows (negative amounts), displayed as positive.",
+            "body": (
+                "<p><strong>Total Spend</strong> aggregates all outgoing transactions in a group.</p>"
+                "<ul>"
+                "<li>Only negative-amount transactions contribute</li>"
+                "<li>Displayed as a <em>positive</em> number (absolute value) for readability</li>"
+                "</ul>"
+                "<p>Formula: <code>SUM(amount) FILTER (WHERE amount &lt; 0)</code>, multiplied by −1.</p>"
+                "<p>Use alongside <em>Total Income</em> to compute manual cash-flow figures.</p>"
+            ),
+        },
+        "total_income": {
+            "title": "Total Income",
+            "summary": "Sum of inflows (positive amounts) for this group.",
+            "body": (
+                "<p><strong>Total Income</strong> aggregates all incoming transactions in a group.</p>"
+                "<ul>"
+                "<li>Only positive-amount transactions contribute</li>"
+                "<li>Covers salary, refunds, transfers in, and other credits</li>"
+                "</ul>"
+                "<p>Formula: <code>SUM(amount) FILTER (WHERE amount &gt; 0)</code>.</p>"
+                "<p>Pair with <em>Total Spend</em> to derive net cash-flow without using Net Amount.</p>"
+            ),
+        },
+        "row_count": {
+            "title": "Row Count",
+            "summary": "Number of transactions counted in this group.",
+            "body": (
+                "<p><strong>Row Count</strong> is the number of individual transactions in an "
+                "aggregated row.</p>"
+                "<ul>"
+                "<li>High count + low Net Amount → many small transactions</li>"
+                "<li>Useful for spotting high-frequency spending categories</li>"
+                "</ul>"
+                "<p>Formula: <code>COUNT(*)</code> over the grouped rows.</p>"
+            ),
+        },
+    }
+
+    _DOCS_STYLE = (
+        "<style>"
+        "body{font-family:system-ui,sans-serif;background:#f8fafc;color:#1e293b;margin:0;padding:24px 16px}"
+        ".wrap{max-width:620px;margin:0 auto;background:#fff;border-radius:8px;padding:32px;box-shadow:0 1px 4px rgba(0,0,0,.08)}"
+        "h1{margin:0 0 6px;font-size:22px}"
+        ".summary{color:#64748b;font-size:14px;margin:0 0 20px;font-style:italic}"
+        "hr{border:none;border-top:1px solid #e2e8f0;margin:20px 0}"
+        "ul{padding-left:20px;line-height:1.75}"
+        "code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:13px}"
+        ".back{font-size:13px;color:#3b82f6;text-decoration:none;display:inline-block;margin-bottom:20px}"
+        ".back:hover{text-decoration:underline}"
+        ".index a{display:block;padding:6px 0;color:#3b82f6;text-decoration:none;border-bottom:1px solid #f1f5f9}"
+        ".index a:hover{text-decoration:underline}"
+        "</style>"
+    )
+
+    @app.get("/metric-docs/{topic}", tags=["ui"], include_in_schema=False)
+    def metric_docs(topic: str):
+        """Slug-based documentation page for a named report metric."""
+        doc = _METRIC_DOCS.get(topic)
+        if doc is None:
+            index_links = "".join(
+                f"<a href='/metric-docs/{k}'>{v['title']}</a>"
+                for k, v in _METRIC_DOCS.items()
+            )
+            html = (
+                "<!doctype html><html><head><meta charset=utf-8>"
+                f"<title>Metric not found — finance_etl</title>{_DOCS_STYLE}</head>"
+                f"<body><div class='wrap'>"
+                f"<a class='back' href='javascript:history.back()'>← Back</a>"
+                f"<h1>Unknown metric: <code>{topic}</code></h1>"
+                f"<p style='color:#64748b;margin-top:8px'>Available metrics:</p>"
+                f"<div class='index'>{index_links}</div>"
+                "</div></body></html>"
+            )
+            return HTMLResponse(content=html, status_code=404)
+
+        html = (
+            "<!doctype html><html><head><meta charset=utf-8>"
+            f"<title>{doc['title']} — finance_etl docs</title>{_DOCS_STYLE}</head>"
+            f"<body><div class='wrap'>"
+            f"<a class='back' href='javascript:history.back()'>← Back</a>"
+            f"<h1>{doc['title']}</h1>"
+            f"<p class='summary'>{doc['summary']}</p>"
+            "<hr>"
+            f"<div class='detail'>{doc['body']}</div>"
+            "</div></body></html>"
+        )
+        return HTMLResponse(content=html)
+
+    # -----------------------------------------------------------------------
     # Web UI — always registered last so all API routes take precedence
     # -----------------------------------------------------------------------
 

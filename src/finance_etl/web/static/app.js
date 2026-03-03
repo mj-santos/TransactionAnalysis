@@ -624,10 +624,10 @@ function editReport(name) {
 // ── Custom report builder ──────────────────────────────────────
 
 const REPORT_COL_TOOLTIPS = {
-  net_amount:   'NET AMOUNT — Sum of all signed amounts (income minus spend). Positive = net income.',
-  row_count:    'ROW COUNT — Number of transactions matched in this group.',
-  total_spend:  'TOTAL SPEND — Sum of negative (outflow) amounts, shown as a positive number.',
-  total_income: 'TOTAL INCOME — Sum of positive (inflow) amounts.',
+  net_amount:   'Signed total: income minus spend. Positive means net income.',
+  row_count:    'Number of transactions counted in this group.',
+  total_spend:  'Sum of outflows (negative amounts), displayed as positive.',
+  total_income: 'Sum of inflows (positive amounts) for this group.',
 };
 
 const REPORT_TEMPLATES = {
@@ -713,9 +713,9 @@ async function runCustomReport() {
     document.getElementById('custom-report-head').innerHTML =
       `<tr>${cols.map(c => {
         const tip = REPORT_COL_TOOLTIPS[c];
-        const attrs = tip ? ` title="${esc(tip)}" style="cursor:help;"` : '';
-        const icon  = tip ? ' <span style="font-size:10px;opacity:.7;">ℹ</span>' : '';
-        return `<th${attrs}>${esc(c)}${icon}</th>`;
+        if (!tip) return `<th>${esc(c)}</th>`;
+        const href = `/metric-docs/${encodeURIComponent(c)}`;
+        return `<th>${esc(c)} <a href="${href}" target="_blank" title="${esc(tip)} — Click to read more." style="font-size:10px;opacity:.65;text-decoration:none;cursor:help;" onclick="event.stopPropagation()">ℹ</a></th>`;
       }).join('')}</tr>`;
     document.getElementById('custom-report-body').innerHTML = data.rows.length
       ? data.rows.map(row =>
