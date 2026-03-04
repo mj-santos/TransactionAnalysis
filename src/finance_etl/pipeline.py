@@ -78,6 +78,7 @@ def run_with_options(
     force_parquet=False,
     preview_only=False,
     run_id=None,
+    statement_type: str | None = None,
 ) -> RunResult:
     """Full-featured programmatic run API used by CLI and web API.
 
@@ -109,7 +110,7 @@ def run_with_options(
 
     try:
         t0 = time.perf_counter()
-        create_run(conn, run_id, len(csv_paths))
+        create_run(conn, run_id, len(csv_paths), statement_type=statement_type)
         registrations = register_files(conn, csv_paths, run_id, Path(raw_dir))
         stage_timings["ingest_register_s"] = time.perf_counter() - t0
 
@@ -143,7 +144,7 @@ def run_with_options(
             stage_timings["map_stage_s"] = stage_timings.get("map_stage_s", 0.0) + (time.perf_counter() - t0)
 
         t0 = time.perf_counter()
-        normalized, norm_errors = normalize_staged_rows(conn, run_id, mapping)
+        normalized, norm_errors = normalize_staged_rows(conn, run_id, mapping, statement_type=statement_type)
         stage_timings["normalize_s"] = time.perf_counter() - t0
         counts["rows_normalized"] = len(normalized)
         counts["errors_count"] += len(norm_errors)
@@ -178,6 +179,8 @@ def run_with_options(
                 "no_parquet": no_parquet,
                 "no_analytics": no_analytics,
                 "force_parquet": force_parquet,
+                # Feature 1: persist statement_type through preview/commit cycle
+                "statement_type": statement_type,
             }
             finalize_run(conn, run_id, "staged", counts, notes="awaiting commit")
             conn.close()
@@ -240,7 +243,9 @@ def commit_run(run_id: str) -> RunResult:
 
     try:
         # Re-normalize from transactions_stage (already staged, deterministic)
-        normalized, norm_errors = normalize_staged_rows(conn, run_id, state["mapping"])
+        normalized, norm_errors = normalize_staged_rows(
+            conn, run_id, state["mapping"], statement_type=state.get("statement_type")
+        )
         valid_rows, report = validate_normalized(
             normalized, norm_errors, run_id, Path(state["validation_dir"])
         )
@@ -280,8 +285,9 @@ def get_run_status(db_path: str | Path, run_id: str) -> dict:
     try:
         row = conn.execute(
             """
-            SELECT run_id, started_at, finished_at, status, files_count,
-                   rows_in, rows_staged, rows_normalized, rows_loaded, errors_count, notes
+            SELECT run_id, started_at, finished_at, status, statement_type,
+                   files_count, rows_in, rows_staged, rows_normalized,
+                   rows_loaded, errors_count, notes
             FROM runs WHERE run_id = ?
             """,
             [run_id],
@@ -293,6 +299,7 @@ def get_run_status(db_path: str | Path, run_id: str) -> dict:
             "started_at",
             "finished_at",
             "status",
+            "statement_type",
             "files_count",
             "rows_in",
             "rows_staged",

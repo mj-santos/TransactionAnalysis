@@ -18,6 +18,12 @@ _async_runs: dict[str, dict] = {}
 _REPORT_FIELDS = frozenset({
     "transaction_date", "description", "merchant", "category",
     "amount", "currency", "bank_name", "account_name", "account_id",
+    "statement_type",  # Feature 1: allow filtering by statement type
+})
+# Fields that may be used in ORDER BY
+_SORT_FIELDS = frozenset({
+    "transaction_date", "amount", "description", "merchant",
+    "category", "bank_name", "account_name",
 })
 _REPORT_BUCKETS = frozenset({"day", "week", "month", "year"})
 
@@ -76,6 +82,12 @@ try:
                         "but NOT written to the ledger. Call POST /runs/{run_id}/commit "
                         "to finalise, or simply discard.",
         )
+        # Feature 1: required to separate credit-card from bank ledger entries
+        statement_type: Optional[str] = Field(
+            None,
+            description="Source type: 'credit_card' or 'bank'. "
+                        "Determines which aggregations this data contributes to.",
+        )
 
     # ---- Wizard Pydantic models ------------------------------------------------
 
@@ -102,6 +114,8 @@ try:
         drop_columns:      list[str]    = Field(default_factory=list)
         preview_only:      bool         = Field(False)
         custom_headers:    list[str]    = Field(default_factory=list, description="Non-canonical CSV column names to persist in the profile")
+        # Feature 1
+        statement_type:    Optional[str]= Field(None, description="'credit_card' or 'bank'")
 
     class RunStartedResponse(BaseModel):
         run_id:  str = Field(..., description="Unique run identifier — poll GET /runs/{run_id} for progress")
@@ -269,13 +283,19 @@ def _build_report_sql(payload: Any) -> tuple[list, list, list[str]]:
             else:
                 sel.append(field); grp.append(field)
             col_names.append(field)
+        # Feature 3: Replaced definitions (old sign-filtered versions deleted)
+        # total_spend  = gross signed sum of ALL amounts (no sign filtering)
+        # total_income = sum of inflows only (bank context; always >= 0)
+        # net_amount   = total_income − |outflows|  (null-safe via COALESCE)
+        _ns = "COALESCE(amount, 0)"
         sel += [
             "COUNT(*) AS row_count",
-            "SUM(amount) AS net_amount",
-            "SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS total_spend",
-            "SUM(CASE WHEN amount > 0 THEN  amount ELSE 0 END) AS total_income",
+            f"SUM({_ns}) AS total_spend",
+            f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END) AS total_income",
+            (f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END)"
+             f" - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount"),
         ]
-        col_names += ["row_count", "net_amount", "total_spend", "total_income"]
+        col_names += ["row_count", "total_spend", "total_income", "net_amount"]
         sql = (f"SELECT {', '.join(sel)} FROM transactions_norm{where_sql}"
                f" GROUP BY {', '.join(grp)} ORDER BY 1")
     else:
@@ -467,7 +487,7 @@ No cloud services, no external dependencies — all data stays on your machine.
     # -----------------------------------------------------------------------
 
     def _run_bg(run_id: str, inputs: list, mapping_path, bank_key, preview_only: bool,
-                mapping_dict=None):
+                mapping_dict=None, statement_type=None):
         _async_runs[run_id] = {"status": "running", "run_id": run_id}
         try:
             result = run_with_options(
@@ -480,6 +500,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 reports_dir=reports_dir,
                 preview_only=preview_only,
                 run_id=run_id,
+                statement_type=statement_type,  # Feature 1
             )
             status = "staged" if preview_only else "success"
             _async_runs[run_id] = {
@@ -702,6 +723,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             payload.bank_key,
             payload.preview_only,
             payload.mapping_dict,
+            getattr(payload, "statement_type", None),  # Feature 1
         )
         return {"run_id": run_id, "status": "pending"}
 
@@ -1050,6 +1072,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             None,           # bank_key
             payload.preview_only,
             mapping_dict,   # mapping_dict
+            getattr(payload, "statement_type", None),  # Feature 1
         )
         return {
             "run_id":       run_id,
@@ -1129,6 +1152,166 @@ No cloud services, no external dependencies — all data stays on your machine.
             filename=file_name,
             headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
         )
+
+    # -----------------------------------------------------------------------
+    # Transactions — Feature 4: Credit Cards & Bank Transactions tabs
+    # -----------------------------------------------------------------------
+
+    @app.get("/transactions", tags=["transactions"], summary="List transactions with filters")
+    def list_transactions(
+        type:      Optional[str] = Query(None,  description="'credit_card' or 'bank'"),
+        limit:     int           = Query(50,    le=500,  description="Max rows"),
+        offset:    int           = Query(0,              description="Pagination offset"),
+        date_from: Optional[str] = Query(None,           description="ISO date lower bound"),
+        date_to:   Optional[str] = Query(None,           description="ISO date upper bound"),
+        account:   Optional[str] = Query(None,           description="Account name or ID filter"),
+        category:  Optional[str] = Query(None,           description="Category substring filter"),
+        merchant:  Optional[str] = Query(None,           description="Merchant/description substring"),
+        group_by:  Optional[str] = Query(None,           description="Comma-separated field(s) to group"),
+        sort_by:   str           = Query("transaction_date", description="Column to sort by"),
+        sort_dir:  str           = Query("desc",          description="'asc' or 'desc'"),
+    ):
+        """
+        Filtered transaction list.
+
+        Feature 1: Credit-card aggregations never include bank rows and vice versa.
+        Pass `type=credit_card` or `type=bank` to scope.  The first 5 rows on
+        page load are returned by default (`limit=5&offset=0`).
+        """
+        where, params = [], []
+
+        # Feature 1: HARD isolation — credit_card ≠ bank, never mixed
+        if type in ("bank", "credit_card"):
+            where.append("statement_type = ?"); params.append(type)
+
+        if date_from:
+            where.append("transaction_date >= ?"); params.append(date_from)
+        if date_to:
+            where.append("transaction_date <= ?"); params.append(date_to)
+        if account:
+            where.append("(account_name = ? OR account_id = ?)"); params.extend([account, account])
+        if category:
+            where.append("LOWER(COALESCE(category, '')) LIKE ?")
+            params.append(f"%{category.lower()}%")
+        if merchant:
+            where.append("LOWER(COALESCE(merchant, description)) LIKE ?")
+            params.append(f"%{merchant.lower()}%")
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        group_fields = [f.strip() for f in (group_by or "").split(",")
+                        if f.strip() in _REPORT_FIELDS]
+        safe_sort  = sort_by  if sort_by  in _SORT_FIELDS else "transaction_date"
+        safe_dir   = sort_dir if sort_dir in ("asc", "desc") else "desc"
+        safe_limit = max(1, min(int(limit), 500))
+
+        _ns = "COALESCE(amount, 0)"
+        try:
+            conn = get_connection(db_path)
+            if group_fields:
+                # Feature 3 aggregations
+                sel = list(group_fields) + [
+                    "COUNT(*) AS row_count",
+                    f"SUM({_ns}) AS total_spend",
+                    f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END) AS total_income",
+                    (f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END)"
+                     f" - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount"),
+                ]
+                grp_sql = ", ".join(group_fields)
+                sql = (f"SELECT {', '.join(sel)} FROM transactions_norm{where_sql}"
+                       f" GROUP BY {grp_sql} ORDER BY 1 {safe_dir}"
+                       f" LIMIT {safe_limit} OFFSET {offset}")
+                col_names = group_fields + ["row_count", "total_spend", "total_income", "net_amount"]
+            else:
+                col_names = [
+                    "transaction_date", "description", "merchant", "category",
+                    "amount", "currency", "bank_name", "account_name", "account_id",
+                    "statement_type",
+                ]
+                sql = (f"SELECT {', '.join(col_names)} FROM transactions_norm{where_sql}"
+                       f" ORDER BY {safe_sort} {safe_dir}"
+                       f" LIMIT {safe_limit} OFFSET {offset}")
+            rows_raw = conn.execute(sql, params).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Query error: {exc}") from exc
+
+        rows = [
+            {col_names[i]: (_isoformat(r[i]) if hasattr(r[i], "isoformat") else r[i])
+             for i in range(len(col_names))}
+            for r in rows_raw
+        ]
+        return {"columns": col_names, "rows": rows, "count": len(rows), "offset": offset}
+
+    @app.get(
+        "/transactions/totals",
+        tags=["transactions"],
+        summary="Aggregated totals for a filtered transaction set",
+    )
+    def transaction_totals(
+        type:      Optional[str] = Query(None,  description="'credit_card' or 'bank'"),
+        date_from: Optional[str] = Query(None),
+        date_to:   Optional[str] = Query(None),
+        account:   Optional[str] = Query(None),
+        category:  Optional[str] = Query(None),
+        merchant:  Optional[str] = Query(None),
+    ):
+        """
+        Return aggregate totals for the filtered set (without fetching all rows).
+
+        Feature 1: type filter isolates credit_card from bank — never combined.
+        Feature 3 definitions:
+          total_spend   = gross signed sum (all amounts, no sign filter)
+          total_income  = sum of inflows (bank context)
+          total_outflow = absolute sum of outflows
+          net_amount    = total_income − total_outflow
+        Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
+        """
+        where, params = [], []
+
+        if type in ("bank", "credit_card"):
+            where.append("statement_type = ?"); params.append(type)
+        if date_from:
+            where.append("transaction_date >= ?"); params.append(date_from)
+        if date_to:
+            where.append("transaction_date <= ?"); params.append(date_to)
+        if account:
+            where.append("(account_name = ? OR account_id = ?)"); params.extend([account, account])
+        if category:
+            where.append("LOWER(COALESCE(category, '')) LIKE ?")
+            params.append(f"%{category.lower()}%")
+        if merchant:
+            where.append("LOWER(COALESCE(merchant, description)) LIKE ?")
+            params.append(f"%{merchant.lower()}%")
+
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        _ns = "COALESCE(amount, 0)"
+        sql = f"""
+            SELECT
+              COUNT(*) AS row_count,
+              SUM({_ns}) AS total_spend,
+              SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END) AS total_income,
+              ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS total_outflow,
+              SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END)
+                - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount
+            FROM transactions_norm{where_sql}
+        """
+        try:
+            conn = get_connection(db_path)
+            row = conn.execute(sql, params).fetchone()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Totals query failed: {exc}") from exc
+
+        if not row:
+            return {"row_count": 0, "total_spend": 0.0, "total_income": 0.0,
+                    "total_outflow": 0.0, "net_amount": 0.0}
+        return {
+            "row_count":     int(row[0] or 0),
+            "total_spend":   float(row[1] or 0),   # signed gross sum
+            "total_income":  float(row[2] or 0),   # bank: inflows only
+            "total_outflow": float(row[3] or 0),   # bank: |outflows| (positive)
+            "net_amount":    float(row[4] or 0),   # bank: income − outflow
+        }
 
     # -----------------------------------------------------------------------
     # Reports

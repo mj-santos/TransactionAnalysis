@@ -99,19 +99,23 @@ def create_run(
     conn,
     run_id: str,
     files_count: int,
+    statement_type: str | None = None,
 ) -> None:
-    """Insert the initial run record with status='running'."""
+    """Insert the initial run record with status='running'.
+
+    statement_type: 'bank' or 'credit_card' — classifies the ledger source.
+    """
     existing = conn.execute("SELECT 1 FROM runs WHERE run_id = ?", [run_id]).fetchone()
     if existing:
         raise ValueError(f"run_id already exists: {run_id}")
 
     conn.execute(
         """
-        INSERT INTO runs (run_id, started_at, status, files_count,
+        INSERT INTO runs (run_id, started_at, status, statement_type, files_count,
                           rows_in, rows_staged, rows_normalized, rows_loaded, errors_count)
-        VALUES (?, ?, 'running', ?, 0, 0, 0, 0, 0)
+        VALUES (?, ?, 'running', ?, ?, 0, 0, 0, 0, 0)
         """,
-        [run_id, datetime.now(timezone.utc), files_count],
+        [run_id, datetime.now(timezone.utc), statement_type, files_count],
     )
 
 

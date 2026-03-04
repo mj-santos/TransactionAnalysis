@@ -25,6 +25,7 @@ def run_analytics(
     master_dir: Path,
     top_n: int = 50,
     partitioned: bool = True,
+    statement_type: str | None = None,
 ) -> list[Path]:
     """
     Run all analytics queries and export CSV files to reports_dir.
@@ -36,9 +37,9 @@ def run_analytics(
 
     # Determine data source
     source = _resolve_source(conn, parquet_glob)
-    log.info("Analytics reading from: %s", source)
+    log.info("Analytics reading from: %s (statement_type=%s)", source, statement_type)
 
-    queries = _build_queries(source, top_n)
+    queries = _build_queries(source, top_n, statement_type)
     exported = []
 
     for name, sql in queries.items():
@@ -65,52 +66,75 @@ def _resolve_source(conn, parquet_glob: str) -> str:
         return "transactions_norm"
 
 
-def _build_queries(source: str, top_n: int) -> dict[str, str]:
+def _build_queries(source: str, top_n: int, statement_type: str | None = None) -> dict[str, str]:
+    # Feature 1: scope reports by statement_type when provided.
+    # Credit-card aggregations must NEVER include bank rows; bank must NEVER include credit-card.
+    if statement_type:
+        st_filter = f" WHERE statement_type = '{statement_type}'"
+        st_and    = f" AND statement_type = '{statement_type}'"
+    else:
+        st_filter = ""
+        st_and    = ""
+
+    # Feature 3: new aggregate definitions (old sign-filtered versions removed)
+    # total_spend  = SUM of ALL resolved_amount values (gross signed sum, no sign filtering)
+    # total_income = SUM WHERE amount > 0 (inflows only — meaningful for bank context)
+    # net_amount   = total_income − |outflows| = income minus absolute outflow
+    _null_safe = "COALESCE(amount, 0)"
+
     return {
         "spend_by_month_category": f"""
             SELECT
               date_trunc('month', transaction_date) AS month,
-              COALESCE(category, 'Uncategorized') AS category,
-              SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS spend
-            FROM {source}
+              COALESCE(category, 'Uncategorized')   AS category,
+              -- Feature 3: total_spend = gross signed sum (all amounts, no sign filter)
+              SUM({_null_safe}) AS total_spend
+            FROM {source}{st_filter}
             GROUP BY 1, 2
             ORDER BY 1, 2
         """,
         "cashflow_by_month": f"""
             SELECT
               date_trunc('month', transaction_date) AS month,
-              SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)  AS inflow,
-              SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS outflow,
-              SUM(amount) AS net
-            FROM {source}
+              -- Feature 3: total_income = inflows (bank context)
+              SUM(CASE WHEN {_null_safe} > 0 THEN {_null_safe} ELSE 0 END) AS total_income,
+              -- total_outflow = absolute value of outflows
+              ABS(SUM(CASE WHEN {_null_safe} < 0 THEN {_null_safe} ELSE 0 END)) AS total_outflow,
+              -- net_amount = total_income - |outflows|
+              SUM(CASE WHEN {_null_safe} > 0 THEN {_null_safe} ELSE 0 END)
+                - ABS(SUM(CASE WHEN {_null_safe} < 0 THEN {_null_safe} ELSE 0 END)) AS net_amount
+            FROM {source}{st_filter}
             GROUP BY 1
             ORDER BY 1
         """,
         "spend_by_merchant": f"""
             SELECT
               COALESCE(merchant, description) AS merchant,
-              SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS spend
-            FROM {source}
+              -- Feature 3: gross signed sum scoped to statement_type
+              SUM({_null_safe}) AS total_spend
+            FROM {source}{st_filter}
             GROUP BY 1
-            ORDER BY 2 DESC
+            ORDER BY 2
         """,
         "totals_by_account": f"""
             SELECT
               bank_name,
               account_name,
               account_id,
-              SUM(amount) AS net
-            FROM {source}
-            GROUP BY 1, 2, 3
+              statement_type,
+              -- Feature 3 / Feature 1: net per account, already scoped above
+              SUM({_null_safe}) AS net_amount
+            FROM {source}{st_filter}
+            GROUP BY 1, 2, 3, 4
             ORDER BY 1, 2, 3
         """,
         "top_merchants": f"""
             SELECT
               COALESCE(merchant, description) AS merchant,
-              SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS spend
-            FROM {source}
+              SUM({_null_safe}) AS total_spend
+            FROM {source}{st_filter}
             GROUP BY 1
-            ORDER BY 2 DESC
+            ORDER BY ABS(SUM({_null_safe})) DESC
             LIMIT {top_n}
         """,
     }

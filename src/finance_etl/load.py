@@ -38,8 +38,9 @@ def load_normalized(
                 INSERT OR IGNORE INTO transactions_norm (
                   transaction_date, posted_date, description, merchant, category,
                   amount, currency, bank_name, account_name, account_id,
-                  source_file, source_row, file_hash, transaction_fingerprint
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  source_file, source_row, file_hash, transaction_fingerprint,
+                  statement_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     row["transaction_date"],
@@ -56,6 +57,8 @@ def load_normalized(
                     row["source_row"],
                     row["file_hash"],
                     row["transaction_fingerprint"],
+                    # Feature 1: 'bank' or 'credit_card' — never mix in aggregations
+                    row.get("statement_type"),
                 ],
             )
             # Check if row was actually inserted

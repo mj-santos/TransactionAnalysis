@@ -21,6 +21,12 @@
     <a href="#" data-page="history">
       <span class="icon">📋</span> History
     </a>
+    <a href="#" data-page="credit-cards">
+      <span class="icon">💳</span> Credit Cards
+    </a>
+    <a href="#" data-page="bank-transactions">
+      <span class="icon">🏦</span> Bank Transactions
+    </a>
     <a href="#" data-page="reports">
       <span class="icon">📊</span> Reports
     </a>
@@ -72,6 +78,27 @@
     <div class="card">
       <div class="card-title">2 — Configure mapping</div>
       <div style="display:flex; flex-direction:column; gap:14px;">
+
+        <!-- Feature 1: statement type selection — REQUIRED, blocks import until set -->
+        <div>
+          <label style="font-weight:600; font-size:13px;">
+            Statement Type <span style="color:var(--danger)">*</span>
+          </label>
+          <div id="statement-type-error" style="display:none; font-size:12px; color:var(--danger); margin-top:4px;">
+            Please select a statement type before importing.
+          </div>
+          <div style="display:flex; gap:20px; margin-top:6px; flex-wrap:wrap;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:7px; font-size:13px;">
+              <input type="radio" name="statement-type" id="st-credit-card" value="credit_card" onchange="checkImportReady()" />
+              💳 Credit Card Statement
+            </label>
+            <label style="cursor:pointer; display:flex; align-items:center; gap:7px; font-size:13px;">
+              <input type="radio" name="statement-type" id="st-bank" value="bank" onchange="checkImportReady()" />
+              🏦 Bank Statement (Checking / Savings / Cash)
+            </label>
+          </div>
+        </div>
+
         <div class="form-row">
           <label for="mapping-select">Bank mapping</label>
           <select id="mapping-select">
@@ -169,6 +196,123 @@
           </table>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- ─── CREDIT CARDS PAGE ─── -->
+  <section id="page-credit-cards" class="page">
+    <!-- Filter controls (shared pattern with Reports tab) -->
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-title" style="margin-bottom:10px;">Filters</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="cc-date-from" style="font-size:11px;">Date from</label>
+          <input type="date" id="cc-date-from" onchange="loadTxnTab('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="cc-date-to" style="font-size:11px;">Date to</label>
+          <input type="date" id="cc-date-to" onchange="loadTxnTab('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:150px;">
+          <label for="cc-account" style="font-size:11px;">Account</label>
+          <input type="text" id="cc-account" placeholder="Account name or ID" oninput="debounceTxn('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="cc-category" style="font-size:11px;">Category</label>
+          <input type="text" id="cc-category" placeholder="Category…" oninput="debounceTxn('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:160px;">
+          <label for="cc-merchant" style="font-size:11px;">Merchant / Description</label>
+          <input type="text" id="cc-merchant" placeholder="Search…" oninput="debounceTxn('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="cc-group-by" style="font-size:11px;">Group by</label>
+          <select id="cc-group-by" onchange="loadTxnTab('credit_card')">
+            <option value="">No grouping</option>
+            <option value="transaction_date">Date</option>
+            <option value="category">Category</option>
+            <option value="merchant">Merchant</option>
+            <option value="account_name">Account</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('credit_card')">✕ Clear</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('credit_card')">↻ Refresh</button>
+      </div>
+    </div>
+    <!-- Transaction table -->
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="table-wrap" style="max-height:500px; overflow-y:auto;">
+        <table id="cc-table">
+          <thead><tr id="cc-thead"></tr></thead>
+          <tbody id="cc-tbody">
+            <tr><td colspan="6" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+          <!-- Pinned totals row — scrolls with table -->
+          <tfoot id="cc-tfoot"></tfoot>
+        </table>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+      <button class="btn btn-secondary btn-sm" id="cc-load-more" style="display:none;" onclick="loadMoreTxn('credit_card')">Load more</button>
+      <span id="cc-meta" style="font-size:12px; color:var(--text-muted);"></span>
+    </div>
+  </section>
+
+  <!-- ─── BANK TRANSACTIONS PAGE ─── -->
+  <section id="page-bank-transactions" class="page">
+    <!-- Filter controls -->
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-title" style="margin-bottom:10px;">Filters</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="bk-date-from" style="font-size:11px;">Date from</label>
+          <input type="date" id="bk-date-from" onchange="loadTxnTab('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="bk-date-to" style="font-size:11px;">Date to</label>
+          <input type="date" id="bk-date-to" onchange="loadTxnTab('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:150px;">
+          <label for="bk-account" style="font-size:11px;">Account</label>
+          <input type="text" id="bk-account" placeholder="Account name or ID" oninput="debounceTxn('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="bk-category" style="font-size:11px;">Category</label>
+          <input type="text" id="bk-category" placeholder="Category…" oninput="debounceTxn('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:160px;">
+          <label for="bk-merchant" style="font-size:11px;">Merchant / Description</label>
+          <input type="text" id="bk-merchant" placeholder="Search…" oninput="debounceTxn('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="bk-group-by" style="font-size:11px;">Group by</label>
+          <select id="bk-group-by" onchange="loadTxnTab('bank')">
+            <option value="">No grouping</option>
+            <option value="transaction_date">Date</option>
+            <option value="category">Category</option>
+            <option value="merchant">Merchant</option>
+            <option value="account_name">Account</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('bank')">✕ Clear</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('bank')">↻ Refresh</button>
+      </div>
+    </div>
+    <!-- Transaction table -->
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="table-wrap" style="max-height:500px; overflow-y:auto;">
+        <table id="bk-table">
+          <thead><tr id="bk-thead"></tr></thead>
+          <tbody id="bk-tbody">
+            <tr><td colspan="6" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+          <tfoot id="bk-tfoot"></tfoot>
+        </table>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+      <button class="btn btn-secondary btn-sm" id="bk-load-more" style="display:none;" onclick="loadMoreTxn('bank')">Load more</button>
+      <span id="bk-meta" style="font-size:12px; color:var(--text-muted);"></span>
     </div>
   </section>
 

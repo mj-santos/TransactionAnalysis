@@ -39,7 +39,7 @@ def test_run_with_options_honors_supplied_run_id(monkeypatch, tmp_path: Path):
 
     supplied_run_id = "fixed-run-id"
 
-    def fake_create_run(_conn, run_id, _files_count):
+    def fake_create_run(_conn, run_id, _files_count, statement_type=None):
         assert run_id == supplied_run_id
         raise RuntimeError("stop-after-assert")
 
@@ -75,7 +75,8 @@ def test_build_report_sql_grouped_by_category():
     assert "GROUP BY" in sql, "Grouped query must contain GROUP BY"
     assert "category" in sql
     assert "COUNT(*)" in sql
-    assert "SUM(amount)" in sql
+    # Feature 3: aggregate expressions now use COALESCE(amount, 0) for null safety
+    assert "COALESCE(amount, 0)" in sql
     assert "category" in col_names
     assert "row_count" in col_names
     assert "net_amount" in col_names
@@ -231,3 +232,158 @@ def test_build_report_sql_no_filters_returns_all_rows():
     assert "WHERE" not in sql, "No WHERE clause expected when filters list is empty"
     assert "GROUP BY" not in sql, "No GROUP BY expected when group_by is empty"
     assert params == []
+
+
+# ---------------------------------------------------------------------------
+# Feature 2: resolve_amount priority chain
+# ---------------------------------------------------------------------------
+
+def test_resolve_amount_signed_preferred():
+    """Step 1: signed amount_raw is used when populated, ignoring debit/credit fallback."""
+    from decimal import Decimal
+    from finance_etl.normalize import resolve_amount
+
+    row = {
+        "amount_raw":        "-42.50",
+        "amount_debit_raw":  "100.00",  # must be ignored — Step 1 wins
+        "amount_credit_raw": "",
+    }
+    assert resolve_amount(row, "signed", {}, {}) == Decimal("-42.50")
+
+
+def test_resolve_amount_fallback_to_debit_credit():
+    """Step 2: falls back to amount_debit_raw / amount_credit_raw when family field is empty."""
+    from decimal import Decimal
+    from finance_etl.normalize import resolve_amount
+
+    row = {
+        "amount_raw":        "",         # signed family but empty → no Step 1 match
+        "amount_debit_raw":  "30.00",    # outflow
+        "amount_credit_raw": "10.00",    # inflow
+        "source_row":        2,
+        "source_file":       "test.csv",
+    }
+    # Formula: credit − debit = 10 − 30 = −20 (net outflow, negative)
+    assert resolve_amount(row, "signed", {}, {}) == Decimal("-20.00")
+
+
+def test_resolve_amount_credit_only():
+    """Step 2: credit_raw alone resolves to a positive inflow (debit treated as 0)."""
+    from decimal import Decimal
+    from finance_etl.normalize import resolve_amount
+
+    row = {
+        "amount_raw":        "",
+        "amount_debit_raw":  "",
+        "amount_credit_raw": "500.00",
+        "source_row":        3,
+    }
+    assert resolve_amount(row, "signed", {}, {}) == Decimal("500.00")  # 500 − 0
+
+
+def test_resolve_amount_all_empty_raises():
+    """Step 3: NormalizationError raised when every amount field is empty."""
+    from finance_etl.normalize import resolve_amount, NormalizationError
+
+    row = {
+        "amount_raw":        "",
+        "debit_raw":         "",
+        "credit_raw":        "",
+        "money_in_raw":      "",
+        "money_out_raw":     "",
+        "amount_debit_raw":  "",
+        "amount_credit_raw": "",
+        "source_row":        5,
+        "source_file":       "empty.csv",
+    }
+    with pytest.raises(NormalizationError, match="No amount data"):
+        resolve_amount(row, "signed", {}, {})
+
+
+# ---------------------------------------------------------------------------
+# Feature 1: statement_type isolation — credit_card ≠ bank, never mixed
+# ---------------------------------------------------------------------------
+
+def test_statement_type_isolation(tmp_path: Path):
+    """GET /transactions?type=bank returns only bank rows; credit_card query returns only CC rows."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "isolation_test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    # One bank row, one credit_card row
+    conn.execute(
+        "INSERT INTO transactions_norm "
+        "(transaction_date, description, amount, currency, bank_name, account_name, "
+        " account_id, source_file, source_row, file_hash, transaction_fingerprint, statement_type) "
+        "VALUES "
+        "(DATE '2024-01-01','Salary',1000.0,'USD','MyBank','Checking','chk01','f.csv',1,'h01','fp01','bank'),"
+        "(DATE '2024-01-02','CC charge',-45.0,'USD','Visa','CC','cc01','f.csv',2,'h02','fp02','credit_card')"
+    )
+    conn.close()
+
+    # bank type must never include credit_card rows
+    r_bank = client.get("/transactions?type=bank")
+    assert r_bank.status_code == 200
+    bank_rows = r_bank.json()["rows"]
+    assert len(bank_rows) == 1
+    assert all(r.get("statement_type") == "bank" for r in bank_rows), \
+        "Bank query must never include credit_card rows (Feature 1)"
+
+    # credit_card type must never include bank rows
+    r_cc = client.get("/transactions?type=credit_card")
+    assert r_cc.status_code == 200
+    cc_rows = r_cc.json()["rows"]
+    assert len(cc_rows) == 1
+    assert all(r.get("statement_type") == "credit_card" for r in cc_rows), \
+        "Credit card query must never include bank rows (Feature 1)"
+
+
+# ---------------------------------------------------------------------------
+# Feature 3 + Feature 4: /transactions/totals returns correct aggregates
+# ---------------------------------------------------------------------------
+
+def test_transaction_totals_endpoint(tmp_path: Path):
+    """GET /transactions/totals returns Feature 3 aggregate definitions scoped by type."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "totals_test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO transactions_norm "
+        "(transaction_date, description, amount, currency, bank_name, account_name, "
+        " account_id, source_file, source_row, file_hash, transaction_fingerprint, statement_type) "
+        "VALUES "
+        "(DATE '2024-01-01','Salary',1000.0,'USD','Bank','Checking','chk01','f.csv',1,'h1','fp1','bank'),"
+        "(DATE '2024-01-02','Rent',-500.0,'USD','Bank','Checking','chk01','f.csv',2,'h2','fp2','bank'),"
+        "(DATE '2024-01-03','CC charge',-200.0,'USD','Visa','CC','cc01','f.csv',3,'h3','fp3','credit_card')"
+    )
+    conn.close()
+
+    resp = client.get("/transactions/totals?type=bank")
+    assert resp.status_code == 200
+    t = resp.json()
+
+    assert t["row_count"] == 2
+    # Feature 3: total_income = sum of inflows (positives only)
+    assert t["total_income"]  == pytest.approx(1000.0)
+    # Feature 3: total_outflow = abs(sum of negatives)
+    assert t["total_outflow"] == pytest.approx(500.0)
+    # Feature 3: net_amount = total_income − total_outflow
+    assert t["net_amount"]    == pytest.approx(500.0)
+    # Feature 3: total_spend = gross signed sum (1000 + −500 = 500)
+    assert t["total_spend"]   == pytest.approx(500.0)
+
+    # Credit card totals must be isolated from bank rows (Feature 1)
+    resp_cc = client.get("/transactions/totals?type=credit_card")
+    assert resp_cc.status_code == 200
+    tc = resp_cc.json()
+    assert tc["row_count"] == 1
+    assert tc["total_outflow"] == pytest.approx(200.0)

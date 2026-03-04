@@ -39,12 +39,21 @@ function navigate(page) {
   if (link)    link.classList.add('active');
   if (section) section.classList.add('active');
 
-  const titles = { import: 'Import Transactions', history: 'Import History', reports: 'Analytics Reports', settings: 'Settings & Logs' };
+  const titles = {
+    import:             'Import Transactions',
+    history:            'Import History',
+    'credit-cards':     'Credit Card Transactions',
+    'bank-transactions':'Bank Transactions',
+    reports:            'Analytics Reports',
+    settings:           'Settings & Logs',
+  };
   document.getElementById('topbar-title').textContent = titles[page] || page;
 
-  if (page === 'history') loadHistory();
-  if (page === 'reports') loadReports();
-  if (page === 'settings') loadSettings();
+  if (page === 'history')            loadHistory();
+  if (page === 'reports')            loadReports();
+  if (page === 'settings')           loadSettings();
+  if (page === 'credit-cards')       loadTxnTab('credit_card');
+  if (page === 'bank-transactions')  loadTxnTab('bank');
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -180,6 +189,12 @@ async function loadMappings() {
   sel.addEventListener('change', checkImportReady);
 }
 
+// ── Statement type helper ─────────────────────────────────────
+function getStatementType() {
+  const sel = document.querySelector('input[name="statement-type"]:checked');
+  return sel ? sel.value : null;
+}
+
 // ── Import button guard ──────────────────────────────────────
 function checkImportReady() {
   const customHeaders = !!(document.getElementById('custom-headers-toggle')?.checked);
@@ -190,13 +205,19 @@ function checkImportReady() {
     const chip = document.getElementById(f.chipId);
     return chip && chip.classList.contains('done');
   });
-  const hasMapping = customHeaders || !!mappingSelect.value;
+  const hasMapping     = customHeaders || !!mappingSelect.value;
+  // Feature 1: statement_type is required — block import until selected
+  const hasStmtType    = !!getStatementType();
+  const errEl          = document.getElementById('statement-type-error');
+  if (errEl) errEl.style.display = 'none';
+
   const btn  = document.getElementById('import-btn');
   const hint = document.getElementById('import-hint');
-  btn.disabled = !(hasFiles && hasMapping);
+  btn.disabled = !(hasFiles && hasMapping && hasStmtType);
   if (!hasFiles && !hasMapping) hint.textContent = 'Upload a file and select a mapping to continue.';
   else if (!hasFiles)           hint.textContent = 'Upload a CSV file to continue.';
   else if (!hasMapping)         hint.textContent = 'Select a bank mapping to continue.';
+  else if (!hasStmtType)        hint.textContent = 'Select a statement type (Credit Card or Bank) to continue.';
   else if (customHeaders)       hint.textContent = 'Complete the mapping wizard after uploading.';
   else                          hint.textContent = '';
 }
@@ -208,16 +229,30 @@ async function startImport() {
     return chip && chip.classList.contains('done');
   }).map(f => f.path);
 
-  const mappingPath = document.getElementById('mapping-select').value;
-  const previewOnly = document.getElementById('preview-toggle').checked;
+  const mappingPath   = document.getElementById('mapping-select').value;
+  const previewOnly   = document.getElementById('preview-toggle').checked;
+  // Feature 1: statement_type is required — block if not selected
+  const statementType = getStatementType();
 
   if (!inputs.length || !mappingPath) return;
+
+  if (!statementType) {
+    const errEl = document.getElementById('statement-type-error');
+    if (errEl) errEl.style.display = 'block';
+    toast('Please select a statement type (Credit Card or Bank).', 'error');
+    return;
+  }
 
   document.getElementById('import-btn').disabled = true;
   setRunStatus('pending', null, null, 'Queuing…');
 
   try {
-    const data = await api('POST', '/runs', { inputs, mapping_path: mappingPath, preview_only: previewOnly });
+    const data = await api('POST', '/runs', {
+      inputs,
+      mapping_path:   mappingPath,
+      preview_only:   previewOnly,
+      statement_type: statementType,  // Feature 1
+    });
     state.currentRunId = data.run_id;
     setRunStatus('pending', data.run_id, null, 'Queued — starting pipeline…');
     pollRun(data.run_id, onRunComplete);
@@ -1245,6 +1280,8 @@ async function wizardSaveAndRun() {
       currency_default: currency,
       preview_only:     previewOnly,
       custom_headers:   wizard.customHeadersSelected,
+      // Feature 1: statement_type from import page radio buttons
+      statement_type:   getStatementType(),
     });
 
     wizardClose();
@@ -1262,4 +1299,239 @@ async function wizardSaveAndRun() {
     btn.disabled = false;
     btn.textContent = 'Save & Run';
   }
+}
+
+// ── Credit Cards & Bank Transactions tabs (Feature 4) ─────────────────────────
+// Two tabs backed by GET /transactions and GET /transactions/totals.
+// Feature 1: `type` param is HARD-passed to every API call — credit_card ≠ bank.
+// Feature 3: tfoot totals use server-computed aggregates (not client-side sums).
+
+/** Per-type pagination/sort state — reset when filters change, advance on Load more. */
+const _txnState = {
+  credit_card: { offset: 0, sortBy: 'transaction_date', sortDir: 'desc', debounceTimer: null },
+  bank:        { offset: 0, sortBy: 'transaction_date', sortDir: 'desc', debounceTimer: null },
+};
+
+/** DOM element-id prefix: 'cc' for credit_card, 'bk' for bank. */
+function _pfx(type) { return type === 'credit_card' ? 'cc' : 'bk'; }
+
+/** Read current filter values from the DOM for the given tab type. */
+function _txnFilters(type) {
+  const p = _pfx(type);
+  return {
+    date_from: document.getElementById(`${p}-date-from`)?.value || '',
+    date_to:   document.getElementById(`${p}-date-to`)?.value   || '',
+    account:   (document.getElementById(`${p}-account`)?.value  || '').trim(),
+    category:  (document.getElementById(`${p}-category`)?.value || '').trim(),
+    merchant:  (document.getElementById(`${p}-merchant`)?.value || '').trim(),
+    group_by:  document.getElementById(`${p}-group-by`)?.value  || '',
+  };
+}
+
+/**
+ * Main loader for Credit Cards / Bank Transactions tabs.
+ * reset=true (default): reset pagination and replace table contents.
+ * reset=false: append the next page of results (Load more).
+ *
+ * Fetches rows (/transactions) and totals (/transactions/totals) in parallel.
+ * Feature 1: `type` is hard-passed to every API call — never merged across types.
+ */
+async function loadTxnTab(type, reset = true) {
+  const p    = _pfx(type);
+  const st   = _txnState[type];
+  const PAGE = 50;
+
+  if (reset) st.offset = 0;
+
+  const f = _txnFilters(type);
+
+  // Build query string for /transactions (includes pagination + sort)
+  const qs = new URLSearchParams({ type, limit: PAGE, offset: st.offset,
+                                   sort_by: st.sortBy, sort_dir: st.sortDir });
+  if (f.date_from) qs.set('date_from', f.date_from);
+  if (f.date_to)   qs.set('date_to',   f.date_to);
+  if (f.account)   qs.set('account',   f.account);
+  if (f.category)  qs.set('category',  f.category);
+  if (f.merchant)  qs.set('merchant',  f.merchant);
+  if (f.group_by)  qs.set('group_by',  f.group_by);
+
+  // Totals endpoint uses the same filter params (no pagination or sort)
+  const tqs = new URLSearchParams({ type });
+  if (f.date_from) tqs.set('date_from', f.date_from);
+  if (f.date_to)   tqs.set('date_to',   f.date_to);
+  if (f.account)   tqs.set('account',   f.account);
+  if (f.category)  tqs.set('category',  f.category);
+  if (f.merchant)  tqs.set('merchant',  f.merchant);
+
+  if (reset) {
+    document.getElementById(`${p}-tbody`).innerHTML =
+      `<tr><td colspan="10" class="text-center text-muted" style="padding:32px">Loading\u2026</td></tr>`;
+    document.getElementById(`${p}-tfoot`).innerHTML = '';
+    document.getElementById(`${p}-meta`).textContent = '';
+    document.getElementById(`${p}-load-more`).style.display = 'none';
+  }
+
+  try {
+    // Fetch rows and totals in parallel — avoids sequential round-trips
+    const [data, totals] = await Promise.all([
+      api('GET', `/transactions?${qs}`),
+      api('GET', `/transactions/totals?${tqs}`),
+    ]);
+
+    const rows = data.rows    || [];
+    const cols = data.columns || [];
+
+    if (reset) {
+      _renderTxnHeaders(p, cols, type);
+      _renderTxnBody(p, rows, cols, false);
+    } else {
+      _renderTxnBody(p, rows, cols, true);   // append rows for Load more
+    }
+
+    // Pinned tfoot always reflects the full filtered set, not just the current page
+    _renderTxnTfoot(p, totals, type, cols.length || 10);
+
+    // Advance pagination cursor and update meta / Load more visibility
+    st.offset += rows.length;
+    document.getElementById(`${p}-meta`).textContent =
+      `${st.offset} row${st.offset !== 1 ? 's' : ''} loaded`;
+    document.getElementById(`${p}-load-more`).style.display =
+      rows.length >= PAGE ? '' : 'none';
+
+  } catch (err) {
+    document.getElementById(`${p}-tbody`).innerHTML =
+      `<tr><td colspan="10" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+    toast(`Failed to load ${type === 'credit_card' ? 'credit card' : 'bank'} transactions: ${err.message}`, 'error');
+  }
+}
+
+/**
+ * Debounce text-input changes by 400 ms before reloading.
+ * Prevents API spam on every keypress in the filter inputs.
+ */
+function debounceTxn(type) {
+  const st = _txnState[type];
+  clearTimeout(st.debounceTimer);
+  st.debounceTimer = setTimeout(() => loadTxnTab(type), 400);
+}
+
+/** Reset all filter controls to defaults and reload from page 1. */
+function clearTxnFilters(type) {
+  const p = _pfx(type);
+  ['date-from', 'date-to', 'account', 'category', 'merchant'].forEach(id => {
+    const el = document.getElementById(`${p}-${id}`);
+    if (el) el.value = '';
+  });
+  const grp = document.getElementById(`${p}-group-by`);
+  if (grp) grp.value = '';
+  _txnState[type].sortBy  = 'transaction_date';
+  _txnState[type].sortDir = 'desc';
+  loadTxnTab(type);
+}
+
+/** Append the next page of results (called by the "Load more" button). */
+function loadMoreTxn(type) {
+  loadTxnTab(type, false);
+}
+
+/**
+ * Render <thead> with sort-clickable column headers.
+ * The active sort column shows a ▲ or ▼ indicator.
+ */
+function _renderTxnHeaders(p, cols, type) {
+  const thead = document.getElementById(`${p}-thead`);
+  if (!thead) return;
+  const st = _txnState[type];
+  thead.innerHTML = cols.map(c => {
+    const isSorted = c === st.sortBy;
+    const arrow    = isSorted ? (st.sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
+    return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}</th>`;
+  }).join('');
+}
+
+/**
+ * Handle a sort-header click: toggle direction when same column is clicked,
+ * default to descending for a newly selected column, then reload from page 1.
+ */
+function _txnSort(type, col) {
+  const st = _txnState[type];
+  if (st.sortBy === col) {
+    st.sortDir = st.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    st.sortBy  = col;
+    st.sortDir = 'desc';
+  }
+  loadTxnTab(type);
+}
+
+/**
+ * Render (or append to) the <tbody> rows.
+ * Numeric columns are right-aligned and monospaced for readability.
+ */
+function _renderTxnBody(p, rows, cols, append) {
+  const tbody = document.getElementById(`${p}-tbody`);
+  if (!tbody) return;
+  const span = cols.length || 10;
+
+  if (!rows.length && !append) {
+    tbody.innerHTML =
+      `<tr><td colspan="${span}" class="text-center text-muted" style="padding:32px">No transactions found.</td></tr>`;
+    return;
+  }
+
+  const NUMERIC_COLS = new Set([
+    'amount', 'total_spend', 'total_income', 'total_outflow', 'net_amount', 'row_count',
+  ]);
+
+  const html = rows.map(row =>
+    `<tr>${cols.map(c => {
+      const val = row[c] != null ? String(row[c]) : '';
+      const cls = NUMERIC_COLS.has(c) ? ' class="mono text-right"' : '';
+      return `<td${cls}>${esc(val)}</td>`;
+    }).join('')}</tr>`
+  ).join('');
+
+  if (append) {
+    tbody.insertAdjacentHTML('beforeend', html);
+  } else {
+    tbody.innerHTML = html;
+  }
+}
+
+/**
+ * Render the pinned <tfoot> totals row using server-computed aggregates.
+ *
+ * Credit card (Feature 3 / Feature 4):
+ *   Total Transactions | Total Charged (gross signed SUM, no sign filter) | Avg per txn
+ *
+ * Bank (Feature 3 / Feature 4):
+ *   Total Transactions | Total Income (inflows) | Total Outflow (|outflows|) | Net
+ */
+function _renderTxnTfoot(p, totals, type, span) {
+  const tfoot = document.getElementById(`${p}-tfoot`);
+  if (!tfoot) return;
+
+  if (!totals || !totals.row_count) {
+    tfoot.innerHTML = '';
+    return;
+  }
+
+  const f2 = v => Number(v || 0).toFixed(2);
+  const fN = v => Number(v || 0).toLocaleString();
+
+  let summary;
+  if (type === 'credit_card') {
+    // Feature 3: total_spend = gross signed sum (all amounts, no sign filtering)
+    const avg = totals.row_count > 0
+      ? (Math.abs(totals.total_spend) / totals.row_count).toFixed(2)
+      : '0.00';
+    summary = `${fN(totals.row_count)} txns &nbsp;|&nbsp; Charged: ${f2(totals.total_spend)} &nbsp;|&nbsp; Avg: ${avg}`;
+  } else {
+    // Feature 3: bank — income (inflows), outflow (|negatives|), net = income - outflow
+    summary = `${fN(totals.row_count)} txns &nbsp;|&nbsp; Income: ${f2(totals.total_income)} &nbsp;|&nbsp; Out: ${f2(totals.total_outflow)} &nbsp;|&nbsp; Net: ${f2(totals.net_amount)}`;
+  }
+
+  tfoot.innerHTML = `<tr style="font-weight:600; border-top:2px solid var(--border); background:var(--surface);">
+    <td colspan="${span}" class="mono text-right" style="font-size:12px; padding:6px 10px;">${summary}</td>
+  </tr>`;
 }
