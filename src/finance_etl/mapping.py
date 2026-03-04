@@ -238,14 +238,25 @@ def _build_stage_row(
         "dc_flag_raw": get(amount_cfg.get("dc_flag_col")) if family == "amount_plus_flag" else "",
         "currency_raw": get(canon_to_source.get("currency")) or currency_default,
         "extra_json": json.dumps(extra) if extra else "{}",
+        # Feature 2: optional fallback debit/credit columns alongside any family
+        "amount_debit_raw": get(amount_cfg.get("amount_debit")),
+        "amount_credit_raw": get(amount_cfg.get("amount_credit")),
     }
 
 
 def _insert_stage_row(conn, s: dict) -> None:
     conn.execute(
         """
-        INSERT INTO transactions_stage VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        INSERT INTO transactions_stage (
+          run_id, file_hash, source_file, source_row,
+          bank_name, account_name, account_id,
+          transaction_date_raw, posted_date_raw, description_raw,
+          amount_raw, debit_raw, credit_raw,
+          money_in_raw, money_out_raw, dc_flag_raw,
+          currency_raw, extra_json,
+          amount_debit_raw, amount_credit_raw
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         """,
         [
@@ -255,5 +266,7 @@ def _insert_stage_row(conn, s: dict) -> None:
             s["amount_raw"], s["debit_raw"], s["credit_raw"],
             s["money_in_raw"], s["money_out_raw"], s["dc_flag_raw"],
             s["currency_raw"], s["extra_json"],
+            # Feature 2: new canonical debit/credit columns (auditable)
+            s["amount_debit_raw"], s["amount_credit_raw"],
         ],
     )

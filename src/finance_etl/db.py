@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at        TIMESTAMP,
   finished_at       TIMESTAMP,
   status            TEXT,
+  statement_type    TEXT,
   files_count       INTEGER,
   rows_in           BIGINT,
   rows_staged       BIGINT,
@@ -63,7 +64,9 @@ CREATE TABLE IF NOT EXISTS transactions_stage (
   money_out_raw         TEXT,
   dc_flag_raw           TEXT,
   currency_raw          TEXT,
-  extra_json            TEXT
+  extra_json            TEXT,
+  amount_debit_raw      TEXT,
+  amount_credit_raw     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transactions_norm (
@@ -81,12 +84,24 @@ CREATE TABLE IF NOT EXISTS transactions_norm (
   source_row            INTEGER     NOT NULL,
   file_hash             TEXT        NOT NULL,
   transaction_fingerprint TEXT      NOT NULL,
-  ingested_at           TIMESTAMP   DEFAULT CURRENT_TIMESTAMP
+  ingested_at           TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
+  statement_type        TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_fingerprint
   ON transactions_norm(transaction_fingerprint);
 """
+
+# ---------------------------------------------------------------------------
+# Migrations — add new columns to existing databases (idempotent)
+# ---------------------------------------------------------------------------
+
+_MIGRATIONS = [
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS statement_type TEXT",
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS statement_type TEXT",
+    "ALTER TABLE transactions_stage ADD COLUMN IF NOT EXISTS amount_debit_raw TEXT",
+    "ALTER TABLE transactions_stage ADD COLUMN IF NOT EXISTS amount_credit_raw TEXT",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +129,14 @@ def _apply_pragmas(conn) -> None:
 
 
 def _bootstrap_schema(conn) -> None:
-    """Apply DDL idempotently (CREATE IF NOT EXISTS)."""
+    """Apply DDL then run migrations idempotently."""
     for statement in _DDL.strip().split(";"):
         stmt = statement.strip()
         if stmt:
             conn.execute(stmt)
+    # Migrations for databases created before these columns existed
+    for migration in _MIGRATIONS:
+        try:
+            conn.execute(migration)
+        except Exception:
+            pass  # column already exists — safe to ignore
