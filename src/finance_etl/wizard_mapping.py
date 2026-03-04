@@ -54,14 +54,19 @@ import yaml
 CANONICAL_FIELDS: list[str] = [
     # Required
     "transaction_date",
-    # Amount (at least one group below is required)
+    # Primary amount columns (at least one group below is required)
     "debit_amount",    # pair with credit_amount → debit_credit family
     "credit_amount",
     "amount",          # alone → signed; or with dc_flag → amount_plus_flag
     "money_in",        # pair with money_out → money_in_out family
     "money_out",
     "dc_flag",         # combined with amount → amount_plus_flag family
-    # Optional
+    # BUG FIX 3: optional fallback debit/credit pair — works alongside any primary family.
+    # If these are the ONLY amount fields mapped, they also form a valid mapping on their
+    # own (family=signed with empty signed_amount; normalize.py step 2 handles the rest).
+    "amount_debit",    # outflow column (positive number → stored as negative)
+    "amount_credit",   # inflow column  (positive number → stored as positive)
+    # Optional metadata
     "description",
     "posted_date",
     "merchant",
@@ -78,6 +83,8 @@ AMOUNT_GROUPS: list[set[str]] = [
     {"debit_amount", "credit_amount"},
     {"money_in", "money_out"},
     {"amount"},
+    # BUG FIX 3: amount_debit + amount_credit can serve as a standalone mapping
+    {"amount_debit", "amount_credit"},
 ]
 
 # Labels shown in the wizard UI
@@ -90,6 +97,9 @@ CANONICAL_LABELS: dict[str, str] = {
     "money_in":         "Money In",
     "money_out":        "Money Out",
     "dc_flag":          "Debit/Credit Flag",
+    # BUG FIX 3: fallback pair labels
+    "amount_debit":     "Amount Debit (fallback outflow — positive number)",
+    "amount_credit":    "Amount Credit (fallback inflow — positive number)",
     "description":      "Description / Narrative",
     "merchant":         "Merchant / Payee",
     "category":         "Category",
@@ -126,6 +136,9 @@ _FIELD_KEYWORDS: dict[str, list[str]] = {
     "dc_flag": [
         "dc", "drcrflag", "drcr", "drcrind", "creditdebit", "flag",
     ],
+    # BUG FIX 3: distinct keyword hints — more specific than debit_amount/credit_amount
+    "amount_debit":  ["amountdebit", "amtdebit"],
+    "amount_credit": ["amountcredit", "amtcredit"],
     "description": [
         "description", "desc", "memo", "narrative", "narration",
         "detail", "particulars", "payee", "reference",
@@ -320,7 +333,8 @@ def validate_wizard_mapping(
     if not any(group <= mapped for group in AMOUNT_GROUPS):
         errors.append(
             "Amount mapping is required. Map one of: "
-            "(debit_amount + credit_amount), (money_in + money_out), or (amount)."
+            "(debit_amount + credit_amount), (money_in + money_out), (amount), "
+            "or (amount_debit + amount_credit)."
         )
 
     return errors
@@ -600,6 +614,14 @@ def wizard_to_pipeline_mapping(
         amount_cfg["dc_flag_col"] = col("dc_flag")
     else:  # signed
         amount_cfg["signed_amount"] = col("amount")
+
+    # BUG FIX 3: always thread amount_debit / amount_credit into amount_cfg so that
+    # mapping.py sets amount_debit_raw / amount_credit_raw for normalize.py step 2
+    # fallback — works alongside any primary family.
+    if col("amount_debit"):
+        amount_cfg["amount_debit"] = col("amount_debit")
+    if col("amount_credit"):
+        amount_cfg["amount_credit"] = col("amount_credit")
 
     return {
         "bank_key":             bank_key,

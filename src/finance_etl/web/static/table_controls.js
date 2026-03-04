@@ -214,3 +214,64 @@ function makeSourceDropdown(containerId, type, onChange) {
 
   return { load, reset, value };
 }
+
+/* =========================================================
+   renderTxnTotals — pinned tfoot totals row for Credit Cards
+   and Bank Transactions tabs.
+
+   Renders server-computed aggregates from GET /transactions/totals
+   into a visually distinct <tfoot> row with labeled value cells.
+
+   Credit card layout:
+     | TOTALS (spans) | Row Count | Total Charged | Avg / Transaction |
+
+   Bank layout:
+     | TOTALS (spans) | Row Count | Total Income | Total Outflow | Net |
+
+   @param {HTMLElement} tfootEl  The <tfoot> element to render into
+   @param {object}      totals   Response from GET /transactions/totals
+   @param {string}      type     'credit_card' | 'bank'
+   @param {number}      numCols  Column count of the main data table (for colspan)
+   ========================================================= */
+function renderTxnTotals(tfootEl, totals, type, numCols) {
+  if (!tfootEl) return;
+  if (!totals || !totals.row_count) {
+    tfootEl.innerHTML = '';
+    return;
+  }
+
+  const f2 = v => Number(v || 0).toFixed(2);
+  const fN = v => Number(v || 0).toLocaleString();
+
+  let cells;
+  if (type === 'credit_card') {
+    const avg = totals.row_count > 0
+      ? (Math.abs(totals.total_spend) / totals.row_count).toFixed(2)
+      : '0.00';
+    cells = [
+      { label: 'Row Count',         value: fN(totals.row_count) },
+      { label: 'Total Charged',     value: f2(totals.total_spend) },
+      { label: 'Avg / Transaction', value: avg },
+    ];
+  } else {
+    cells = [
+      { label: 'Row Count',    value: fN(totals.row_count) },
+      { label: 'Total Income', value: f2(totals.total_income) },
+      { label: 'Total Outflow',value: f2(totals.total_outflow) },
+      { label: 'Net',          value: f2(totals.net_amount) },
+    ];
+  }
+
+  const labelSpan = Math.max(1, numCols - cells.length);
+  const cellHtml  = cells.map(c =>
+    `<td class="mono text-right" style="padding:6px 10px; white-space:nowrap; vertical-align:middle;">` +
+    `<span style="color:var(--text-muted); font-size:10px; display:block; line-height:1.3;">${c.label}</span>` +
+    `${c.value}</td>`
+  ).join('');
+
+  tfootEl.innerHTML =
+    `<tr style="font-weight:600; border-top:2px solid var(--border); background:var(--surface);">` +
+    `<td colspan="${labelSpan}" style="padding:6px 10px; font-size:11px; color:var(--text-muted); vertical-align:middle;">TOTALS</td>` +
+    `${cellHtml}` +
+    `</tr>`;
+}
