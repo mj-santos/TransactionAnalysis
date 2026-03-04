@@ -205,6 +205,11 @@
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <!-- Import Source filter — radio-button dropdown, populated by table_controls.js -->
+        <div class="form-group" style="margin:0; min-width:200px;">
+          <label style="font-size:11px;">Import Source</label>
+          <div id="cc-source-ctrl" class="source-dropdown-wrap"></div>
+        </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="cc-date-from" style="font-size:11px;">Date from</label>
           <input type="date" id="cc-date-from" onchange="loadTxnTab('credit_card')" />
@@ -264,6 +269,11 @@
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <!-- Import Source filter — radio-button dropdown, populated by table_controls.js -->
+        <div class="form-group" style="margin:0; min-width:200px;">
+          <label style="font-size:11px;">Import Source</label>
+          <div id="bk-source-ctrl" class="source-dropdown-wrap"></div>
+        </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="bk-date-from" style="font-size:11px;">Date from</label>
           <input type="date" id="bk-date-from" onchange="loadTxnTab('bank')" />
@@ -644,6 +654,7 @@
   </div>
 </div>
 
+<script src="/static/table_controls.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

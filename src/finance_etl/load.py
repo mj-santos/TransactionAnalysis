@@ -22,10 +22,13 @@ log = get_logger(__name__)
 def load_normalized(
     conn,
     valid_rows: list[dict],
+    run_id: str | None = None,
 ) -> dict[str, int]:
     """
     Insert rows into transactions_norm, skipping duplicates.
 
+    run_id: propagated onto every row for the Import Source dropdown
+            (GET /transactions/sources groups by run_id).
     Returns {"rows_loaded": int, "dupes_skipped": int}
     """
     rows_loaded = 0
@@ -39,8 +42,8 @@ def load_normalized(
                   transaction_date, posted_date, description, merchant, category,
                   amount, currency, bank_name, account_name, account_id,
                   source_file, source_row, file_hash, transaction_fingerprint,
-                  statement_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  statement_type, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     row["transaction_date"],
@@ -59,6 +62,8 @@ def load_normalized(
                     row["transaction_fingerprint"],
                     # Feature 1: 'bank' or 'credit_card' — never mix in aggregations
                     row.get("statement_type"),
+                    # Source tracking: links row back to originating run
+                    run_id,
                 ],
             )
             # Check if row was actually inserted

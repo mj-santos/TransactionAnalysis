@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at       TIMESTAMP,
   status            TEXT,
   statement_type    TEXT,
+  run_label         TEXT,
   files_count       INTEGER,
   rows_in           BIGINT,
   rows_staged       BIGINT,
@@ -85,7 +86,8 @@ CREATE TABLE IF NOT EXISTS transactions_norm (
   file_hash             TEXT        NOT NULL,
   transaction_fingerprint TEXT      NOT NULL,
   ingested_at           TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
-  statement_type        TEXT
+  statement_type        TEXT,
+  run_id                TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_fingerprint
@@ -97,10 +99,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_fingerprint
 # ---------------------------------------------------------------------------
 
 _MIGRATIONS = [
+    # ── Column additions ────────────────────────────────────────────────────
     "ALTER TABLE runs ADD COLUMN IF NOT EXISTS statement_type TEXT",
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS run_label TEXT",
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS statement_type TEXT",
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS run_id TEXT",
     "ALTER TABLE transactions_stage ADD COLUMN IF NOT EXISTS amount_debit_raw TEXT",
     "ALTER TABLE transactions_stage ADD COLUMN IF NOT EXISTS amount_credit_raw TEXT",
+
+    # ── Backfill: NULL statement_type → 'bank' ──────────────────────────────
+    # Rows imported before statement_type was introduced predate credit-card
+    # support, so defaulting to 'bank' is the safe assumption — all legacy
+    # imports were bank/checking statements.  This is a one-time UPDATE and is
+    # idempotent (WHERE statement_type IS NULL ensures it only runs on untyped rows).
+    "UPDATE transactions_norm SET statement_type = 'bank' WHERE statement_type IS NULL",
+
+    # ── Backfill: run_id via transactions_stage join ─────────────────────────
+    # Link each transaction back to the run that created it.  Rows where
+    # transactions_stage has already been deleted (e.g., after a purge) will
+    # retain run_id = NULL and remain accessible via "Display All" in the UI.
+    """
+    UPDATE transactions_norm
+    SET run_id = (
+        SELECT ts.run_id
+        FROM transactions_stage ts
+        WHERE ts.file_hash = transactions_norm.file_hash
+        LIMIT 1
+    )
+    WHERE run_id IS NULL
+    """,
 ]
 
 

@@ -1315,10 +1315,19 @@ const _txnState = {
 /** DOM element-id prefix: 'cc' for credit_card, 'bk' for bank. */
 function _pfx(type) { return type === 'credit_card' ? 'cc' : 'bk'; }
 
+// ── Source dropdown instances (one per tab type) ────────────────
+// makeSourceDropdown is defined in table_controls.js, loaded before app.js.
+// Each instance manages its own fetch, radio state, and reset independently.
+const _srcCtrl = {
+  credit_card: makeSourceDropdown('cc-source-ctrl', 'credit_card', () => loadTxnTab('credit_card')),
+  bank:        makeSourceDropdown('bk-source-ctrl', 'bank',        () => loadTxnTab('bank')),
+};
+
 /** Read current filter values from the DOM for the given tab type. */
 function _txnFilters(type) {
   const p = _pfx(type);
   return {
+    source:    _srcCtrl[type].value(),                                   // from radio-dropdown
     date_from: document.getElementById(`${p}-date-from`)?.value || '',
     date_to:   document.getElementById(`${p}-date-to`)?.value   || '',
     account:   (document.getElementById(`${p}-account`)?.value  || '').trim(),
@@ -1354,6 +1363,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.category)  qs.set('category',  f.category);
   if (f.merchant)  qs.set('merchant',  f.merchant);
   if (f.group_by)  qs.set('group_by',  f.group_by);
+  if (f.source && f.source !== 'all') qs.set('source', f.source);
 
   // Totals endpoint uses the same filter params (no pagination or sort)
   const tqs = new URLSearchParams({ type });
@@ -1362,6 +1372,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.account)   tqs.set('account',   f.account);
   if (f.category)  tqs.set('category',  f.category);
   if (f.merchant)  tqs.set('merchant',  f.merchant);
+  if (f.source && f.source !== 'all') tqs.set('source', f.source);
 
   if (reset) {
     document.getElementById(`${p}-tbody`).innerHTML =
@@ -1369,6 +1380,8 @@ async function loadTxnTab(type, reset = true) {
     document.getElementById(`${p}-tfoot`).innerHTML = '';
     document.getElementById(`${p}-meta`).textContent = '';
     document.getElementById(`${p}-load-more`).style.display = 'none';
+    // Populate source dropdown (table_controls.js) on every tab switch
+    await _srcCtrl[type].load();
   }
 
   try {
@@ -1398,9 +1411,15 @@ async function loadTxnTab(type, reset = true) {
     document.getElementById(`${p}-load-more`).style.display =
       rows.length >= PAGE ? '' : 'none';
 
+    // Debug: verifiable in browser console per coding standards
+    const tabName = type === 'credit_card' ? 'CreditCards' : 'BankTransactions';
+    console.log(`[${tabName}] loaded ${rows.length} rows (offset=${st.offset}, total_filtered=${totals.row_count})`);
+
   } catch (err) {
     document.getElementById(`${p}-tbody`).innerHTML =
       `<tr><td colspan="10" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+    const tabName = type === 'credit_card' ? 'CreditCards' : 'BankTransactions';
+    console.error(`[${tabName}] fetch error:`, err.message);
     toast(`Failed to load ${type === 'credit_card' ? 'credit card' : 'bank'} transactions: ${err.message}`, 'error');
   }
 }
@@ -1418,6 +1437,7 @@ function debounceTxn(type) {
 /** Reset all filter controls to defaults and reload from page 1. */
 function clearTxnFilters(type) {
   const p = _pfx(type);
+  _srcCtrl[type].reset();   // reset radio-dropdown to "All Imports"
   ['date-from', 'date-to', 'account', 'category', 'merchant'].forEach(id => {
     const el = document.getElementById(`${p}-${id}`);
     if (el) el.value = '';
