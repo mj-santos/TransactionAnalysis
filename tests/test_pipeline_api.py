@@ -490,3 +490,24 @@ def test_transactions_sources_empty(tmp_path: Path):
     r = client.get("/transactions/sources?type=credit_card")
     assert r.status_code == 200
     assert r.json()["sources"] == []
+
+
+def test_transactions_sources_no_type_param_does_not_crash(tmp_path: Path):
+    """
+    BUG FIX: GET /transactions/sources with no type param must return 200, not 500.
+
+    Root cause: the SQL previously had 'AND r.status IN (...)' appended to an
+    empty where_sql, producing invalid SQL ('JOIN ... AND ...') with no WHERE.
+    Fix: status filter is now the first condition in the WHERE list, always present.
+    """
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "sources_no_type.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    # Must not raise a 500 — previously crashed with a SQL syntax error
+    r = client.get("/transactions/sources")
+    assert r.status_code == 200, f"Expected 200 but got {r.status_code}: {r.text}"
+    assert "sources" in r.json()

@@ -205,12 +205,10 @@
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-        <!-- Import Source filter — first control, populated dynamically on tab load -->
+        <!-- Import Source filter — radio-button dropdown, populated by table_controls.js -->
         <div class="form-group" style="margin:0; min-width:200px;">
-          <label for="cc-source" style="font-size:11px;">Import Source</label>
-          <select id="cc-source" onchange="loadTxnTab('credit_card')">
-            <option value="all">All Imports</option>
-          </select>
+          <label style="font-size:11px;">Import Source</label>
+          <div id="cc-source-ctrl" class="source-dropdown-wrap"></div>
         </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="cc-date-from" style="font-size:11px;">Date from</label>
@@ -271,12 +269,10 @@
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
-        <!-- Import Source filter — first control, populated dynamically on tab load -->
+        <!-- Import Source filter — radio-button dropdown, populated by table_controls.js -->
         <div class="form-group" style="margin:0; min-width:200px;">
-          <label for="bk-source" style="font-size:11px;">Import Source</label>
-          <select id="bk-source" onchange="loadTxnTab('bank')">
-            <option value="all">All Imports</option>
-          </select>
+          <label style="font-size:11px;">Import Source</label>
+          <div id="bk-source-ctrl" class="source-dropdown-wrap"></div>
         </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="bk-date-from" style="font-size:11px;">Date from</label>
@@ -658,6 +654,7 @@
   </div>
 </div>
 
+<script src="/static/table_controls.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

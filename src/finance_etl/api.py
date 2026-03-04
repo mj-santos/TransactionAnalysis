@@ -1176,11 +1176,16 @@ No cloud services, no external dependencies — all data stays on your machine.
 
         Response: {"type": str, "sources": [{"id", "label", "date", "count"}]}
         """
+        # BUG FIX: status filter must always be inside a WHERE clause.
+        # Previously: {where_sql} followed by bare "AND r.status IN ..." which
+        # produced invalid SQL when where_sql was empty (no type param given).
+        # Fix: include status in the same where list so the clause is always valid.
         where, params = [], []
+        where.append("r.status IN ('success', 'staged')")   # always required
         if type in ("bank", "credit_card"):
             where.append("tn.statement_type = ?"); params.append(type)
 
-        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        where_sql = "WHERE " + " AND ".join(where)
 
         sql = f"""
             SELECT
@@ -1191,7 +1196,6 @@ No cloud services, no external dependencies — all data stays on your machine.
             FROM transactions_norm tn
             JOIN runs r ON tn.run_id = r.run_id
             {where_sql}
-              AND r.status IN ('success', 'staged')
             GROUP BY r.run_id, r.run_label, r.started_at
             ORDER BY r.started_at DESC
         """
