@@ -63,7 +63,11 @@ def parse_mapping_config(raw: dict[str, Any], mapping_path: str = "<mapping>") -
         raise ValueError(f"Mapping {mapping_path} must define date.transaction_date")
 
     if family == "signed" and not amount_raw.get("signed_amount"):
-        raise ValueError(f"Mapping {mapping_path} must define amount.signed_amount for signed family")
+        # BUG FIX 3: allow signed family without signed_amount when the Feature 2
+        # fallback pair (amount_debit / amount_credit) is present — resolve_amount()
+        # step 2 handles those fields automatically.
+        if not amount_raw.get("amount_debit") and not amount_raw.get("amount_credit"):
+            raise ValueError(f"Mapping {mapping_path} must define amount.signed_amount for signed family")
     if family == "debit_credit" and (
         not amount_raw.get("debit_col") or not amount_raw.get("credit_col")
     ):

@@ -745,13 +745,16 @@ async function runCustomReport() {
     const cols = data.columns || (data.rows.length ? Object.keys(data.rows[0]) : []);
     document.getElementById('custom-report-meta').textContent =
       `${data.count ?? data.rows.length} row(s)`;
+    // BUG FIX 2: custom-report-head IS already a <tr> element — do NOT wrap in another <tr>.
+    // Previously: innerHTML = `<tr>${cells}</tr>` caused a <tr>-inside-<tr> which made the
+    // browser strip/relocate the inner <tr>, leaving the header empty and misaligning tfoot.
     document.getElementById('custom-report-head').innerHTML =
-      `<tr>${cols.map(c => {
+      cols.map(c => {
         const tip = REPORT_COL_TOOLTIPS[c];
         if (!tip) return `<th>${esc(c)}</th>`;
         const href = `/metric-docs/${encodeURIComponent(c)}`;
         return `<th>${esc(c)} <a href="${href}" target="_blank" title="${esc(tip)} — Click to read more." style="font-size:10px;opacity:.65;text-decoration:none;cursor:help;" onclick="event.stopPropagation()">ℹ</a></th>`;
-      }).join('')}</tr>`;
+      }).join('');
     document.getElementById('custom-report-body').innerHTML = data.rows.length
       ? data.rows.map(row =>
           `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
@@ -882,10 +885,12 @@ const wizard = {
 const WIZARD_REQUIRED_FIELDS = new Set(['transaction_date']);
 // Fields removed from step 2 display (uncommon / confusing for most users)
 const STEP2_HIDDEN = new Set(['debit_amount', 'credit_amount', 'dc_flag', 'posted_date']);
+// BUG FIX 3: amount_debit / amount_credit are the Feature 2 fallback pair — visible in step 2.
 const WIZARD_AMOUNT_GROUPS   = [
   ['debit_amount', 'credit_amount'],
   ['money_in', 'money_out'],
   ['amount'],
+  ['amount_debit', 'amount_credit'],  // BUG FIX 3: fallback pair also forms a valid mapping
 ];
 
 // ── Open / Close ─────────────────────────────────────────────
@@ -1205,7 +1210,7 @@ function validateMappingLocally() {
   const mapped = new Set(Object.entries(wizard.mapping).filter(([,v]) => v).map(([k]) => k));
   const ok = WIZARD_AMOUNT_GROUPS.some(group => group.every(f => mapped.has(f)));
   if (!ok) {
-    errors.push('Amount mapping required: map (debit_amount + credit_amount), (money_in + money_out), or (amount).');
+    errors.push('Amount mapping required: map (debit_amount + credit_amount), (money_in + money_out), (amount), or (amount_debit + amount_credit).');
   }
   return errors;
 }
@@ -1226,6 +1231,21 @@ function renderWizardStep3() {
   if (wizard.suggestedDateFormat) {
     setVal('w-date-format', wizard.suggestedDateFormat);
   }
+
+  // BUG FIX 1: Sync wizard statement_type radios from import page (if already set).
+  // This lets users who selected the type before opening the wizard skip re-selecting it.
+  // The wizard reads from its OWN radios at submit time (not the import page) to avoid
+  // sending null when the import page radios are not yet set.
+  if (!document.querySelector('input[name="w-statement-type"]:checked')) {
+    const importSel = document.querySelector('input[name="statement-type"]:checked');
+    if (importSel) {
+      const wizSel = document.querySelector(`input[name="w-statement-type"][value="${importSel.value}"]`);
+      if (wizSel) wizSel.checked = true;
+    }
+  }
+  // Hide previous error if user re-enters step 3
+  const stErr = document.getElementById('w-stmt-type-error');
+  if (stErr) stErr.style.display = 'none';
 
   // Sync wizard preview toggle with main Configure Mapping toggle and lock main toggle
   const mainTog = document.getElementById('preview-toggle');
@@ -1268,6 +1288,23 @@ async function wizardSaveAndRun() {
 
   const filePaths = wizard.files.map(f => f.path);
 
+  // BUG FIX 1 (Layer 1): Read statement_type from the wizard's OWN radio buttons.
+  // Previously read from the import page radios via getStatementType() which returned
+  // null when the user opened the wizard before selecting a type — silently sending
+  // statement_type=null to the backend and routing rows to neither tab.
+  const wizStmt = document.querySelector('input[name="w-statement-type"]:checked');
+  const statementType = wizStmt ? wizStmt.value : getStatementType();
+  console.log('[Mapping] statement_type submitted as:', statementType);
+
+  if (!statementType) {
+    const stErr = document.getElementById('w-stmt-type-error');
+    if (stErr) stErr.style.display = '';
+    toast('Select a statement type (Credit Card or Bank) before saving.', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Save & Run';
+    return;
+  }
+
   try {
     const res = await api('POST', '/wizard/save-and-run', {
       file_paths:       filePaths,
@@ -1280,8 +1317,8 @@ async function wizardSaveAndRun() {
       currency_default: currency,
       preview_only:     previewOnly,
       custom_headers:   wizard.customHeadersSelected,
-      // Feature 1: statement_type from import page radio buttons
-      statement_type:   getStatementType(),
+      // BUG FIX 1: read from wizard selector (not import page radio)
+      statement_type:   statementType,
     });
 
     wizardClose();
@@ -1401,8 +1438,9 @@ async function loadTxnTab(type, reset = true) {
       _renderTxnBody(p, rows, cols, true);   // append rows for Load more
     }
 
-    // Pinned tfoot always reflects the full filtered set, not just the current page
-    _renderTxnTfoot(p, totals, type, cols.length || 10);
+    // Pinned tfoot always reflects the full filtered set, not just the current page.
+    // renderTxnTotals is defined in table_controls.js (shared utility).
+    renderTxnTotals(document.getElementById(`${p}-tfoot`), totals, type, cols.length || 10);
 
     // Advance pagination cursor and update meta / Load more visibility
     st.offset += rows.length;
@@ -1518,40 +1556,5 @@ function _renderTxnBody(p, rows, cols, append) {
   }
 }
 
-/**
- * Render the pinned <tfoot> totals row using server-computed aggregates.
- *
- * Credit card (Feature 3 / Feature 4):
- *   Total Transactions | Total Charged (gross signed SUM, no sign filter) | Avg per txn
- *
- * Bank (Feature 3 / Feature 4):
- *   Total Transactions | Total Income (inflows) | Total Outflow (|outflows|) | Net
- */
-function _renderTxnTfoot(p, totals, type, span) {
-  const tfoot = document.getElementById(`${p}-tfoot`);
-  if (!tfoot) return;
-
-  if (!totals || !totals.row_count) {
-    tfoot.innerHTML = '';
-    return;
-  }
-
-  const f2 = v => Number(v || 0).toFixed(2);
-  const fN = v => Number(v || 0).toLocaleString();
-
-  let summary;
-  if (type === 'credit_card') {
-    // Feature 3: total_spend = gross signed sum (all amounts, no sign filtering)
-    const avg = totals.row_count > 0
-      ? (Math.abs(totals.total_spend) / totals.row_count).toFixed(2)
-      : '0.00';
-    summary = `${fN(totals.row_count)} txns &nbsp;|&nbsp; Charged: ${f2(totals.total_spend)} &nbsp;|&nbsp; Avg: ${avg}`;
-  } else {
-    // Feature 3: bank — income (inflows), outflow (|negatives|), net = income - outflow
-    summary = `${fN(totals.row_count)} txns &nbsp;|&nbsp; Income: ${f2(totals.total_income)} &nbsp;|&nbsp; Out: ${f2(totals.total_outflow)} &nbsp;|&nbsp; Net: ${f2(totals.net_amount)}`;
-  }
-
-  tfoot.innerHTML = `<tr style="font-weight:600; border-top:2px solid var(--border); background:var(--surface);">
-    <td colspan="${span}" class="mono text-right" style="font-size:12px; padding:6px 10px;">${summary}</td>
-  </tr>`;
-}
+// _renderTxnTfoot has been extracted to table_controls.js as renderTxnTotals().
+// See table_controls.js for the implementation with proper labeled column cells.

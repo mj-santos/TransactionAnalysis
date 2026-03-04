@@ -576,6 +576,29 @@
           Name this mapping profile. It will be saved and auto-detected on future uploads.
         </p>
 
+        <!-- BUG FIX 1: Statement type selector lives IN the wizard — not on the import page.
+             getStatementType() read from import-page radios which were often unset when
+             the wizard opened, silently sending statement_type=null to the backend. -->
+        <div class="form-group" style="margin-bottom:16px; padding:12px; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
+          <label style="font-weight:600; display:block; margin-bottom:8px;">
+            Statement Type <span style="color:var(--danger)">*</span>
+            <span style="font-weight:400; font-size:12px; color:var(--text-muted);"> — required to route transactions to the correct tab</span>
+          </label>
+          <div style="display:flex; gap:20px; flex-wrap:wrap;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:7px;">
+              <input type="radio" name="w-statement-type" id="w-st-credit-card" value="credit_card" />
+              💳 Credit Card Statement
+            </label>
+            <label style="cursor:pointer; display:flex; align-items:center; gap:7px;">
+              <input type="radio" name="w-statement-type" id="w-st-bank" value="bank" />
+              🏦 Bank Statement (Checking / Savings / Cash)
+            </label>
+          </div>
+          <div id="w-stmt-type-error" style="display:none; font-size:12px; color:var(--danger); margin-top:6px;">
+            Please select a statement type before saving.
+          </div>
+        </div>
+
         <div class="review-grid">
           <div class="form-group">
             <label for="w-bank-name">Bank / Institution Name</label>

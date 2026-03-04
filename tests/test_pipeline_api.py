@@ -511,3 +511,278 @@ def test_transactions_sources_no_type_param_does_not_crash(tmp_path: Path):
     r = client.get("/transactions/sources")
     assert r.status_code == 200, f"Expected 200 but got {r.status_code}: {r.text}"
     assert "sources" in r.json()
+
+
+# ---------------------------------------------------------------------------
+# BUG FIX 1: statement_type must be routed correctly through wizard pipeline
+# ---------------------------------------------------------------------------
+
+def test_wizard_statement_type_credit_card_routing(tmp_path: Path):
+    """
+    BUG FIX 1: POST /wizard/save-and-run with statement_type='credit_card' must
+    produce transaction rows with statement_type='credit_card', never 'bank' or NULL.
+
+    Layer 3 — backend persistence: statement_type is read from the request,
+    written to every transaction row in transactions_norm.
+    """
+    import csv as _csv
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "wizard_cc_routing.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    # Minimal CSV with a signed amount
+    csv_path = tmp_path / "cc.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["Date", "Description", "Amount"])
+        w.writerow(["2024-01-15", "Starbucks", "-5.50"])
+        w.writerow(["2024-01-16", "Amazon",    "-42.00"])
+
+    # Upload
+    with open(csv_path, "rb") as fh:
+        up = client.post("/upload", files={"file": ("cc.csv", fh, "text/csv")})
+    assert up.status_code == 200, up.text
+
+    # Save-and-run with statement_type='credit_card', preview_only=False
+    res = client.post("/wizard/save-and-run", json={
+        "file_paths":      [up.json()["path"]],
+        "canonical_map":   {"transaction_date": "Date", "description": "Description", "amount": "Amount"},
+        "institution":     "testbank",
+        "account_id":      "cc1234",
+        "account_name":    "My Credit Card",
+        "bank_name":       "TestBank",
+        "date_format":     "%Y-%m-%d",
+        "preview_only":    False,
+        "statement_type":  "credit_card",   # BUG FIX 1: must be respected
+    })
+    assert res.status_code in (200, 202), res.text
+    run_id = res.json()["run_id"]
+
+    # Poll until done
+    import time
+    for _ in range(30):
+        st = client.get(f"/runs/{run_id}")
+        if st.json().get("status") in ("success", "failed"):
+            break
+        time.sleep(0.2)
+    assert st.json()["status"] == "success", st.json()
+
+    # Layer 4: credit_card query must return our rows
+    r_cc = client.get("/transactions?type=credit_card")
+    assert r_cc.status_code == 200
+    cc_rows = r_cc.json()["rows"]
+    assert len(cc_rows) >= 1, "credit_card tab must see rows imported as credit_card"
+    assert all(r.get("statement_type") == "credit_card" for r in cc_rows), \
+        "All credit_card rows must have statement_type='credit_card'"
+
+    # Layer 4: bank query must NOT include our rows
+    r_bank = client.get("/transactions?type=bank")
+    assert r_bank.status_code == 200
+    bank_rows = r_bank.json()["rows"]
+    our_descs = {"Starbucks", "Amazon"}
+    leaked = [r for r in bank_rows if r.get("description") in our_descs]
+    assert not leaked, f"credit_card rows must not appear in bank tab: {leaked}"
+
+
+def test_wizard_statement_type_bank_routing(tmp_path: Path):
+    """
+    BUG FIX 1: POST /wizard/save-and-run with statement_type='bank' must
+    produce transaction rows with statement_type='bank', never 'credit_card' or NULL.
+    """
+    import csv as _csv
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "wizard_bank_routing.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    csv_path = tmp_path / "bank.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["Date", "Description", "Amount"])
+        w.writerow(["2024-02-01", "Salary",     "3000.00"])
+        w.writerow(["2024-02-05", "Rent",       "-1200.00"])
+
+    with open(csv_path, "rb") as fh:
+        up = client.post("/upload", files={"file": ("bank.csv", fh, "text/csv")})
+    assert up.status_code == 200, up.text
+
+    res = client.post("/wizard/save-and-run", json={
+        "file_paths":      [up.json()["path"]],
+        "canonical_map":   {"transaction_date": "Date", "description": "Description", "amount": "Amount"},
+        "institution":     "testbank",
+        "account_id":      "chk1234",
+        "account_name":    "My Checking",
+        "bank_name":       "TestBank",
+        "date_format":     "%Y-%m-%d",
+        "preview_only":    False,
+        "statement_type":  "bank",   # BUG FIX 1: must be respected
+    })
+    assert res.status_code in (200, 202), res.text
+    run_id = res.json()["run_id"]
+
+    import time
+    for _ in range(30):
+        st = client.get(f"/runs/{run_id}")
+        if st.json().get("status") in ("success", "failed"):
+            break
+        time.sleep(0.2)
+    assert st.json()["status"] == "success", st.json()
+
+    r_bank = client.get("/transactions?type=bank")
+    assert r_bank.status_code == 200
+    bank_rows = r_bank.json()["rows"]
+    assert len(bank_rows) >= 1, "bank tab must see rows imported as bank"
+    assert all(r.get("statement_type") == "bank" for r in bank_rows), \
+        "All bank rows must have statement_type='bank'"
+
+    r_cc = client.get("/transactions?type=credit_card")
+    assert r_cc.status_code == 200
+    cc_rows = r_cc.json()["rows"]
+    our_descs = {"Salary", "Rent"}
+    leaked = [r for r in cc_rows if r.get("description") in our_descs]
+    assert not leaked, f"bank rows must not appear in credit_card tab: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# BUG FIX 3: amount_debit / amount_credit as canonical fields in wizard pipeline
+# ---------------------------------------------------------------------------
+
+def test_resolve_amount_empty_string_treated_as_absent():
+    """
+    BUG FIX 3: amount = empty string must be treated as absent, falling back
+    to amount_debit / amount_credit.  (Same as null amount for signed family.)
+    """
+    from decimal import Decimal
+    from finance_etl.normalize import resolve_amount
+
+    row = {
+        "amount_raw":        "",         # empty string = absent
+        "debit_raw":         "",
+        "credit_raw":        "",
+        "money_in_raw":      "",
+        "money_out_raw":     "",
+        "amount_debit_raw":  "50.00",    # outflow → stored negative
+        "amount_credit_raw": "100.00",   # inflow  → stored positive
+        "source_row": 1, "source_file": "t.csv",
+    }
+    result = resolve_amount(row, "signed", {}, {})
+    assert result == Decimal("50.00"), f"Expected 100-50=50, got {result}"
+
+
+def test_resolve_amount_debit_credit_via_wizard_canonical(tmp_path: Path):
+    """
+    BUG FIX 3 integration: wizard_to_pipeline_mapping with amount_debit+amount_credit
+    produces a mapping dict that, when run through run_with_options, stores the
+    correct signed amount (credit − debit) in transactions_norm.
+    """
+    import csv as _csv
+    from decimal import Decimal
+    from finance_etl.wizard_mapping import wizard_to_pipeline_mapping
+    from finance_etl.pipeline import run_with_options
+    from finance_etl.db import get_connection
+
+    # CSV with separate debit/credit columns (positive numbers)
+    csv_path = tmp_path / "amtdc.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["Date", "Description", "Debit", "Credit"])
+        w.writerow(["2024-03-01", "Coffee",    "4.50", ""])      # outflow
+        w.writerow(["2024-03-05", "Paycheck",  "",     "2000.00"])  # inflow
+
+    db_path = tmp_path / "amtdc.duckdb"
+
+    # Build a pipeline mapping dict via wizard_to_pipeline_mapping
+    mapping_dict = wizard_to_pipeline_mapping(
+        canonical_map={
+            "transaction_date": "Date",
+            "description":      "Description",
+            "amount_debit":     "Debit",    # BUG FIX 3 canonical field
+            "amount_credit":    "Credit",   # BUG FIX 3 canonical field
+        },
+        bank_name="TestBank",
+        bank_key="testbank",
+        account_name="Fallback Test",
+        account_id="amtdc01",
+        date_format="%Y-%m-%d",
+    )
+    # Confirm amount_debit / amount_credit flowed into the amount config
+    assert mapping_dict["amount"].get("amount_debit")  == "Debit"
+    assert mapping_dict["amount"].get("amount_credit") == "Credit"
+
+    # Run the pipeline — statement_type='bank' so rows appear in bank tab
+    run_with_options(
+        inputs=[str(csv_path)],
+        db_path=str(db_path),
+        mapping_dict=mapping_dict,
+        statement_type="bank",
+    )
+
+    # Verify stored amounts: Coffee outflow = -4.50, Paycheck inflow = +2000
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        "SELECT description, amount FROM transactions_norm ORDER BY transaction_date"
+    ).fetchall()
+    conn.close()
+
+    assert rows, "Expected at least one row in transactions_norm"
+    by_desc = {desc: float(amt) for desc, amt in rows}
+    assert by_desc.get("Coffee")   == pytest.approx(-4.50,   abs=0.01), \
+        f"Coffee outflow must be stored as -4.50; got {by_desc.get('Coffee')}"
+    assert by_desc.get("Paycheck") == pytest.approx(2000.00, abs=0.01), \
+        f"Paycheck inflow must be stored as +2000; got {by_desc.get('Paycheck')}"
+
+
+def test_amount_debit_credit_in_canonical_fields():
+    """
+    BUG FIX 3: amount_debit and amount_credit must appear in CANONICAL_FIELDS
+    and CANONICAL_LABELS, and form a valid AMOUNT_GROUP.
+    """
+    from finance_etl.wizard_mapping import (
+        CANONICAL_FIELDS, CANONICAL_LABELS, AMOUNT_GROUPS, validate_wizard_mapping
+    )
+
+    assert "amount_debit"  in CANONICAL_FIELDS, "amount_debit missing from CANONICAL_FIELDS"
+    assert "amount_credit" in CANONICAL_FIELDS, "amount_credit missing from CANONICAL_FIELDS"
+    assert "amount_debit"  in CANONICAL_LABELS, "amount_debit missing from CANONICAL_LABELS"
+    assert "amount_credit" in CANONICAL_LABELS, "amount_credit missing from CANONICAL_LABELS"
+    assert {"amount_debit", "amount_credit"} in AMOUNT_GROUPS, \
+        "{'amount_debit','amount_credit'} must be a valid AMOUNT_GROUP"
+
+    # Validate that mapping only amount_debit + amount_credit passes validation
+    errors = validate_wizard_mapping({
+        "transaction_date": "Date",
+        "amount_debit":     "Debit",
+        "amount_credit":    "Credit",
+    })
+    assert errors == [], f"amount_debit+amount_credit should form a valid mapping: {errors}"
+
+
+def test_wizard_to_pipeline_threads_amount_debit_credit():
+    """
+    BUG FIX 3: wizard_to_pipeline_mapping must include amount_debit / amount_credit
+    in the returned amount config so mapping.py populates amount_debit_raw /
+    amount_credit_raw for the normalize.py step 2 fallback.
+    """
+    from finance_etl.wizard_mapping import wizard_to_pipeline_mapping
+
+    result = wizard_to_pipeline_mapping(
+        canonical_map={
+            "transaction_date": "Date",
+            "amount_debit":     "Debit",
+            "amount_credit":    "Credit",
+        },
+        bank_name="TestBank",
+        bank_key="testbank",
+        account_name="Checking",
+        account_id="chk01",
+    )
+
+    assert result["amount"].get("amount_debit")  == "Debit",  \
+        "amount_cfg must carry amount_debit CSV column"
+    assert result["amount"].get("amount_credit") == "Credit", \
+        "amount_cfg must carry amount_credit CSV column"
