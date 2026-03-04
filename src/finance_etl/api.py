@@ -1157,29 +1157,67 @@ No cloud services, no external dependencies — all data stays on your machine.
     # Transactions — Feature 4: Credit Cards & Bank Transactions tabs
     # -----------------------------------------------------------------------
 
-    @app.get("/transactions", tags=["transactions"], summary="List transactions with filters")
-    def list_transactions(
-        type:      Optional[str] = Query(None,  description="'credit_card' or 'bank'"),
-        limit:     int           = Query(50,    le=500,  description="Max rows"),
-        offset:    int           = Query(0,              description="Pagination offset"),
-        date_from: Optional[str] = Query(None,           description="ISO date lower bound"),
-        date_to:   Optional[str] = Query(None,           description="ISO date upper bound"),
-        account:   Optional[str] = Query(None,           description="Account name or ID filter"),
-        category:  Optional[str] = Query(None,           description="Category substring filter"),
-        merchant:  Optional[str] = Query(None,           description="Merchant/description substring"),
-        group_by:  Optional[str] = Query(None,           description="Comma-separated field(s) to group"),
-        sort_by:   str           = Query("transaction_date", description="Column to sort by"),
-        sort_dir:  str           = Query("desc",          description="'asc' or 'desc'"),
+    @app.get(
+        "/transactions/sources",
+        tags=["transactions"],
+        summary="List import sources (runs) for a given statement type",
+    )
+    def list_transaction_sources(
+        type: Optional[str] = Query(None, description="'credit_card' or 'bank'"),
     ):
         """
-        Filtered transaction list.
+        Return the distinct import runs that have committed transactions for the
+        given statement type.  Used to populate the Import Source dropdown.
 
-        Feature 1: Credit-card aggregations never include bank rows and vice versa.
-        Pass `type=credit_card` or `type=bank` to scope.  The first 5 rows on
-        page load are returned by default (`limit=5&offset=0`).
+        Feature 1: type filter strictly scopes sources — credit_card runs never
+        appear in bank results and vice versa.
+        Only runs with status 'success' or 'staged' are returned.
+        Ordered by started_at DESC (newest import first).
+
+        Response: {"type": str, "sources": [{"id", "label", "date", "count"}]}
         """
         where, params = [], []
+        if type in ("bank", "credit_card"):
+            where.append("tn.statement_type = ?"); params.append(type)
 
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+        sql = f"""
+            SELECT
+                r.run_id AS id,
+                COALESCE(r.run_label, r.run_id) AS label,
+                r.started_at AS date,
+                COUNT(tn.transaction_fingerprint) AS count
+            FROM transactions_norm tn
+            JOIN runs r ON tn.run_id = r.run_id
+            {where_sql}
+              AND r.status IN ('success', 'staged')
+            GROUP BY r.run_id, r.run_label, r.started_at
+            ORDER BY r.started_at DESC
+        """
+        try:
+            conn = get_connection(db_path)
+            rows = conn.execute(sql, params).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Sources query failed: {exc}") from exc
+
+        sources = [
+            {
+                "id":    r[0],
+                "label": r[1],
+                "date":  _isoformat(r[2]) if r[2] and hasattr(r[2], "isoformat") else str(r[2] or ""),
+                "count": int(r[3] or 0),
+            }
+            for r in rows
+        ]
+        return {"type": type, "sources": sources}
+
+    def _build_txn_where(
+        type, date_from, date_to, account, category, merchant, source
+    ) -> tuple[list, list]:
+        """Build shared WHERE clause + params for /transactions and /transactions/totals."""
+        where, params = [], []
         # Feature 1: HARD isolation — credit_card ≠ bank, never mixed
         if type in ("bank", "credit_card"):
             where.append("statement_type = ?"); params.append(type)
@@ -1196,6 +1234,35 @@ No cloud services, no external dependencies — all data stays on your machine.
         if merchant:
             where.append("LOWER(COALESCE(merchant, description)) LIKE ?")
             params.append(f"%{merchant.lower()}%")
+        # source filter: specific run_id; 'all' or absent → no additional filter
+        if source and source != "all":
+            where.append("run_id = ?"); params.append(source)
+        return where, params
+
+    @app.get("/transactions", tags=["transactions"], summary="List transactions with filters")
+    def list_transactions(
+        type:      Optional[str] = Query(None,  description="'credit_card' or 'bank'"),
+        limit:     int           = Query(50,    le=500,  description="Max rows"),
+        offset:    int           = Query(0,              description="Pagination offset"),
+        date_from: Optional[str] = Query(None,           description="ISO date lower bound"),
+        date_to:   Optional[str] = Query(None,           description="ISO date upper bound"),
+        account:   Optional[str] = Query(None,           description="Account name or ID filter"),
+        category:  Optional[str] = Query(None,           description="Category substring filter"),
+        merchant:  Optional[str] = Query(None,           description="Merchant/description substring"),
+        source:    Optional[str] = Query(None,           description="run_id to filter by import source; 'all' = no filter"),
+        group_by:  Optional[str] = Query(None,           description="Comma-separated field(s) to group"),
+        sort_by:   str           = Query("transaction_date", description="Column to sort by"),
+        sort_dir:  str           = Query("desc",          description="'asc' or 'desc'"),
+    ):
+        """
+        Filtered transaction list.
+
+        Feature 1: Credit-card aggregations never include bank rows and vice versa.
+        Pass `type=credit_card` or `type=bank` to scope.
+        Pass `source=<run_id>` to filter by a specific import; omit or pass `source=all`
+        to show all rows for the given type.
+        """
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         group_fields = [f.strip() for f in (group_by or "").split(",")
@@ -1254,6 +1321,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         account:   Optional[str] = Query(None),
         category:  Optional[str] = Query(None),
         merchant:  Optional[str] = Query(None),
+        source:    Optional[str] = Query(None,  description="run_id to filter by import source; 'all' = no filter"),
     ):
         """
         Return aggregate totals for the filtered set (without fetching all rows).
@@ -1265,23 +1333,9 @@ No cloud services, no external dependencies — all data stays on your machine.
           total_outflow = absolute sum of outflows
           net_amount    = total_income − total_outflow
         Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
+        source: specific run_id to scope to one import; omit or 'all' for all rows.
         """
-        where, params = [], []
-
-        if type in ("bank", "credit_card"):
-            where.append("statement_type = ?"); params.append(type)
-        if date_from:
-            where.append("transaction_date >= ?"); params.append(date_from)
-        if date_to:
-            where.append("transaction_date <= ?"); params.append(date_to)
-        if account:
-            where.append("(account_name = ? OR account_id = ?)"); params.extend([account, account])
-        if category:
-            where.append("LOWER(COALESCE(category, '')) LIKE ?")
-            params.append(f"%{category.lower()}%")
-        if merchant:
-            where.append("LOWER(COALESCE(merchant, description)) LIKE ?")
-            params.append(f"%{merchant.lower()}%")
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"

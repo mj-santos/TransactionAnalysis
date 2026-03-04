@@ -104,13 +104,19 @@ def run_with_options(
     else:
         raise ValueError("Provide mapping_path, bank_key, or mapping_dict")
 
+    # Build a human-readable label for the Import Source dropdown.
+    # Format: "<bank_name> — <account_name>" using the resolved mapping.
+    _bank  = (mapping.get("bank_name",    "") or "").strip()
+    _acct  = (mapping.get("account_name", "") or "").strip()
+    run_label = f"{_bank} \u2014 {_acct}".strip(" \u2014") if (_bank or _acct) else None
+
     conn = get_connection(db_path)
     counts = dict(rows_in=0, rows_staged=0, rows_normalized=0, rows_loaded=0, errors_count=0)
     stage_timings: dict[str, float] = {}
 
     try:
         t0 = time.perf_counter()
-        create_run(conn, run_id, len(csv_paths), statement_type=statement_type)
+        create_run(conn, run_id, len(csv_paths), statement_type=statement_type, run_label=run_label)
         registrations = register_files(conn, csv_paths, run_id, Path(raw_dir))
         stage_timings["ingest_register_s"] = time.perf_counter() - t0
 
@@ -181,6 +187,8 @@ def run_with_options(
                 "force_parquet": force_parquet,
                 # Feature 1: persist statement_type through preview/commit cycle
                 "statement_type": statement_type,
+                # Source tracking: run_id written onto every loaded transaction row
+                "run_id": run_id,
             }
             finalize_run(conn, run_id, "staged", counts, notes="awaiting commit")
             conn.close()
@@ -191,7 +199,7 @@ def run_with_options(
         # Full commit path
         # ------------------------------------------------------------------
         t0 = time.perf_counter()
-        load_result = load_normalized(conn, valid_rows)
+        load_result = load_normalized(conn, valid_rows, run_id=run_id)
         stage_timings["load_s"] = time.perf_counter() - t0
         counts["rows_loaded"] = load_result["rows_loaded"]
 
@@ -250,7 +258,7 @@ def commit_run(run_id: str) -> RunResult:
             normalized, norm_errors, run_id, Path(state["validation_dir"])
         )
 
-        load_result = load_normalized(conn, valid_rows)
+        load_result = load_normalized(conn, valid_rows, run_id=run_id)
         counts["rows_loaded"] = load_result["rows_loaded"]
 
         if not state.get("no_parquet"):

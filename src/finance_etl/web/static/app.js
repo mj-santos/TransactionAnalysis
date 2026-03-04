@@ -1319,6 +1319,7 @@ function _pfx(type) { return type === 'credit_card' ? 'cc' : 'bk'; }
 function _txnFilters(type) {
   const p = _pfx(type);
   return {
+    source:    document.getElementById(`${p}-source`)?.value    || 'all',
     date_from: document.getElementById(`${p}-date-from`)?.value || '',
     date_to:   document.getElementById(`${p}-date-to`)?.value   || '',
     account:   (document.getElementById(`${p}-account`)?.value  || '').trim(),
@@ -1326,6 +1327,55 @@ function _txnFilters(type) {
     merchant:  (document.getElementById(`${p}-merchant`)?.value || '').trim(),
     group_by:  document.getElementById(`${p}-group-by`)?.value  || '',
   };
+}
+
+/**
+ * Fetch import sources for this statement type from GET /transactions/sources
+ * and populate the source <select> dropdown.  Called once per tab load (reset).
+ *
+ * Rules:
+ *  - "All Imports" option is always first and always present.
+ *  - Each option: label (count) — date string, value = run_id.
+ *  - If no sources found → show "No imports found" and disable the <select>.
+ *  - Resets selection to "all" each time the tab is switched.
+ */
+async function loadTxnSources(type) {
+  const p   = _pfx(type);
+  const sel = document.getElementById(`${p}-source`);
+  if (!sel) return;
+
+  try {
+    const data = await api('GET', `/transactions/sources?type=${encodeURIComponent(type)}`);
+    const sources = data.sources || [];
+
+    // Reset to "All Imports" before repopulating
+    sel.innerHTML = '<option value="all">All Imports</option>';
+
+    if (!sources.length) {
+      const opt = document.createElement('option');
+      opt.value    = '';
+      opt.disabled = true;
+      opt.textContent = 'No imports found';
+      sel.appendChild(opt);
+      sel.disabled = true;
+      console.log(`[${type === 'credit_card' ? 'CreditCards' : 'BankTransactions'}] no import sources found`);
+      return;
+    }
+
+    sel.disabled = false;
+    sources.forEach(src => {
+      const opt      = document.createElement('option');
+      opt.value      = src.id;
+      // Format: "Label (N txns) — YYYY-MM-DD"
+      const dateStr  = src.date ? src.date.slice(0, 10) : '';
+      opt.textContent = `${src.label} (${src.count} txns)${dateStr ? ' \u2014 ' + dateStr : ''}`;
+      sel.appendChild(opt);
+    });
+
+    console.log(`[${type === 'credit_card' ? 'CreditCards' : 'BankTransactions'}] loaded ${sources.length} import source(s)`);
+  } catch (err) {
+    console.warn(`[${type}] Failed to load sources:`, err.message);
+  }
 }
 
 /**
@@ -1354,6 +1404,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.category)  qs.set('category',  f.category);
   if (f.merchant)  qs.set('merchant',  f.merchant);
   if (f.group_by)  qs.set('group_by',  f.group_by);
+  if (f.source && f.source !== 'all') qs.set('source', f.source);
 
   // Totals endpoint uses the same filter params (no pagination or sort)
   const tqs = new URLSearchParams({ type });
@@ -1362,6 +1413,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.account)   tqs.set('account',   f.account);
   if (f.category)  tqs.set('category',  f.category);
   if (f.merchant)  tqs.set('merchant',  f.merchant);
+  if (f.source && f.source !== 'all') tqs.set('source', f.source);
 
   if (reset) {
     document.getElementById(`${p}-tbody`).innerHTML =
@@ -1369,6 +1421,8 @@ async function loadTxnTab(type, reset = true) {
     document.getElementById(`${p}-tfoot`).innerHTML = '';
     document.getElementById(`${p}-meta`).textContent = '';
     document.getElementById(`${p}-load-more`).style.display = 'none';
+    // Populate source dropdown on first load of each tab switch
+    await loadTxnSources(type);
   }
 
   try {
@@ -1398,9 +1452,15 @@ async function loadTxnTab(type, reset = true) {
     document.getElementById(`${p}-load-more`).style.display =
       rows.length >= PAGE ? '' : 'none';
 
+    // Debug: verifiable in browser console per coding standards
+    const tabName = type === 'credit_card' ? 'CreditCards' : 'BankTransactions';
+    console.log(`[${tabName}] loaded ${rows.length} rows (offset=${st.offset}, total_filtered=${totals.row_count})`);
+
   } catch (err) {
     document.getElementById(`${p}-tbody`).innerHTML =
       `<tr><td colspan="10" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+    const tabName = type === 'credit_card' ? 'CreditCards' : 'BankTransactions';
+    console.error(`[${tabName}] fetch error:`, err.message);
     toast(`Failed to load ${type === 'credit_card' ? 'credit card' : 'bank'} transactions: ${err.message}`, 'error');
   }
 }
@@ -1418,6 +1478,9 @@ function debounceTxn(type) {
 /** Reset all filter controls to defaults and reload from page 1. */
 function clearTxnFilters(type) {
   const p = _pfx(type);
+  // Reset source dropdown to "Display All"
+  const src = document.getElementById(`${p}-source`);
+  if (src) src.value = 'all';
   ['date-from', 'date-to', 'account', 'category', 'merchant'].forEach(id => {
     const el = document.getElementById(`${p}-${id}`);
     if (el) el.value = '';

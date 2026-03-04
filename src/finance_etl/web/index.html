@@ -205,6 +205,13 @@
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <!-- Import Source filter — first control, populated dynamically on tab load -->
+        <div class="form-group" style="margin:0; min-width:200px;">
+          <label for="cc-source" style="font-size:11px;">Import Source</label>
+          <select id="cc-source" onchange="loadTxnTab('credit_card')">
+            <option value="all">All Imports</option>
+          </select>
+        </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="cc-date-from" style="font-size:11px;">Date from</label>
           <input type="date" id="cc-date-from" onchange="loadTxnTab('credit_card')" />
@@ -264,6 +271,13 @@
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
       <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <!-- Import Source filter — first control, populated dynamically on tab load -->
+        <div class="form-group" style="margin:0; min-width:200px;">
+          <label for="bk-source" style="font-size:11px;">Import Source</label>
+          <select id="bk-source" onchange="loadTxnTab('bank')">
+            <option value="all">All Imports</option>
+          </select>
+        </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="bk-date-from" style="font-size:11px;">Date from</label>
           <input type="date" id="bk-date-from" onchange="loadTxnTab('bank')" />

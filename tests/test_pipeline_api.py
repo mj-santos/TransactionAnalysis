@@ -39,7 +39,7 @@ def test_run_with_options_honors_supplied_run_id(monkeypatch, tmp_path: Path):
 
     supplied_run_id = "fixed-run-id"
 
-    def fake_create_run(_conn, run_id, _files_count, statement_type=None):
+    def fake_create_run(_conn, run_id, _files_count, statement_type=None, run_label=None):
         assert run_id == supplied_run_id
         raise RuntimeError("stop-after-assert")
 
@@ -387,3 +387,106 @@ def test_transaction_totals_endpoint(tmp_path: Path):
     tc = resp_cc.json()
     assert tc["row_count"] == 1
     assert tc["total_outflow"] == pytest.approx(200.0)
+
+
+# ---------------------------------------------------------------------------
+# GET /transactions/sources — Import Source dropdown population
+# ---------------------------------------------------------------------------
+
+def test_transactions_sources_endpoint(tmp_path: Path):
+    """GET /transactions/sources returns sources scoped by statement_type with counts."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "sources_test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    # Seed two runs
+    conn.execute(
+        "INSERT INTO runs (run_id, started_at, status, statement_type, run_label, files_count) VALUES "
+        "(?, NOW(), 'success', 'bank', 'Chase Checking', 1), "
+        "(?, NOW(), 'success', 'credit_card', 'Amex Platinum', 1)",
+        ["run_bank_01", "run_cc_01"],
+    )
+    # Seed transactions linked to runs
+    conn.execute(
+        "INSERT INTO transactions_norm "
+        "(transaction_date, description, amount, currency, bank_name, account_name, "
+        " account_id, source_file, source_row, file_hash, transaction_fingerprint, "
+        " statement_type, run_id) VALUES "
+        "(DATE '2024-01-01','Salary',1000.0,'USD','Chase','Checking','chk01','f.csv',1,'h1','fp1','bank','run_bank_01'),"
+        "(DATE '2024-01-02','Coffee',-5.0,'USD','Chase','Checking','chk01','f.csv',2,'h2','fp2','bank','run_bank_01'),"
+        "(DATE '2024-01-03','CC charge',-45.0,'USD','Amex','CC','cc01','f.csv',3,'h3','fp3','credit_card','run_cc_01')"
+    )
+    conn.close()
+
+    # bank sources — only bank run should appear
+    r = client.get("/transactions/sources?type=bank")
+    assert r.status_code == 200
+    sources = r.json()["sources"]
+    assert len(sources) == 1
+    assert sources[0]["id"] == "run_bank_01"
+    assert sources[0]["label"] == "Chase Checking"
+    assert sources[0]["count"] == 2
+
+    # credit_card sources — only CC run should appear (Feature 1 isolation)
+    r2 = client.get("/transactions/sources?type=credit_card")
+    assert r2.status_code == 200
+    sources2 = r2.json()["sources"]
+    assert len(sources2) == 1
+    assert sources2[0]["id"] == "run_cc_01"
+    assert sources2[0]["count"] == 1
+
+
+def test_transactions_source_filter(tmp_path: Path):
+    """GET /transactions?source=<run_id> returns only rows from that specific import."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "src_filter_test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO transactions_norm "
+        "(transaction_date, description, amount, currency, bank_name, account_name, "
+        " account_id, source_file, source_row, file_hash, transaction_fingerprint, "
+        " statement_type, run_id) VALUES "
+        "(DATE '2024-02-01','Run A txn 1',100.0,'USD','Bank','Chk','chk01','a.csv',1,'h1','fp1','bank','run_a'),"
+        "(DATE '2024-02-02','Run B txn 1',200.0,'USD','Bank','Chk','chk01','b.csv',2,'h2','fp2','bank','run_b')"
+    )
+    conn.close()
+
+    # source=run_a should only return the one row from run_a
+    r = client.get("/transactions?type=bank&source=run_a")
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["description"] == "Run A txn 1"
+
+    # source=all returns both rows
+    r2 = client.get("/transactions?type=bank&source=all")
+    assert r2.status_code == 200
+    assert r2.json()["count"] == 2
+
+    # totals scoped by source
+    r3 = client.get("/transactions/totals?type=bank&source=run_b")
+    assert r3.status_code == 200
+    assert r3.json()["total_income"] == pytest.approx(200.0)
+
+
+def test_transactions_sources_empty(tmp_path: Path):
+    """GET /transactions/sources with no matching data returns empty list."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "sources_empty.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    r = client.get("/transactions/sources?type=credit_card")
+    assert r.status_code == 200
+    assert r.json()["sources"] == []
