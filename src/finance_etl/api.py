@@ -45,6 +45,8 @@ try:
         suggestions:           Optional[dict]  = Field(None, description="Fuzzy-matched canonical-field suggestions {field: csv_header}")
         suggested_date_format: Optional[str]   = Field(None, description="Inferred strptime date format for the transaction date column")
         matched_profile:       Optional[dict]  = Field(None, description="Auto-detected wizard profile (if score ≥ threshold)")
+        preprocess_banner:     Optional[str]   = Field(None, description="Dismissible UI info text when non-standard format was auto-cleaned")
+        preprocess_metadata:   Optional[dict]  = Field(None, description="Statement metadata extracted from pre-header rows (Pattern 2)")
 
     class MappingInfo(BaseModel):
         name:    str  = Field(..., description="Mapping key (YAML stem)")
@@ -554,7 +556,24 @@ No cloud services, no external dependencies — all data stays on your machine.
                 raise HTTPException(status_code=400, detail="Uploaded file is empty.")
             dest.write_bytes(content)
 
-            # --- Extract headers + suggestions ---
+            # --- Smart CSV pre-processing (Pattern 1 + Pattern 2) ---
+            preprocess_result: dict = {"patterns_applied": [], "metadata": {}, "banner": None}
+            try:
+                from finance_etl.utils.csv_preprocess import preprocess_csv
+                preprocess_result = preprocess_csv(dest)
+                if preprocess_result.get("patterns_applied"):
+                    import logging as _logging
+                    _logging.getLogger("finance_etl.api").info(
+                        "CSV pre-processing applied to %s: %s",
+                        safe_original, preprocess_result["patterns_applied"],
+                    )
+            except Exception as pp_exc:
+                import logging as _logging
+                _logging.getLogger("finance_etl.api").warning(
+                    "CSV pre-processing failed (non-fatal) for %s: %s", safe_original, pp_exc
+                )
+
+            # --- Extract headers + suggestions (from the cleaned file) ---
             try:
                 from finance_etl.wizard_mapping import extract_csv_headers, find_matching_profile
                 header_info = extract_csv_headers(dest)
@@ -591,6 +610,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "suggestions":           header_info.get("suggestions"),
                 "suggested_date_format": header_info.get("suggested_date_format"),
                 "matched_profile":       matched_summary,
+                "preprocess_banner":     preprocess_result.get("banner"),
+                "preprocess_metadata":   preprocess_result.get("metadata") or {},
             }
         except HTTPException:
             raise

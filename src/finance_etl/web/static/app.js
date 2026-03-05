@@ -123,7 +123,6 @@ async function uploadFile(file) {
     state.uploadedFiles.push({ filename: data.filename, path: data.path, size: data.size, chipId });
     updateChip(chipId, 'done');
     toast(`${file.name} uploaded`, 'success', 2500);
-    checkImportReady();
     // Open the mapping wizard automatically after upload
     wizardOpen(data);
   } catch (err) {
@@ -155,112 +154,33 @@ function removeChip(id) {
   const el = document.getElementById(id);
   if (el) el.remove();
   state.uploadedFiles = state.uploadedFiles.filter(f => f.chipId !== id);
-  checkImportReady();
+  // FIX 2: removing the file mid-session also resets the wizard state
+  if (state.uploadedFiles.length === 0) {
+    _clearImportSession();
+  }
+}
+
+// ── FIX 2: Clear full import session state ─────────────────────
+// Called on wizard exit, chip removal (last file), and explicit reset.
+function _clearImportSession() {
+  state.uploadedFiles = [];
+  document.getElementById('file-chips').innerHTML = '';
+  // Reset file input so the same file can be re-uploaded
+  const fi = document.getElementById('file-input');
+  if (fi) fi.value = '';
+  // Hide preview panel
+  document.getElementById('preview-container').style.display = 'none';
+  // Discard any pending run poll (keeps the run-status display visible)
+  clearTimeout(state.pollTimer);
 }
 
 function resetImports() {
-  state.uploadedFiles = [];
-  clearTimeout(state.pollTimer);
+  _clearImportSession();
   state.currentRunId = null;
-  document.getElementById('file-chips').innerHTML = '';
-  document.getElementById('run-status').className = 'run-status'; // hide (no 'visible')
+  document.getElementById('run-status').className = 'run-status'; // hide
   document.getElementById('rs-counts').innerHTML = '';
   document.getElementById('rs-actions').innerHTML = '';
-  document.getElementById('preview-container').style.display = 'none';
-  checkImportReady();
   toast('Import reset — upload a new file to start again.', 'info', 2500);
-}
-
-// ── Mappings ────────────────────────────────────────────────
-async function loadMappings() {
-  const sel = document.getElementById('mapping-select');
-  try {
-    const data = await api('GET', '/mappings');
-    sel.innerHTML = '<option value="">— Select a bank mapping —</option>';
-    data.mappings.forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m.path;
-      opt.textContent = m.label + (m.example ? ' (example)' : '');
-      sel.appendChild(opt);
-    });
-  } catch {
-    sel.innerHTML = '<option value="">Failed to load mappings</option>';
-  }
-  sel.addEventListener('change', checkImportReady);
-}
-
-// ── Statement type helper ─────────────────────────────────────
-function getStatementType() {
-  const sel = document.querySelector('input[name="statement-type"]:checked');
-  return sel ? sel.value : null;
-}
-
-// ── Import button guard ──────────────────────────────────────
-function checkImportReady() {
-  const customHeaders = !!(document.getElementById('custom-headers-toggle')?.checked);
-  const mappingSelect = document.getElementById('mapping-select');
-  mappingSelect.disabled = customHeaders;
-
-  const hasFiles   = state.uploadedFiles.some(f => {
-    const chip = document.getElementById(f.chipId);
-    return chip && chip.classList.contains('done');
-  });
-  const hasMapping     = customHeaders || !!mappingSelect.value;
-  // Feature 1: statement_type is required — block import until selected
-  const hasStmtType    = !!getStatementType();
-  const errEl          = document.getElementById('statement-type-error');
-  if (errEl) errEl.style.display = 'none';
-
-  const btn  = document.getElementById('import-btn');
-  const hint = document.getElementById('import-hint');
-  btn.disabled = !(hasFiles && hasMapping && hasStmtType);
-  if (!hasFiles && !hasMapping) hint.textContent = 'Upload a file and select a mapping to continue.';
-  else if (!hasFiles)           hint.textContent = 'Upload a CSV file to continue.';
-  else if (!hasMapping)         hint.textContent = 'Select a bank mapping to continue.';
-  else if (!hasStmtType)        hint.textContent = 'Select a statement type (Credit Card or Bank) to continue.';
-  else if (customHeaders)       hint.textContent = 'Complete the mapping wizard after uploading.';
-  else                          hint.textContent = '';
-}
-
-// ── Start import ─────────────────────────────────────────────
-async function startImport() {
-  const inputs      = state.uploadedFiles.filter(f => {
-    const chip = document.getElementById(f.chipId);
-    return chip && chip.classList.contains('done');
-  }).map(f => f.path);
-
-  const mappingPath   = document.getElementById('mapping-select').value;
-  const previewOnly   = document.getElementById('preview-toggle').checked;
-  // Feature 1: statement_type is required — block if not selected
-  const statementType = getStatementType();
-
-  if (!inputs.length || !mappingPath) return;
-
-  if (!statementType) {
-    const errEl = document.getElementById('statement-type-error');
-    if (errEl) errEl.style.display = 'block';
-    toast('Please select a statement type (Credit Card or Bank).', 'error');
-    return;
-  }
-
-  document.getElementById('import-btn').disabled = true;
-  setRunStatus('pending', null, null, 'Queuing…');
-
-  try {
-    const data = await api('POST', '/runs', {
-      inputs,
-      mapping_path:   mappingPath,
-      preview_only:   previewOnly,
-      statement_type: statementType,  // Feature 1
-    });
-    state.currentRunId = data.run_id;
-    setRunStatus('pending', data.run_id, null, 'Queued — starting pipeline…');
-    pollRun(data.run_id, onRunComplete);
-  } catch (err) {
-    setRunStatus('failed', null, null, `Error: ${err.message}`);
-    toast(err.message, 'error');
-    document.getElementById('import-btn').disabled = false;
-  }
 }
 
 // ── Poll run status ──────────────────────────────────────────
@@ -294,10 +214,8 @@ function pollRun(runId, cb, interval = 1500) {
 function onRunComplete(run) {
   if (run.status === 'success') {
     toast('Import complete!', 'success');
-    document.getElementById('import-btn').disabled = false;
   } else if (run.status === 'failed') {
     toast(`Import failed: ${run.error || '(unknown error)'}`, 'error');
-    document.getElementById('import-btn').disabled = false;
     maybeShowLogsOnError();
   }
 }
@@ -859,9 +777,12 @@ function esc(str) {
 }
 
 // ── Boot ───────────────────────────────────────────────────────
-loadMappings();
 loadSettings();
-document.getElementById('custom-headers-toggle')?.addEventListener('change', checkImportReady);
+// FIX 3: ensure custom-headers checkbox is always checked on page load
+(function() {
+  const tog = document.getElementById('custom-headers-toggle');
+  if (tog) tog.checked = true;
+})();
 
 // ═══════════════════════════════════════════════════════════════
 //  MAPPING WIZARD
@@ -930,8 +851,11 @@ function wizardOpen(uploadInfo) {
     wizard.suggestedDateFormat = uploadInfo.suggested_date_format;
   }
 
-  // Custom headers: read checkbox state and merge persisted headers from matched profile
-  wizard.includeCustomHeaders = !!(document.getElementById('custom-headers-toggle')?.checked);
+  // FIX 3: custom-headers is always on — always include custom headers
+  // Ensure the checkbox is also visually checked
+  const _tog = document.getElementById('custom-headers-toggle');
+  if (_tog) _tog.checked = true;
+  wizard.includeCustomHeaders = true;
   const profCustom = uploadInfo.matched_profile?.custom_headers || [];
   if (profCustom.length) {
     const seen = new Set(wizard.customHeadersSelected.map(h => h.toLowerCase()));
@@ -950,17 +874,23 @@ function wizardClose() {
   // Re-enable main preview toggle (wizard step 3 may have locked it)
   const mainTog = document.getElementById('preview-toggle');
   if (mainTog) mainTog.disabled = false;
-  // Reset for next upload session
-  wizard.files              = [];
-  wizard.headers            = [];
-  wizard.suggestions          = {};
-  wizard.matchedProfile       = null;
-  wizard.mapping              = {};
-  wizard.canonicalFields      = [];
-  wizard.canonicalLabels      = {};
-  wizard.suggestedDateFormat  = null;
-  wizard.includeCustomHeaders = false;
+  // FIX 2: clear all upload session state so the user starts fresh on next open
+  _clearImportSession();
+  // Reset wizard state for next session
+  wizard.files               = [];
+  wizard.headers             = [];
+  wizard.suggestions         = {};
+  wizard.matchedProfile      = null;
+  wizard.mapping             = {};
+  wizard.canonicalFields     = [];
+  wizard.canonicalLabels     = {};
+  wizard.suggestedDateFormat = null;
+  // FIX 3: always reset to true so next wizard open shows custom-headers panel
+  wizard.includeCustomHeaders  = true;
   wizard.customHeadersSelected = [];
+  // FIX 3: keep the checkbox checked for the next upload
+  const tog = document.getElementById('custom-headers-toggle');
+  if (tog) tog.checked = true;
 }
 
 // ── Navigation ────────────────────────────────────────────────
@@ -1059,6 +989,23 @@ async function wizardNext() {
 // ── Step 1 render ─────────────────────────────────────────────
 
 function renderWizardStep1() {
+  // Pre-processing banner — shown when auto-clean was applied to the CSV
+  const ppBannerEl = document.getElementById('w-preprocess-banner');
+  if (ppBannerEl) {
+    const lastFile = wizard.files[wizard.files.length - 1] || {};
+    if (lastFile.preprocess_banner) {
+      ppBannerEl.innerHTML = `
+        <div class="auto-detect-banner nomatch" id="w-pp-banner-inner" style="background:#f0f9ff; border-color:#7dd3fc; color:#0369a1;">
+          <span style="font-size:18px">ℹ️</span>
+          <div style="flex:1">${esc(lastFile.preprocess_banner)}</div>
+          <button style="background:none;border:none;cursor:pointer;color:#0369a1;font-size:16px;padding:0 4px;"
+                  onclick="document.getElementById('w-pp-banner-inner').closest('.auto-detect-banner').remove()">&times;</button>
+        </div>`;
+    } else {
+      ppBannerEl.innerHTML = '';
+    }
+  }
+
   // Auto-detect banner
   const banner = document.getElementById('w-detect-banner');
   if (wizard.matchedProfile) {

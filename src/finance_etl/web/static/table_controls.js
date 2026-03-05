@@ -12,7 +12,8 @@
 'use strict';
 
 /**
- * Build and manage an Import Source radio-button dropdown widget.
+ * Build and manage an Import Source dropdown widget.
+ * High-contrast solid-background panel, keyboard navigable.
  *
  * @param {string}   containerId  ID of the <div> that receives the widget
  * @param {string}   type         'credit_card' or 'bank' (Feature 1: never mixed)
@@ -27,18 +28,18 @@ function makeSourceDropdown(containerId, type, onChange) {
   }
 
   // ── Internal state ────────────────────────────────────────
-  let _selected = 'all';   // run_id or 'all'
-  let _open     = false;
+  let _selected   = 'all';   // run_id or 'all'
+  let _open       = false;
+  let _focusIdx   = -1;      // keyboard-focused option index (-1 = none)
+  let _optionEls  = [];      // ordered list of .source-option elements
 
   // ── DOM structure ─────────────────────────────────────────
-  // [▼ Display All] trigger button
   const trigger = document.createElement('button');
   trigger.type      = 'button';
   trigger.className = 'source-trigger';
   trigger.setAttribute('aria-haspopup', 'listbox');
   trigger.setAttribute('aria-expanded', 'false');
 
-  // Hidden panel with radio inputs
   const panel = document.createElement('div');
   panel.className = 'source-panel';
   panel.setAttribute('role', 'listbox');
@@ -49,11 +50,11 @@ function makeSourceDropdown(containerId, type, onChange) {
 
   // ── Helpers ───────────────────────────────────────────────
   function _updateTrigger(label) {
-    trigger.textContent = '';
+    trigger.innerHTML = '';
+    trigger.appendChild(document.createTextNode(label));
     const arrow = document.createElement('span');
-    arrow.className  = 'source-arrow';
-    arrow.textContent = _open ? '▲' : '▼';
-    trigger.appendChild(document.createTextNode(label + ' '));
+    arrow.className   = 'source-arrow';
+    arrow.textContent = '▼';
     trigger.appendChild(arrow);
     trigger.setAttribute('aria-expanded', String(_open));
   }
@@ -61,24 +62,34 @@ function makeSourceDropdown(containerId, type, onChange) {
   function _openPanel() {
     _open = true;
     panel.style.display = 'block';
+    _focusIdx = _optionEls.findIndex(el => el.dataset.value === _selected);
+    _applyFocus(_focusIdx);
     _updateTrigger(_labelFor(_selected));
   }
 
   function _closePanel() {
     _open = false;
     panel.style.display = 'none';
+    _focusIdx = -1;
+    _optionEls.forEach(el => el.classList.remove('focused'));
     _updateTrigger(_labelFor(_selected));
+    trigger.focus();
   }
 
   function _labelFor(val) {
-    if (val === 'all') return 'All Imports';
-    const radio = panel.querySelector(`input[value="${CSS.escape(val)}"]`);
-    return radio ? radio.dataset.label : val;
+    const opt = _optionEls.find(el => el.dataset.value === val);
+    return opt ? opt.dataset.label : 'All Imports';
+  }
+
+  function _applyFocus(idx) {
+    _optionEls.forEach((el, i) => el.classList.toggle('focused', i === idx));
+    if (idx >= 0 && idx < _optionEls.length) {
+      _optionEls[idx].scrollIntoView({ block: 'nearest' });
+    }
   }
 
   function _selectValue(val) {
     _selected = val;
-    // Sync radio checked state
     panel.querySelectorAll('input[type="radio"]').forEach(r => {
       r.checked = (r.value === val);
     });
@@ -89,10 +100,11 @@ function makeSourceDropdown(containerId, type, onChange) {
   // ── Render radio list ─────────────────────────────────────
   function _renderOptions(sources) {
     panel.innerHTML = '';
+    _optionEls = [];
 
-    // "Display All" is always the first and always present
-    const allOpt = _makeRadio('all', 'All Imports', '', 0);
+    const allOpt = _makeOption('all', 'All Imports', '', 0);
     panel.appendChild(allOpt);
+    _optionEls.push(allOpt);
 
     if (!sources.length) {
       const empty = document.createElement('div');
@@ -106,7 +118,6 @@ function makeSourceDropdown(containerId, type, onChange) {
 
     trigger.disabled = false;
 
-    // Track labels to detect duplicates — append date when label repeats
     const labelCounts = {};
     sources.forEach(s => { labelCounts[s.label] = (labelCounts[s.label] || 0) + 1; });
 
@@ -115,15 +126,15 @@ function makeSourceDropdown(containerId, type, onChange) {
       const datePart = dateStr
         ? new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })
         : '';
-      // Disambiguate duplicate labels by appending date
       const displayLabel = labelCounts[src.label] > 1 && datePart
         ? `${src.label} (${datePart})`
         : src.label;
 
-      panel.appendChild(_makeRadio(src.id, displayLabel, datePart, src.count));
+      const opt = _makeOption(src.id, displayLabel, datePart, src.count);
+      panel.appendChild(opt);
+      _optionEls.push(opt);
     });
 
-    // Restore previously-selected value if it still exists, otherwise reset to 'all'
     const validValues = new Set(['all', ...sources.map(s => s.id)]);
     if (!validValues.has(_selected)) _selected = 'all';
     panel.querySelectorAll('input[type="radio"]').forEach(r => {
@@ -132,38 +143,49 @@ function makeSourceDropdown(containerId, type, onChange) {
     _updateTrigger(_labelFor(_selected));
   }
 
-  function _makeRadio(val, label, dateStr, count) {
-    const row   = document.createElement('label');
-    row.className = 'source-option';
+  function _makeOption(val, label, dateStr, count) {
+    const row = document.createElement('label');
+    row.className      = 'source-option';
+    row.dataset.value  = val;
+    row.dataset.label  = label;
+    row.setAttribute('role', 'option');
 
     const radio = document.createElement('input');
-    radio.type          = 'radio';
-    radio.name          = `src-${containerId}`;
-    radio.value         = val;
-    radio.dataset.label = label;
-    radio.checked       = (val === _selected);
+    radio.type    = 'radio';
+    radio.name    = `src-${containerId}`;
+    radio.value   = val;
+    radio.checked = (val === _selected);
     radio.addEventListener('change', () => { if (radio.checked) _selectValue(val); });
 
-    const text = document.createElement('span');
-    text.className = 'source-option-label';
-    text.textContent = label;
+    // Content wrapper: bold label + small muted meta row
+    const content = document.createElement('span');
+    content.className = 'source-option-content';
+
+    const labelEl = document.createElement('span');
+    labelEl.className   = 'source-option-label';
+    labelEl.textContent = label;
+    content.appendChild(labelEl);
+
+    if (count > 0 || dateStr) {
+      const meta = document.createElement('span');
+      meta.className = 'source-option-meta';
+      if (count > 0) {
+        const cnt = document.createElement('span');
+        cnt.className   = 'source-option-count';
+        cnt.textContent = `${count} txns`;
+        meta.appendChild(cnt);
+      }
+      if (dateStr) {
+        const dt = document.createElement('span');
+        dt.className   = 'source-option-date';
+        dt.textContent = dateStr;
+        meta.appendChild(dt);
+      }
+      content.appendChild(meta);
+    }
 
     row.appendChild(radio);
-    row.appendChild(text);
-
-    if (count > 0) {
-      const cnt = document.createElement('span');
-      cnt.className   = 'source-option-count';
-      cnt.textContent = `${count} txns`;
-      row.appendChild(cnt);
-    }
-    if (dateStr) {
-      const dt = document.createElement('span');
-      dt.className   = 'source-option-date';
-      dt.textContent = dateStr;
-      row.appendChild(dt);
-    }
-
+    row.appendChild(content);
     return row;
   }
 
@@ -173,9 +195,49 @@ function makeSourceDropdown(containerId, type, onChange) {
     _open ? _closePanel() : _openPanel();
   });
 
-  // ── Close on outside click ───────────────────────────────
+  // ── Keyboard navigation ───────────────────────────────────
+  trigger.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (!_open) _openPanel();
+      else {
+        _focusIdx = Math.min(_focusIdx + 1, _optionEls.length - 1);
+        _applyFocus(_focusIdx);
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (_open) { _focusIdx = Math.max(_focusIdx - 1, 0); _applyFocus(_focusIdx); }
+    } else if (e.key === 'Escape') {
+      _closePanel();
+    }
+  });
+
+  panel.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _focusIdx = Math.min(_focusIdx + 1, _optionEls.length - 1);
+      _applyFocus(_focusIdx);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _focusIdx = Math.max(_focusIdx - 1, 0);
+      _applyFocus(_focusIdx);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (_focusIdx >= 0 && _focusIdx < _optionEls.length) {
+        _selectValue(_optionEls[_focusIdx].dataset.value);
+      }
+    } else if (e.key === 'Escape') {
+      _closePanel();
+    }
+  });
+
+  // ── Close on outside click or Escape ─────────────────────
   document.addEventListener('click', e => {
     if (_open && !container.contains(e.target)) _closePanel();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && _open) _closePanel();
   });
 
   // ── Public API ────────────────────────────────────────────
