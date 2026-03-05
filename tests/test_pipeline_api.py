@@ -786,3 +786,191 @@ def test_wizard_to_pipeline_threads_amount_debit_credit():
         "amount_cfg must carry amount_debit CSV column"
     assert result["amount"].get("amount_credit") == "Credit", \
         "amount_cfg must carry amount_credit CSV column"
+
+
+# ===========================================================================
+# FEATURE — Smart CSV Pre-Processing
+# ===========================================================================
+
+def _write_csv(path: Path, content: str) -> Path:
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+class TestCsvPreprocessing:
+    """Tests for finance_etl.utils.csv_preprocess.preprocess_csv"""
+
+    def test_clean_csv_passes_through_unchanged(self, tmp_path: Path):
+        """A standard well-formed CSV must not be modified at all."""
+        from finance_etl.utils.csv_preprocess import preprocess_csv
+
+        csv_path = _write_csv(
+            tmp_path / "clean.csv",
+            "Date,Description,Amount\n2026-01-01,Amazon Prime,29.99\n2026-01-05,Netflix,15.99\n",
+        )
+        original_text = csv_path.read_text()
+
+        result = preprocess_csv(csv_path)
+
+        assert result["patterns_applied"] == [], "Clean CSV must not trigger any patterns"
+        assert result["banner"] is None, "Clean CSV must not produce a UI banner"
+        assert csv_path.read_text() == original_text, "Clean CSV file must not be modified"
+
+    def test_pattern1_single_line_header_echo(self, tmp_path: Path):
+        """
+        Pattern 1: cell value equals the column header exactly.
+        The cell should be cleared (or the header stripped).
+        """
+        from finance_etl.utils.csv_preprocess import preprocess_csv
+
+        # First data row has cells that ARE the header name
+        csv_path = _write_csv(
+            tmp_path / "echo_single.csv",
+            "Date,Description,Amount\nDate,Description,Amount\n2026-01-01,Amazon,29.99\n",
+        )
+
+        result = preprocess_csv(csv_path)
+
+        assert any("Date" in p for p in result["patterns_applied"]), \
+            "Pattern 1 must be detected for the Date column"
+        assert result["banner"] is not None
+
+        rows = list(__import__("csv").reader(csv_path.open()))
+        # After stripping, the first data row should not look like the header row
+        assert rows[1] != rows[0], "First data row must differ from header after stripping"
+
+    def test_pattern1_multiline_header_echo(self, tmp_path: Path):
+        """
+        Pattern 1: cell contains 'Header\\nActual Value' — only the header prefix
+        should be stripped; the actual value must be preserved.
+        """
+        from finance_etl.utils.csv_preprocess import preprocess_csv
+        import csv as _csv
+
+        # Build CSV with embedded newlines using quoting
+        rows = [
+            ["Date", "Description", "Amount"],
+            ["Date\nFeb 12 2026", "Description\nAMAZON PRIME CONS\nSEATTLE WA", "29.99"],
+            ["Feb 13 2026", "Netflix", "15.99"],
+        ]
+        csv_path = tmp_path / "echo_multiline.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+            _csv.writer(fh).writerows(rows)
+
+        result = preprocess_csv(csv_path)
+
+        assert any("Date" in p for p in result["patterns_applied"]), \
+            "Pattern 1 must be detected for Date column"
+        assert any("Description" in p for p in result["patterns_applied"]), \
+            "Pattern 1 must be detected for Description column"
+
+        cleaned = list(_csv.reader(open(csv_path, newline="", encoding="utf-8")))
+        # Header row intact
+        assert cleaned[0] == ["Date", "Description", "Amount"]
+        # First data row: Date column stripped to just the date part
+        assert "Feb 12 2026" in cleaned[1][0], \
+            f"Date value must be preserved after stripping; got: {cleaned[1][0]!r}"
+        # Description: first sub-line label removed, rest joined
+        assert "AMAZON PRIME CONS" in cleaned[1][1], \
+            f"Description value must be preserved after stripping; got: {cleaned[1][1]!r}"
+        assert "Description" not in cleaned[1][1], \
+            "Header label 'Description' must be removed from the cell value"
+
+    def test_pattern2_metadata_rows_detected_and_discarded(self, tmp_path: Path):
+        """
+        Pattern 2: bank metadata rows above the real header are discarded.
+        The header is identified by canonical field synonym matching.
+        """
+        from finance_etl.utils.csv_preprocess import preprocess_csv
+        import csv as _csv
+
+        csv_content = (
+            "Barclays Bank Delaware\n"
+            "Account Number: XXXX1234\n"
+            "Account Balance as of Feb 2026,1234.56\n"
+            "\n"
+            "Transaction Date,Description,Category,Amount\n"
+            "2026-02-12,AMAZON PRIME,Shopping,-14.99\n"
+            "2026-02-14,NETFLIX,Entertainment,-15.99\n"
+        )
+        csv_path = _write_csv(tmp_path / "barclays.csv", csv_content)
+
+        result = preprocess_csv(csv_path)
+
+        assert any("metadata" in p.lower() or "skipped" in p.lower()
+                   for p in result["patterns_applied"]), \
+            f"Pattern 2 must be detected; patterns_applied={result['patterns_applied']}"
+
+        # Real header must be the first row in the cleaned file
+        cleaned_rows = list(_csv.reader(open(csv_path, newline="", encoding="utf-8")))
+        assert cleaned_rows[0][0] in ("Transaction Date", "transaction date"), \
+            f"First row of cleaned file must be the real header; got: {cleaned_rows[0]}"
+
+        # Data rows must remain
+        assert len(cleaned_rows) >= 3, "Transaction rows must be preserved"
+
+        # statement_meta must capture pre-header metadata
+        assert result["metadata"], "statement_meta must not be empty when metadata rows exist"
+        assert result["banner"] is not None, "A UI banner must be produced for Pattern 2"
+
+    def test_statement_meta_captured_not_lost(self, tmp_path: Path):
+        """
+        Pre-header metadata (bank name, account number) must appear in
+        result['metadata'] — not silently discarded.
+        """
+        from finance_etl.utils.csv_preprocess import preprocess_csv
+
+        csv_content = (
+            "MyBank\n"
+            "Account Number,12345678\n"
+            "Date,Description,Amount\n"
+            "2026-01-01,Coffee,-4.50\n"
+        )
+        csv_path = _write_csv(tmp_path / "meta.csv", csv_content)
+
+        result = preprocess_csv(csv_path)
+
+        meta = result["metadata"]
+        assert meta, "metadata must be non-empty when pre-header rows exist"
+        # The bank name row ('MyBank') should appear in some form
+        has_bank_name = any("MyBank" in str(v) for v in meta.values())
+        assert has_bank_name, f"Bank name must be in statement_meta; got: {meta}"
+
+    def test_pattern2_via_upload_endpoint(self, tmp_path: Path):
+        """
+        Integration: POST /upload on a Barclays-style CSV must return a
+        preprocess_banner and the headers from the real header row (not metadata rows).
+        """
+        from fastapi.testclient import TestClient
+        from finance_etl.api import create_app
+        import io
+
+        db_path = tmp_path / "pp_test.duckdb"
+        upload_dir = tmp_path / "uploads"
+        app = create_app(db_path=str(db_path), upload_dir=str(upload_dir))
+        client = TestClient(app)
+
+        csv_content = (
+            "Barclays Bank Delaware\n"
+            "Account Number: XXXX9999\n"
+            "\n"
+            "Transaction Date,Description,Amount\n"
+            "2026-02-01,Starbucks,-5.75\n"
+        ).encode()
+
+        res = client.post(
+            "/upload",
+            files={"file": ("barclays.csv", io.BytesIO(csv_content), "text/csv")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+
+        assert body.get("preprocess_banner"), \
+            "Upload response must include preprocess_banner for Barclays-style CSV"
+        # Headers must be from the real header row
+        headers = body.get("headers", [])
+        assert any("date" in h.lower() for h in headers), \
+            f"Real header row must be detected; got headers={headers}"
+        # Metadata row strings must NOT appear as headers
+        assert not any("barclays" in h.lower() for h in headers), \
+            f"Metadata strings must not appear as headers; got headers={headers}"
