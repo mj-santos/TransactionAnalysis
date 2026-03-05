@@ -16,7 +16,11 @@
       "Bash(.venv/bin/pip install:*)",
       "Bash(.venv/bin/pip list:*)",
       "Bash(lsof:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(git push -u origin claude/automated-header-mapping-eTNAw)",
+      "Bash(git add .claude/settings.local.json)",
+      "Bash(git commit -m \"chore: update local claude settings:*)"
     ]
   }
 }
