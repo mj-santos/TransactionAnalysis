@@ -86,7 +86,7 @@ CANONICAL_FIELDS: list[str] = [
     # ── Shared optional metadata ───────────────────────────────────────────
     "description",
     "posted_date",
-    "merchant",
+    # "merchant" intentionally omitted — populated by merchant_rules engine
     "category",
     "account",
     "notes",
@@ -111,7 +111,7 @@ _RETIRED_FIELD_NAMES: set[str] = {"amount", "amount_debit", "amount_credit"}
 CC_CANONICAL_FIELDS: list[str] = [
     "transaction_date",
     "cc_amount", "cc_charge", "cc_payment",
-    "description", "posted_date", "merchant", "category", "account", "notes", "currency",
+    "description", "posted_date", "category", "account", "notes", "currency",
 ]
 
 BANK_CANONICAL_FIELDS: list[str] = [
@@ -120,7 +120,7 @@ BANK_CANONICAL_FIELDS: list[str] = [
     "debit_amount", "credit_amount",
     "money_in", "money_out",
     "dc_flag",
-    "description", "posted_date", "merchant", "category", "account", "notes", "currency",
+    "description", "posted_date", "category", "account", "notes", "currency",
 ]
 
 REQUIRED_FIELDS: set[str] = {"transaction_date"}

@@ -45,6 +45,7 @@ function navigate(page) {
     'credit-cards':     'Credit Card Transactions',
     'bank-transactions':'Bank Transactions',
     reports:            'Analytics Reports',
+    'merchant-rules':   'Merchant Rules & Categories',
     settings:           'Settings & Logs',
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
@@ -54,6 +55,7 @@ function navigate(page) {
   if (page === 'settings')           loadSettings();
   if (page === 'credit-cards')       loadTxnTab('credit_card');
   if (page === 'bank-transactions')  loadTxnTab('bank');
+  if (page === 'merchant-rules')     { loadMerchantRules(); loadUncategorized(); }
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -334,38 +336,56 @@ function discardRun(runId) {
 // ── History page ─────────────────────────────────────────────
 async function loadHistory() {
   const tbody = document.getElementById('history-tbody');
-  tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:32px">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted" style="padding:32px">Loading…</td></tr>';
 
   try {
     const data = await api('GET', '/runs');
     if (!data.runs.length) {
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:32px">No runs yet. Import some transactions first.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted" style="padding:32px">No runs yet. Import some transactions first.</td></tr>';
       return;
     }
     tbody.innerHTML = data.runs.map(r => {
       const status = r.status || 'unknown';
       const badge  = `<span class="badge badge-${status}">${status}</span>`;
-      const actions = [];
-      if (['staged'].includes(status)) {
-        actions.push(`<button class="btn btn-secondary btn-sm" onclick="showHistoryPreview('${r.run_id}')">👁 Preview</button>`);
-        actions.push(`<button class="btn btn-success btn-sm" onclick="commitRunFromHistory('${r.run_id}')">Commit</button>`);
+      const isNorm = r.type === 'normalize';
+
+      // IMPORTED FILE cell
+      let importedCell;
+      if (isNorm) {
+        importedCell = `<span style="font-size:11px; color:var(--text-muted);">↻ Re-normalize</span>`;
       } else {
-        actions.push(`<button class="btn btn-secondary btn-sm" onclick="showHistoryPreview('${r.run_id}')">👁 View</button>`);
+        importedCell = r.imported_file
+          ? `<span style="font-size:12px;" title="${esc(r.imported_file)}">${esc(r.imported_file)}</span>`
+          : `<span style="color:var(--text-muted); font-size:11px;">—</span>`;
       }
-      actions.push(`<button class="btn btn-danger btn-sm" onclick="showDeleteModal('${r.run_id}')">🗑 Delete</button>`);
-      return `<tr>
-        <td class="mono">${esc(r.run_id)}</td>
+
+      // Actions
+      const actions = [];
+      if (!isNorm) {
+        if (status === 'staged') {
+          actions.push(`<button class="btn btn-secondary btn-sm" onclick="showHistoryPreview('${r.run_id}')">👁 Preview</button>`);
+          actions.push(`<button class="btn btn-success btn-sm" onclick="commitRunFromHistory('${r.run_id}')">Commit</button>`);
+        } else {
+          actions.push(`<button class="btn btn-secondary btn-sm" onclick="showHistoryPreview('${r.run_id}')">👁 View</button>`);
+        }
+        actions.push(`<button class="btn btn-danger btn-sm" onclick="showDeleteModal('${r.run_id}')">🗑 Delete</button>`);
+      }
+
+      const rowClass = isNorm ? 'style="background:var(--bg-alt, #f8faff);"' : '';
+      return `<tr ${rowClass}>
+        <td class="mono" style="font-size:11px;">${esc(r.run_id)}</td>
+        <td>${importedCell}</td>
         <td>${fmtDate(r.started_at)}</td>
         <td>${badge}</td>
-        <td class="text-right">${fmt(r.rows_in)}</td>
-        <td class="text-right">${fmt(r.rows_staged)}</td>
-        <td class="text-right">${fmt(r.rows_loaded)}</td>
-        <td class="text-right ${r.errors_count > 0 ? 'text-danger' : ''}">${fmt(r.errors_count)}</td>
+        <td class="text-right">${isNorm ? fmt(r.rows_total) : fmt(r.rows_in)}</td>
+        <td class="text-right">${isNorm ? fmt(r.rows_done) : fmt(r.rows_staged)}</td>
+        <td class="text-right">${isNorm ? '—' : fmt(r.rows_loaded)}</td>
+        <td class="text-right ${!isNorm && r.errors_count > 0 ? 'text-danger' : ''}">${isNorm ? '—' : fmt(r.errors_count)}</td>
         <td><div style="display:flex;gap:6px">${actions.join('')}</div></td>
       </tr>`;
     }).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
   }
 }
 
@@ -1822,3 +1842,229 @@ function _renderTxnBody(p, rows, cols, append) {
 
 // _renderTxnTfoot has been extracted to table_controls.js as renderTxnTotals().
 // See table_controls.js for the implementation with proper labeled column cells.
+
+
+// ── Merchant Rules page ───────────────────────────────────────
+
+let _editingRuleId = null; // null = creating new rule
+
+async function loadMerchantRules() {
+  const tbody = document.getElementById('merchant-rules-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px">Loading…</td></tr>';
+  try {
+    const data = await api('GET', '/merchant-rules');
+    if (!data.rules.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px">No rules yet. Click "+ Add Rule" to create one.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.rules.map(r => `<tr>
+      <td class="text-right">${esc(String(r.priority))}</td>
+      <td><span class="badge badge-running" style="font-size:11px;">${esc(r.match_type)}</span></td>
+      <td class="mono" style="font-size:12px;">${esc(r.pattern)}</td>
+      <td>${esc(r.merchant)}</td>
+      <td>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="openRuleForm(${r.id})">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteRule(${r.id})">Delete</button>
+        </div>
+      </td>
+    </tr>`).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+  }
+}
+
+function openRuleForm(ruleId) {
+  _editingRuleId = ruleId;
+  const card = document.getElementById('rule-form-card');
+  const title = document.getElementById('rule-form-title');
+  card.style.display = '';
+  title.textContent = ruleId ? 'Edit Rule' : 'Add Rule';
+
+  if (!ruleId) {
+    // Reset form for new rule
+    document.getElementById('rf-match-type').value = 'contains';
+    document.getElementById('rf-priority').value = '0';
+    document.getElementById('rf-pattern').value = '';
+    document.getElementById('rf-merchant').value = '';
+    document.getElementById('rf-test-result').textContent = '';
+    document.getElementById('rf-test-matches').style.display = 'none';
+    return;
+  }
+
+  // Populate for edit — fetch existing values from rendered row
+  // (simpler than a separate GET endpoint; values were just loaded)
+  const rows = document.querySelectorAll('#merchant-rules-tbody tr');
+  // We need to find the rule row that triggered this. Use data from the DOM.
+  // Since we pass ruleId directly, we can re-fetch or pass the data inline.
+  // For simplicity, refetch the rules list to get the data for this id.
+  api('GET', '/merchant-rules').then(data => {
+    const rule = data.rules.find(r => r.id === ruleId);
+    if (!rule) return;
+    document.getElementById('rf-match-type').value = rule.match_type;
+    document.getElementById('rf-priority').value = String(rule.priority);
+    document.getElementById('rf-pattern').value = rule.pattern;
+    document.getElementById('rf-merchant').value = rule.merchant;
+    document.getElementById('rf-test-result').textContent = '';
+    document.getElementById('rf-test-matches').style.display = 'none';
+  });
+}
+
+function closeRuleForm() {
+  _editingRuleId = null;
+  document.getElementById('rule-form-card').style.display = 'none';
+}
+
+async function saveRule() {
+  const body = {
+    match_type: document.getElementById('rf-match-type').value,
+    priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
+    pattern:    document.getElementById('rf-pattern').value.trim(),
+    merchant:   document.getElementById('rf-merchant').value.trim(),
+  };
+  if (!body.pattern || !body.merchant) {
+    toast('Pattern and Merchant are required.', 'error');
+    return;
+  }
+  try {
+    if (_editingRuleId) {
+      await api('PUT', `/merchant-rules/${_editingRuleId}`, body);
+      toast('Rule updated.', 'success');
+    } else {
+      await api('POST', '/merchant-rules', body);
+      toast('Rule created.', 'success');
+    }
+    closeRuleForm();
+    loadMerchantRules();
+  } catch (err) {
+    toast(`Failed to save rule: ${err.message}`, 'error');
+  }
+}
+
+async function deleteRule(ruleId) {
+  if (!confirm('Delete this merchant rule?')) return;
+  try {
+    await api('DELETE', `/merchant-rules/${ruleId}`);
+    toast('Rule deleted.', 'success');
+    loadMerchantRules();
+  } catch (err) {
+    toast(`Failed to delete rule: ${err.message}`, 'error');
+  }
+}
+
+async function testRule() {
+  const resultEl = document.getElementById('rf-test-result');
+  const matchesEl = document.getElementById('rf-test-matches');
+  resultEl.textContent = 'Testing…';
+  matchesEl.style.display = 'none';
+
+  const body = {
+    match_type: document.getElementById('rf-match-type').value,
+    priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
+    pattern:    document.getElementById('rf-pattern').value.trim(),
+    merchant:   document.getElementById('rf-merchant').value.trim() || 'Test',
+  };
+  if (!body.pattern) {
+    resultEl.textContent = 'Enter a pattern first.';
+    return;
+  }
+  try {
+    const data = await api('POST', '/merchant-rules/test', body);
+    if (!data.matches.length) {
+      resultEl.textContent = `No matches found in ${data.total_sampled} sampled descriptions.`;
+    } else {
+      resultEl.textContent = `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} (of ${data.total_sampled} sampled):`;
+      matchesEl.innerHTML = data.matches.map(m => `<div>${esc(m)}</div>`).join('');
+      matchesEl.style.display = '';
+    }
+  } catch (err) {
+    resultEl.textContent = `Error: ${err.message}`;
+  }
+}
+
+// ── Re-normalization ──────────────────────────────────────────
+
+let _renormJobId = null;
+let _renormPollInterval = null;
+
+async function startRenormalize() {
+  if (!confirm('Re-apply all merchant rules to every transaction in the ledger? This may take a moment.')) return;
+  const statusEl = document.getElementById('renorm-status');
+  statusEl.textContent = 'Starting…';
+  try {
+    const data = await api('POST', '/normalize/apply');
+    _renormJobId = data.job_id;
+    statusEl.textContent = `Job ${_renormJobId}: pending…`;
+    _pollRenorm();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+}
+
+function _pollRenorm() {
+  if (_renormPollInterval) clearInterval(_renormPollInterval);
+  _renormPollInterval = setInterval(async () => {
+    if (!_renormJobId) { clearInterval(_renormPollInterval); return; }
+    try {
+      const data = await api('GET', `/normalize/${_renormJobId}`);
+      const statusEl = document.getElementById('renorm-status');
+      const pct = data.rows_total ? Math.round((data.rows_done / data.rows_total) * 100) : 0;
+      if (data.status === 'running') {
+        statusEl.textContent = `Running… ${data.rows_done}/${data.rows_total || '?'} rows (${pct}%)`;
+      } else if (data.status === 'success') {
+        statusEl.textContent = `Done — ${data.rows_done} rows updated.`;
+        clearInterval(_renormPollInterval);
+        _renormJobId = null;
+        loadHistory();
+      } else if (data.status === 'fail') {
+        statusEl.textContent = `Failed: ${data.error || 'unknown error'}`;
+        clearInterval(_renormPollInterval);
+        _renormJobId = null;
+      }
+    } catch (_) {}
+  }, 1500);
+}
+
+// ── Merchant category panel ───────────────────────────────────
+
+async function loadUncategorized() {
+  const container = document.getElementById('uncategorized-list');
+  if (!container) return;
+  container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Loading…</span>';
+  try {
+    const data = await api('GET', '/merchant-categories/uncategorized');
+    if (!data.merchants.length) {
+      container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All merchants are categorized.</span>';
+      return;
+    }
+    container.innerHTML = data.merchants.map(m => `
+      <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
+        <span style="flex:1; font-size:13px;">${esc(m)}</span>
+        <input type="text" placeholder="Category…"
+               id="cat-input-${esc(m.replace(/[^a-zA-Z0-9]/g, '_'))}"
+               style="width:180px; padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;" />
+        <button class="btn btn-primary btn-sm" onclick="assignCategory(${JSON.stringify(m)})">Assign</button>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+async function assignCategory(merchant) {
+  const safeKey = merchant.replace(/[^a-zA-Z0-9]/g, '_');
+  const input = document.getElementById(`cat-input-${safeKey}`);
+  const category = input ? input.value.trim() : '';
+  if (!category) {
+    toast('Enter a category name first.', 'error');
+    return;
+  }
+  try {
+    await api('POST', '/merchant-categories', { merchant, category });
+    toast(`Category "${category}" assigned to "${merchant}".`, 'success');
+    loadUncategorized();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}

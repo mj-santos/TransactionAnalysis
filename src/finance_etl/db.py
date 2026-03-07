@@ -19,6 +19,36 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _DDL = """
+CREATE SEQUENCE IF NOT EXISTS seq_merchant_rules_id;
+
+CREATE TABLE IF NOT EXISTS merchant_rules (
+  id         BIGINT DEFAULT nextval('seq_merchant_rules_id') PRIMARY KEY,
+  pattern    TEXT    NOT NULL,
+  match_type TEXT    NOT NULL DEFAULT 'contains',
+  merchant   TEXT    NOT NULL,
+  priority   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS merchant_category_map (
+  merchant   TEXT    PRIMARY KEY,
+  category   TEXT    NOT NULL,
+  source     TEXT    NOT NULL DEFAULT 'user',
+  updated_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS normalization_jobs (
+  job_id      TEXT    PRIMARY KEY,
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  rows_total  BIGINT,
+  rows_done   BIGINT DEFAULT 0,
+  error       TEXT,
+  started_at  TEXT,
+  finished_at TEXT,
+  created_at  TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS raw_files (
   file_hash         TEXT PRIMARY KEY,
   original_path     TEXT,
@@ -117,6 +147,41 @@ _MIGRATIONS = [
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS transaction_subtype TEXT",
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS resolved_amount DECIMAL(18,2)",
 
+    # ── Add imported_file column to runs ────────────────────────────────────
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS imported_file TEXT",
+    # ── Add merchant normalization tables (idempotent via CREATE IF NOT EXISTS) ──
+    "CREATE SEQUENCE IF NOT EXISTS seq_merchant_rules_id",
+    """
+    CREATE TABLE IF NOT EXISTS merchant_rules (
+      id         BIGINT DEFAULT nextval('seq_merchant_rules_id') PRIMARY KEY,
+      pattern    TEXT    NOT NULL,
+      match_type TEXT    NOT NULL DEFAULT 'contains',
+      merchant   TEXT    NOT NULL,
+      priority   INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT    NOT NULL,
+      updated_at TEXT    NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS merchant_category_map (
+      merchant   TEXT    PRIMARY KEY,
+      category   TEXT    NOT NULL,
+      source     TEXT    NOT NULL DEFAULT 'user',
+      updated_at TEXT    NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS normalization_jobs (
+      job_id      TEXT    PRIMARY KEY,
+      status      TEXT    NOT NULL DEFAULT 'pending',
+      rows_total  BIGINT,
+      rows_done   BIGINT DEFAULT 0,
+      error       TEXT,
+      started_at  TEXT,
+      finished_at TEXT,
+      created_at  TEXT    NOT NULL
+    )
+    """,
     # ── Backfill: run_id via transactions_stage join ─────────────────────────
     # Link each transaction back to the run that created it.  Rows where
     # transactions_stage has already been deleted (e.g., after a purge) will

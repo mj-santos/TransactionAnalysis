@@ -44,6 +44,7 @@ try:
 except ImportError:
     duckdb = None  # type: ignore
 
+from finance_etl.merchant_rules import apply_rules, learn_category, load_category_map, load_rules
 from finance_etl.utils.dates import parse_date, DateParseError
 from finance_etl.utils.fingerprint import compute_fingerprint
 from finance_etl.utils.money import (
@@ -109,8 +110,13 @@ def normalize_staged_rows(
 
     col_names = [d[0] for d in conn.description]
 
+    # Load merchant rules and category map once for the whole batch
+    rules = load_rules(conn)
+    cat_map = load_category_map(conn)
+
     normalized = []
     errors = []
+    to_learn: list[tuple[str, str]] = []  # (merchant, category) pairs to persist
 
     for raw in rows:
         row = dict(zip(col_names, raw))
@@ -119,10 +125,42 @@ def normalize_staged_rows(
                 row, family, locale_cfg, date_format, dc_flag_values,
                 statement_type, cc_format, cc_polarity,
             )
+
+            # Apply merchant normalization rules to description
+            matched_merchant = apply_rules(norm["description"], rules)
+            if matched_merchant is not None:
+                norm["merchant"] = matched_merchant
+            # If no rule matched, keep whatever came through from extra_json
+
+            # Resolve category from merchant_category_map
+            merchant_key = (norm.get("merchant") or "").lower()
+            if merchant_key and norm.get("category") is None:
+                resolved_cat = cat_map.get(merchant_key)
+                if resolved_cat:
+                    norm["category"] = resolved_cat
+
+            # Collect (merchant, category) pairs for learned category writing
+            if norm.get("merchant") and norm.get("category"):
+                cat_source = cat_map.get(norm["merchant"].lower())
+                # Only learn if not already user-assigned
+                if cat_source is None:
+                    to_learn.append((norm["merchant"], norm["category"]))
+
             normalized.append(norm)
         except (NormalizationError, AmountParseError, DateParseError) as e:
             errors.append({"source_row": row.get("source_row"), "error": str(e)})
             log.warning("Row %s normalization error: %s", row.get("source_row"), e)
+
+    # Write learned categories (deduped) — never overwrites user-assigned entries
+    seen_learn: set[str] = set()
+    for merchant, category in to_learn:
+        key = merchant.lower()
+        if key not in seen_learn:
+            seen_learn.add(key)
+            try:
+                learn_category(conn, merchant, category)
+            except Exception as exc:
+                log.warning("Failed to learn category for %r: %s", merchant, exc)
 
     log.info(
         "Normalization: %d ok, %d errors (run=%s)",
