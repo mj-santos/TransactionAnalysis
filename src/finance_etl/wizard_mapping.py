@@ -792,8 +792,10 @@ def wizard_to_pipeline_mapping(
 
     amount_mode = infer_amount_mode(canonical_map)
 
-    # column_map: source_csv_header → canonical_name
-    col_map: dict[str, str] = {}
+    # column_map: source_csv_header → canonical_name (first writer wins; used for extra-cols logic)
+    # text_cols: canonical_name → source_csv_header (allows many canonicals → same CSV col)
+    col_map:   dict[str, str] = {}
+    text_cols: dict[str, str] = {}
     for wizard_field, canon_name in [
         ("description", "description"),
         ("merchant",    "merchant"),
@@ -803,7 +805,9 @@ def wizard_to_pipeline_mapping(
     ]:
         csv_col = col(wizard_field)
         if csv_col:
-            col_map[csv_col] = canon_name
+            text_cols[canon_name] = csv_col          # always set; many-to-one is fine
+            if csv_col not in col_map:               # first canonical wins in col_map
+                col_map[csv_col] = canon_name
 
     date_cfg: dict[str, Any] = {
         "transaction_date": col("transaction_date"),
@@ -852,6 +856,7 @@ def wizard_to_pipeline_mapping(
         "account_id":           account_id,
         "amount_format_family": amount_mode,
         "column_map":           col_map,
+        "text_cols":            text_cols,   # canonical→csv; survives same-column sharing
         "date":                 date_cfg,
         "amount":               amount_cfg,
         "currency_default":     currency_default,

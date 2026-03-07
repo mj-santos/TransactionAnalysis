@@ -75,6 +75,7 @@ def map_and_stage(
     account_name = account_name_override or mapping.get("account_name", "")
     account_id = account_id_override or mapping.get("account_id", "")
     col_map: dict[str, str] = mapping.get("column_map", {})
+    text_cols: dict[str, str] = mapping.get("text_cols", {})   # canonical→csv (many-to-one safe)
     drop_cols: list[str] = mapping.get("drop_columns", [])
     date_cfg: dict = mapping.get("date", {})
     amount_cfg: dict = mapping.get("amount", {})
@@ -110,6 +111,7 @@ def map_and_stage(
                 account_name=account_name,
                 account_id=account_id,
                 col_map=col_map,
+                text_cols=text_cols,
                 date_cfg=date_cfg,
                 amount_cfg=amount_cfg,
                 family=family,
@@ -187,14 +189,18 @@ def _build_stage_row(
     amount_cfg: dict,
     family: str,
     currency_default: str,
+    text_cols: dict | None = None,
 ) -> dict:
     def get(col: str | None) -> str:
         if not col:
             return ""
         return (row.get(col) or "").strip()
 
-    # Build reverse map: canonical field -> source CSV column
-    canon_to_source = {canon_col: src_col for src_col, canon_col in col_map.items()}
+    # Build canonical→source lookup.
+    # Prefer text_cols (supports many-to-one: description AND merchant sharing one CSV col).
+    # Fall back to reversing col_map for mappings not in text_cols.
+    _reversed_col_map = {canon: src for src, canon in col_map.items()}
+    canon_to_source = {**_reversed_col_map, **(text_cols or {})}
 
     description_col = canon_to_source.get("description", "description")
     description_raw = get(description_col)
