@@ -1848,6 +1848,80 @@ function _renderTxnBody(p, rows, cols, append) {
 
 let _editingRuleId = null; // null = creating new rule
 
+// ── Condition row helpers ──────────────────────────────────────
+
+function _conditionRowHtml(pattern = '', matchType = 'contains', negate = false) {
+  const sel = (val) => ['contains', 'startswith', 'regex']
+    .map(t => `<option value="${t}"${t === matchType ? ' selected' : ''}>${t === 'contains' ? 'contains' : t === 'startswith' ? 'startswith' : 'regex'}</option>`)
+    .join('');
+  return `<div class="rf-condition-row" style="display:flex; align-items:center; gap:8px; background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:6px 10px;">
+    <select class="rf-cond-type" style="padding:4px 6px; border-radius:5px; border:1px solid var(--border); font-size:12px;">${sel(matchType)}</select>
+    <input class="rf-cond-pattern" type="text" placeholder="e.g. AMAZON, ^UBER, .*COFFEE.*" value="${esc(pattern)}"
+      style="flex:1; padding:4px 8px; border-radius:5px; border:1px solid var(--border); font-size:12px; font-family:monospace;" />
+    <label style="display:flex; align-items:center; gap:4px; font-size:12px; white-space:nowrap; cursor:pointer;">
+      <input type="checkbox" class="rf-cond-negate"${negate ? ' checked' : ''} style="cursor:pointer;" /> NOT
+    </label>
+    <button class="btn btn-secondary btn-sm rf-cond-remove" onclick="removeConditionRow(this)" title="Remove condition"
+      style="font-size:12px; padding:2px 8px;">✕</button>
+  </div>`;
+}
+
+function _updateLogicVisibility() {
+  const rows = document.querySelectorAll('#rf-conditions .rf-condition-row');
+  const wrap = document.getElementById('rf-logic-wrap');
+  if (wrap) wrap.style.display = rows.length >= 2 ? 'flex' : 'none';
+  // Update remove button visibility — always keep at least one row
+  document.querySelectorAll('#rf-conditions .rf-cond-remove').forEach((btn, i) => {
+    btn.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+  });
+}
+
+function addConditionRow(pattern = '', matchType = 'contains', negate = false) {
+  const container = document.getElementById('rf-conditions');
+  if (!container) return;
+  const div = document.createElement('div');
+  div.innerHTML = _conditionRowHtml(pattern, matchType, negate);
+  container.appendChild(div.firstElementChild);
+  _updateLogicVisibility();
+}
+
+function removeConditionRow(btn) {
+  const rows = document.querySelectorAll('#rf-conditions .rf-condition-row');
+  if (rows.length <= 1) return; // Keep at least one
+  btn.closest('.rf-condition-row').remove();
+  _updateLogicVisibility();
+}
+
+function _getRuleConditions() {
+  const rows = document.querySelectorAll('#rf-conditions .rf-condition-row');
+  return Array.from(rows).map(row => ({
+    pattern:    row.querySelector('.rf-cond-pattern').value.trim(),
+    match_type: row.querySelector('.rf-cond-type').value,
+    negate:     row.querySelector('.rf-cond-negate').checked,
+  }));
+}
+
+function _setRuleConditions(conditions, logic) {
+  const container = document.getElementById('rf-conditions');
+  if (!container) return;
+  container.innerHTML = '';
+  (conditions || []).forEach(c => addConditionRow(c.pattern, c.match_type || 'contains', !!c.negate));
+  if (!conditions || !conditions.length) addConditionRow(); // Ensure at least one row
+  const logicEl = document.getElementById('rf-logic');
+  if (logicEl) logicEl.value = logic || 'AND';
+  _updateLogicVisibility();
+}
+
+// ── Merchant rules CRUD ────────────────────────────────────────
+
+function _rulePatternSummary(r) {
+  if (r.conditions && r.conditions.length) {
+    const parts = r.conditions.map(c => `${c.negate ? 'NOT ' : ''}${esc(c.match_type)} "${esc(c.pattern)}"`);
+    return parts.join(` <span style="color:var(--text-muted);font-size:10px;">${esc(r.logic || 'AND')}</span> `);
+  }
+  return `<span class="mono">${esc(r.pattern)}</span>`;
+}
+
 async function loadMerchantRules() {
   const tbody = document.getElementById('merchant-rules-tbody');
   if (!tbody) return;
@@ -1861,7 +1935,7 @@ async function loadMerchantRules() {
     tbody.innerHTML = data.rules.map(r => `<tr>
       <td class="text-right">${esc(String(r.priority))}</td>
       <td><span class="badge badge-running" style="font-size:11px;">${esc(r.match_type)}</span></td>
-      <td class="mono" style="font-size:12px;">${esc(r.pattern)}</td>
+      <td style="font-size:12px;">${_rulePatternSummary(r)}</td>
       <td>${esc(r.merchant)}</td>
       <td>
         <div style="display:flex;gap:6px;">
@@ -1881,33 +1955,26 @@ function openRuleForm(ruleId) {
   const title = document.getElementById('rule-form-title');
   card.style.display = '';
   title.textContent = ruleId ? 'Edit Rule' : 'Add Rule';
+  document.getElementById('rf-test-result').textContent = '';
+  document.getElementById('rf-test-matches').style.display = 'none';
 
   if (!ruleId) {
-    // Reset form for new rule
-    document.getElementById('rf-match-type').value = 'contains';
     document.getElementById('rf-priority').value = '0';
-    document.getElementById('rf-pattern').value = '';
     document.getElementById('rf-merchant').value = '';
-    document.getElementById('rf-test-result').textContent = '';
-    document.getElementById('rf-test-matches').style.display = 'none';
+    _setRuleConditions(null, 'AND');
     return;
   }
 
-  // Populate for edit — fetch existing values from rendered row
-  // (simpler than a separate GET endpoint; values were just loaded)
-  const rows = document.querySelectorAll('#merchant-rules-tbody tr');
-  // We need to find the rule row that triggered this. Use data from the DOM.
-  // Since we pass ruleId directly, we can re-fetch or pass the data inline.
-  // For simplicity, refetch the rules list to get the data for this id.
   api('GET', '/merchant-rules').then(data => {
     const rule = data.rules.find(r => r.id === ruleId);
     if (!rule) return;
-    document.getElementById('rf-match-type').value = rule.match_type;
     document.getElementById('rf-priority').value = String(rule.priority);
-    document.getElementById('rf-pattern').value = rule.pattern;
     document.getElementById('rf-merchant').value = rule.merchant;
-    document.getElementById('rf-test-result').textContent = '';
-    document.getElementById('rf-test-matches').style.display = 'none';
+    if (rule.conditions && rule.conditions.length) {
+      _setRuleConditions(rule.conditions, rule.logic);
+    } else {
+      _setRuleConditions([{pattern: rule.pattern, match_type: rule.match_type, negate: false}], 'AND');
+    }
   });
 }
 
@@ -1917,16 +1984,30 @@ function closeRuleForm() {
 }
 
 async function saveRule() {
-  const body = {
-    match_type: document.getElementById('rf-match-type').value,
-    priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
-    pattern:    document.getElementById('rf-pattern').value.trim(),
-    merchant:   document.getElementById('rf-merchant').value.trim(),
-  };
-  if (!body.pattern || !body.merchant) {
-    toast('Pattern and Merchant are required.', 'error');
+  const merchant = document.getElementById('rf-merchant').value.trim();
+  if (!merchant) {
+    toast('Merchant name is required.', 'error');
     return;
   }
+  const conditions = _getRuleConditions();
+  if (conditions.some(c => !c.pattern)) {
+    toast('All condition patterns must be filled in.', 'error');
+    return;
+  }
+  if (!conditions.length) {
+    toast('At least one condition is required.', 'error');
+    return;
+  }
+  const logic = (document.getElementById('rf-logic') || {}).value || 'AND';
+  // Use first condition as legacy pattern/match_type for backward compat display
+  const body = {
+    pattern:    conditions[0].pattern,
+    match_type: conditions[0].match_type,
+    merchant,
+    priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
+    conditions: conditions.length > 1 || conditions[0].negate ? conditions : null,
+    logic:      conditions.length > 1 || conditions[0].negate ? logic : 'AND',
+  };
   try {
     if (_editingRuleId) {
       await api('PUT', `/merchant-rules/${_editingRuleId}`, body);
@@ -1959,16 +2040,20 @@ async function testRule() {
   resultEl.textContent = 'Testing…';
   matchesEl.style.display = 'none';
 
-  const body = {
-    match_type: document.getElementById('rf-match-type').value,
-    priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
-    pattern:    document.getElementById('rf-pattern').value.trim(),
-    merchant:   document.getElementById('rf-merchant').value.trim() || 'Test',
-  };
-  if (!body.pattern) {
-    resultEl.textContent = 'Enter a pattern first.';
+  const conditions = _getRuleConditions();
+  if (conditions.some(c => !c.pattern)) {
+    resultEl.textContent = 'Fill in all condition patterns first.';
     return;
   }
+  const logic = (document.getElementById('rf-logic') || {}).value || 'AND';
+  const body = {
+    pattern:    conditions[0].pattern,
+    match_type: conditions[0].match_type,
+    merchant:   document.getElementById('rf-merchant').value.trim() || 'Test',
+    priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
+    conditions: conditions.length > 1 || conditions[0].negate ? conditions : null,
+    logic,
+  };
   try {
     const data = await api('POST', '/merchant-rules/test', body);
     if (!data.matches.length) {

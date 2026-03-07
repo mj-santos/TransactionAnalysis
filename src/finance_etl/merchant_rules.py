@@ -19,9 +19,10 @@ Category learning:
 """
 from __future__ import annotations
 
+import json
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -42,23 +43,49 @@ class CompiledRule:
     merchant: str
     priority: int
     _regex: re.Pattern | None = None
+    # Compound condition support — when set, overrides single pattern/match_type
+    conditions: list[dict] | None = None   # [{pattern, match_type, negate}]
+    logic: str = "AND"                     # 'AND' | 'OR'
+    _condition_regexes: dict[int, re.Pattern | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.match_type == "regex":
+        if self.conditions:
+            for i, cond in enumerate(self.conditions):
+                if cond.get("match_type") == "regex":
+                    try:
+                        self._condition_regexes[i] = re.compile(cond["pattern"], re.IGNORECASE)
+                    except re.error as exc:
+                        log.warning("Invalid regex in merchant_rule id=%s condition %d: %s", self.id, i, exc)
+                        self._condition_regexes[i] = None
+        elif self.match_type == "regex":
             try:
                 self._regex = re.compile(self.pattern, re.IGNORECASE)
             except re.error as exc:
                 log.warning("Invalid regex in merchant_rule id=%s: %s", self.id, exc)
                 self._regex = None
 
-    def matches(self, text: str) -> bool:
-        if self.match_type == "contains":
-            return self.pattern.lower() in text.lower()
-        if self.match_type == "startswith":
-            return text.lower().startswith(self.pattern.lower())
-        if self.match_type == "regex":
-            return bool(self._regex and self._regex.search(text))
+    def _match_single(self, pattern: str, match_type: str, compiled: re.Pattern | None, text: str) -> bool:
+        """Evaluate one condition against text."""
+        if match_type == "contains":
+            return pattern.lower() in text.lower()
+        if match_type == "startswith":
+            return text.lower().startswith(pattern.lower())
+        if match_type == "regex":
+            return bool(compiled and compiled.search(text))
         return False
+
+    def matches(self, text: str) -> bool:
+        if self.conditions:
+            results = [
+                (not self._match_single(c["pattern"], c.get("match_type", "contains"),
+                                        self._condition_regexes.get(i), text))
+                if c.get("negate")
+                else self._match_single(c["pattern"], c.get("match_type", "contains"),
+                                        self._condition_regexes.get(i), text)
+                for i, c in enumerate(self.conditions)
+            ]
+            return all(results) if self.logic == "AND" else any(results)
+        return self._match_single(self.pattern, self.match_type, self._regex, text)
 
 
 # ---------------------------------------------------------------------------
@@ -68,17 +95,26 @@ class CompiledRule:
 def load_rules(conn) -> list[CompiledRule]:
     """Load all merchant rules ordered by priority DESC, id ASC."""
     rows = conn.execute(
-        "SELECT id, pattern, match_type, merchant, priority FROM merchant_rules "
-        "ORDER BY priority DESC, id ASC"
+        "SELECT id, pattern, match_type, merchant, priority, conditions, logic "
+        "FROM merchant_rules ORDER BY priority DESC, id ASC"
     ).fetchall()
     rules = []
     for row in rows:
+        conditions_raw = row[5]
+        conditions = None
+        if conditions_raw:
+            try:
+                conditions = json.loads(conditions_raw)
+            except Exception:
+                conditions = None
         r = CompiledRule(
             id=row[0],
             pattern=row[1],
             match_type=row[2],
             merchant=row[3],
             priority=row[4],
+            conditions=conditions,
+            logic=row[6] or "AND",
         )
         rules.append(r)
     return rules

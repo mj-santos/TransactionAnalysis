@@ -545,31 +545,43 @@
     <!-- Rule editor form (inline) -->
     <div id="rule-form-card" class="card" style="display:none; margin-bottom:24px;">
       <div class="card-title" id="rule-form-title">Add Rule</div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+
+      <!-- Top row: Merchant name + Priority -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
         <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
-          Match Type
-          <select id="rf-match-type" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
-            <option value="contains">contains (substring)</option>
-            <option value="startswith">startswith (beginning)</option>
-            <option value="regex">regex (regular expression)</option>
-          </select>
+          → Normalized Merchant Name
+          <input id="rf-merchant" type="text" placeholder="e.g. Amazon, Uber, Starbucks" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
         </label>
         <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
           Priority (higher = first)
           <input id="rf-priority" type="number" value="0" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
         </label>
-        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
-          Pattern
-          <input id="rf-pattern" type="text" placeholder="e.g. AMAZON, ^UBER, .*COFFEE.*" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
-        </label>
-        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
-          → Normalized Merchant Name
-          <input id="rf-merchant" type="text" placeholder="e.g. Amazon, Uber, Starbucks" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
-        </label>
       </div>
+
+      <!-- Conditions section -->
+      <div style="margin-bottom:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <span style="font-size:13px; font-weight:600;">Match Conditions</span>
+          <div id="rf-logic-wrap" style="display:none; align-items:center; gap:6px; font-size:13px;">
+            <span style="color:var(--text-muted);">Combine with:</span>
+            <select id="rf-logic" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;">
+              <option value="AND">AND — all conditions must match</option>
+              <option value="OR">OR — any condition must match</option>
+            </select>
+          </div>
+        </div>
+        <div id="rf-conditions" style="display:flex; flex-direction:column; gap:8px; margin-bottom:8px;">
+          <!-- Condition rows injected by JS -->
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="addConditionRow()" style="font-size:12px;">+ Add Condition</button>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:6px; margin-bottom:0;">
+          Use <strong>NOT</strong> to exclude patterns (e.g. contains "AMAZON" AND NOT contains "FRESH").
+        </p>
+      </div>
+
       <div style="display:flex; gap:8px; align-items:center;">
         <button class="btn btn-primary btn-sm" onclick="saveRule()">Save Rule</button>
-        <button class="btn btn-secondary btn-sm" onclick="testRule()">Test Pattern</button>
+        <button class="btn btn-secondary btn-sm" onclick="testRule()">Test Conditions</button>
         <button class="btn btn-secondary btn-sm" onclick="closeRuleForm()">Cancel</button>
         <span id="rf-test-result" style="font-size:12px; color:var(--text-muted);"></span>
       </div>
