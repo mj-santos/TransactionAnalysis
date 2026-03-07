@@ -803,6 +803,7 @@ const wizard = {
   // CC transaction model
   statementType:        null,     // 'credit_card' | 'bank' | null — now set in step 1
   ccFormat:             null,     // 'two_col' | 'single_col' | null (from upload response)
+  bankFormat:           null,     // 'two_col' | 'single_col' | null (from upload response)
   ccPolarity:           null,     // 'format_a' | 'format_b' | null (user confirmed in step 1)
 };
 
@@ -862,9 +863,12 @@ function wizardOpen(uploadInfo) {
     wizard.suggestedDateFormat = uploadInfo.suggested_date_format;
   }
 
-  // Capture cc_format from the upload response (first file wins)
+  // Capture format detections from the upload response (first file wins)
   if (uploadInfo.cc_format && !wizard.ccFormat) {
     wizard.ccFormat = uploadInfo.cc_format;
+  }
+  if (uploadInfo.bank_format && !wizard.bankFormat) {
+    wizard.bankFormat = uploadInfo.bank_format;
   }
 
   // FIX 3: custom-headers is always on — always include custom headers
@@ -910,6 +914,7 @@ function wizardClose() {
   // CC model
   wizard.statementType = null;
   wizard.ccFormat      = null;
+  wizard.bankFormat    = null;
   wizard.ccPolarity    = null;
 }
 
@@ -1227,12 +1232,28 @@ function renderWizardStep2() {
     ];
   }
 
-  // For cc two_col: hide cc_amount; for cc single_col: hide cc_charge + cc_payment
-  const _ccFmt = wizard.ccFormat;
+  // Format-based hiding: only show the detected amount variant, hide the rest
+  const _ccFmt   = wizard.ccFormat;
+  const _bankFmt = wizard.bankFormat;
   const _hidden = new Set();
+
   if (_type === 'credit_card') {
     if (_ccFmt === 'two_col')    { _hidden.add('cc_amount'); }
     if (_ccFmt === 'single_col') { _hidden.add('cc_charge'); _hidden.add('cc_payment'); }
+  } else if (_type === 'bank') {
+    if (_bankFmt === 'two_col') {
+      // Debit + credit columns detected → show bank_debit/bank_credit only
+      _hidden.add('bank_amount');
+      _hidden.add('debit_amount'); _hidden.add('credit_amount');
+      _hidden.add('money_in');     _hidden.add('money_out');
+      _hidden.add('dc_flag');
+    } else if (_bankFmt === 'single_col') {
+      // Single amount column detected → show bank_amount only
+      _hidden.add('bank_debit');   _hidden.add('bank_credit');
+      _hidden.add('debit_amount'); _hidden.add('credit_amount');
+      _hidden.add('money_in');     _hidden.add('money_out');
+      _hidden.add('dc_flag');
+    }
   }
 
   const fields = (wizard.canonicalFields.length
