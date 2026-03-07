@@ -55,7 +55,7 @@ function navigate(page) {
   if (page === 'settings')           loadSettings();
   if (page === 'credit-cards')       loadTxnTab('credit_card');
   if (page === 'bank-transactions')  loadTxnTab('bank');
-  if (page === 'merchant-rules')     { loadMerchantRules(); loadUncategorized(); }
+  if (page === 'merchant-rules')     { loadMerchantRules(); loadUncategorized(); _clearSuggestions(); }
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -2071,4 +2071,246 @@ async function assignCategory(merchant) {
   } catch (err) {
     toast(`Failed: ${err.message}`, 'error');
   }
+}
+
+
+// ── Rule Suggestions ──────────────────────────────────────────
+
+let _ruleSuggestions = [];   // {pattern, match_type, merchant, count, num_variants, sample_descriptions}
+let _catSuggestions  = [];   // {merchant, suggested_category, confidence}
+
+function _clearSuggestions() {
+  _ruleSuggestions = [];
+  _catSuggestions  = [];
+  const rl = document.getElementById('rule-suggestions-list');
+  const cl = document.getElementById('cat-suggestions-list');
+  if (rl) rl.innerHTML = '';
+  if (cl) cl.innerHTML = '';
+  const raBtn = document.getElementById('rule-suggest-accept-all');
+  const caBtn = document.getElementById('cat-suggest-accept-all');
+  if (raBtn) raBtn.style.display = 'none';
+  if (caBtn) caBtn.style.display = 'none';
+  const rs = document.getElementById('rule-suggest-status');
+  const cs = document.getElementById('cat-suggest-status');
+  if (rs) rs.textContent = '';
+  if (cs) cs.textContent = '';
+}
+
+async function loadRuleSuggestions() {
+  const statusEl = document.getElementById('rule-suggest-status');
+  const listEl   = document.getElementById('rule-suggestions-list');
+  const acceptAllBtn = document.getElementById('rule-suggest-accept-all');
+  if (!listEl) return;
+
+  statusEl.textContent = 'Analyzing…';
+  listEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">
+    Scanning transaction descriptions — this may take a moment…
+  </div>`;
+  acceptAllBtn.style.display = 'none';
+
+  try {
+    const data = await api('GET', '/merchant-rules/suggestions');
+    _ruleSuggestions = data.suggestions || [];
+
+    if (!_ruleSuggestions.length) {
+      statusEl.textContent = 'No new suggestions found.';
+      listEl.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">
+        All common patterns are already covered by your existing rules, or you don't have enough transaction data yet (minimum 3 transactions per pattern).
+      </span>`;
+      return;
+    }
+
+    statusEl.textContent = `${_ruleSuggestions.length} suggestion${_ruleSuggestions.length > 1 ? 's' : ''} found`;
+    acceptAllBtn.style.display = '';
+    _renderRuleSuggestions();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+    listEl.innerHTML = '';
+  }
+}
+
+function _renderRuleSuggestions() {
+  const listEl = document.getElementById('rule-suggestions-list');
+  if (!listEl) return;
+  const visible = _ruleSuggestions.filter(s => !s._dismissed);
+  if (!visible.length) {
+    listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All suggestions have been reviewed.</span>';
+    document.getElementById('rule-suggest-accept-all').style.display = 'none';
+    return;
+  }
+  listEl.innerHTML = visible.map((s, visIdx) => {
+    const realIdx = _ruleSuggestions.indexOf(s);
+    const samples = (s.sample_descriptions || []).slice(0, 3).map(d => `<span class="mono" style="font-size:11px;">${esc(d)}</span>`).join('<br>');
+    const matchBadgeColor = s.match_type === 'startswith' ? '#3b82f6' : '#8b5cf6';
+    const variantNote = s.num_variants > 1 ? ` · ${s.num_variants} variants` : '';
+    return `
+      <div style="display:flex; gap:12px; align-items:flex-start; padding:10px 12px; background:var(--bg-alt,#f8faff); border-radius:8px; border:1px solid var(--border);">
+        <div style="flex:1; min-width:0;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
+            <span style="font-size:11px; font-weight:600; background:${matchBadgeColor}22; color:${matchBadgeColor}; border-radius:4px; padding:2px 6px;">${esc(s.match_type)}</span>
+            <span class="mono" style="font-size:13px; font-weight:600;">${esc(s.pattern)}</span>
+            <span style="color:var(--text-muted); font-size:12px;">→</span>
+            <span style="font-size:13px; font-weight:500;">${esc(s.merchant)}</span>
+            <span style="font-size:11px; color:var(--text-muted); background:#e2e8f0; border-radius:10px; padding:1px 8px;">${s.count} tx${variantNote}</span>
+          </div>
+          <div style="color:var(--text-muted); font-size:11px; line-height:1.6;">${samples}</div>
+        </div>
+        <div style="display:flex; gap:6px; flex-shrink:0;">
+          <button class="btn btn-primary btn-sm" onclick="acceptRuleSuggestion(${realIdx})" title="Create this rule">✓ Accept</button>
+          <button class="btn btn-secondary btn-sm" onclick="editRuleSuggestion(${realIdx})" title="Edit before saving">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissRuleSuggestion(${realIdx})" title="Dismiss">✗</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function acceptRuleSuggestion(idx) {
+  const s = _ruleSuggestions[idx];
+  if (!s) return;
+  try {
+    await api('POST', '/merchant-rules', {
+      pattern: s.pattern, match_type: s.match_type,
+      merchant: s.merchant, priority: 0,
+    });
+    s._dismissed = true;
+    toast(`Rule created: "${s.pattern}" → ${s.merchant}`, 'success');
+    _renderRuleSuggestions();
+    loadMerchantRules();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function editRuleSuggestion(idx) {
+  const s = _ruleSuggestions[idx];
+  if (!s) return;
+  // Pre-fill the rule editor and scroll to it
+  openRuleForm(null);
+  document.getElementById('rf-match-type').value = s.match_type;
+  document.getElementById('rf-priority').value   = '0';
+  document.getElementById('rf-pattern').value    = s.pattern;
+  document.getElementById('rf-merchant').value   = s.merchant;
+  document.getElementById('rule-form-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // Mark as dismissed from suggestions (will be created via the form)
+  s._dismissed = true;
+  _renderRuleSuggestions();
+}
+
+function dismissRuleSuggestion(idx) {
+  if (_ruleSuggestions[idx]) _ruleSuggestions[idx]._dismissed = true;
+  _renderRuleSuggestions();
+}
+
+async function acceptAllRuleSuggestions() {
+  const visible = _ruleSuggestions.filter(s => !s._dismissed);
+  if (!visible.length) return;
+  let ok = 0, fail = 0;
+  for (const s of visible) {
+    try {
+      await api('POST', '/merchant-rules', {
+        pattern: s.pattern, match_type: s.match_type,
+        merchant: s.merchant, priority: 0,
+      });
+      s._dismissed = true;
+      ok++;
+    } catch (_) { fail++; }
+  }
+  toast(`${ok} rule${ok !== 1 ? 's' : ''} created${fail ? ` (${fail} failed)` : ''}.`, ok ? 'success' : 'error');
+  _renderRuleSuggestions();
+  loadMerchantRules();
+}
+
+
+// ── Category Suggestions ──────────────────────────────────────
+
+async function loadCategorySuggestions() {
+  const statusEl = document.getElementById('cat-suggest-status');
+  const listEl   = document.getElementById('cat-suggestions-list');
+  const acceptAllBtn = document.getElementById('cat-suggest-accept-all');
+  if (!listEl) return;
+
+  statusEl.textContent = 'Loading…';
+  listEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:4px 0;">Matching merchants against category patterns…</div>`;
+  acceptAllBtn.style.display = 'none';
+
+  try {
+    const data = await api('GET', '/merchant-categories/suggestions');
+    _catSuggestions = data.suggestions || [];
+
+    if (!_catSuggestions.length) {
+      statusEl.textContent = 'No suggestions found.';
+      listEl.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">
+        Either all merchants are categorized already, or no keyword matches were found for the uncategorized ones.
+      </span>`;
+      return;
+    }
+
+    statusEl.textContent = `${_catSuggestions.length} suggestion${_catSuggestions.length > 1 ? 's' : ''}`;
+    acceptAllBtn.style.display = '';
+    _renderCategorySuggestions();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+    listEl.innerHTML = '';
+  }
+}
+
+function _renderCategorySuggestions() {
+  const listEl = document.getElementById('cat-suggestions-list');
+  if (!listEl) return;
+  const visible = _catSuggestions.filter(s => !s._dismissed);
+  if (!visible.length) {
+    listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All suggestions reviewed.</span>';
+    document.getElementById('cat-suggest-accept-all').style.display = 'none';
+    return;
+  }
+  listEl.innerHTML = visible.map(s => {
+    const realIdx = _catSuggestions.indexOf(s);
+    const confColor = s.confidence === 'high' ? '#16a34a' : '#d97706';
+    const jsonMerchant = JSON.stringify(s.merchant).replace(/"/g, '&quot;');
+    const jsonCat = JSON.stringify(s.suggested_category).replace(/"/g, '&quot;');
+    return `
+      <div style="display:flex; align-items:center; gap:10px; padding:7px 10px; background:var(--bg-alt,#f8faff); border-radius:6px; border:1px solid var(--border);">
+        <span style="flex:1; font-size:13px;">${esc(s.merchant)}</span>
+        <span style="color:var(--text-muted); font-size:12px;">→</span>
+        <span style="font-size:13px;">${esc(s.suggested_category)}</span>
+        <span style="font-size:11px; font-weight:600; color:${confColor}; background:${confColor}18; border-radius:4px; padding:2px 6px;">${s.confidence}</span>
+        <button class="btn btn-primary btn-sm" onclick="acceptCatSuggestion(${realIdx})" title="Assign this category">✓</button>
+        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissCatSuggestion(${realIdx})" title="Dismiss">✗</button>
+      </div>`;
+  }).join('');
+}
+
+async function acceptCatSuggestion(idx) {
+  const s = _catSuggestions[idx];
+  if (!s) return;
+  try {
+    await api('POST', '/merchant-categories', { merchant: s.merchant, category: s.suggested_category });
+    s._dismissed = true;
+    toast(`"${s.merchant}" → ${s.suggested_category}`, 'success');
+    _renderCategorySuggestions();
+    loadUncategorized();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function dismissCatSuggestion(idx) {
+  if (_catSuggestions[idx]) _catSuggestions[idx]._dismissed = true;
+  _renderCategorySuggestions();
+}
+
+async function acceptAllCategorySuggestions() {
+  const visible = _catSuggestions.filter(s => !s._dismissed);
+  if (!visible.length) return;
+  let ok = 0, fail = 0;
+  for (const s of visible) {
+    try {
+      await api('POST', '/merchant-categories', { merchant: s.merchant, category: s.suggested_category });
+      s._dismissed = true;
+      ok++;
+    } catch (_) { fail++; }
+  }
+  toast(`${ok} categor${ok !== 1 ? 'ies' : 'y'} assigned${fail ? ` (${fail} failed)` : ''}.`, ok ? 'success' : 'error');
+  _renderCategorySuggestions();
+  loadUncategorized();
 }

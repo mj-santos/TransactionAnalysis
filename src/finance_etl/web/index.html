@@ -467,6 +467,45 @@
   <!-- ─── MERCHANT RULES PAGE ─── -->
   <section id="page-merchant-rules" class="page">
 
+    <!-- ── Recommended Rules ─────────────────────────────────── -->
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>💡 Recommended Normalization Rules</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="rule-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
+          <button class="btn btn-secondary btn-sm" onclick="loadRuleSuggestions()">Analyze My Data</button>
+          <button id="rule-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="acceptAllRuleSuggestions()">Accept All</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Automatically finds patterns in your raw transaction descriptions and proposes normalization rules.
+        Each suggestion shows the inferred merchant name, match pattern, and real examples from your data.
+        Click <strong>Analyze My Data</strong> to generate recommendations.
+      </p>
+      <div id="rule-suggestions-list" style="display:flex; flex-direction:column; gap:8px;">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <!-- ── Category Suggestions ──────────────────────────────── -->
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>🏷 Suggested Categories</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="cat-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
+          <button class="btn btn-secondary btn-sm" onclick="loadCategorySuggestions()">Suggest Categories</button>
+          <button id="cat-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="acceptAllCategorySuggestions()">Accept All</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Matches your normalized merchants against common category patterns (Restaurants, Groceries, Gas, Shopping, etc.).
+        Accepts only merchants not yet categorized. Click <strong>Suggest Categories</strong> to start.
+      </p>
+      <div id="cat-suggestions-list" style="display:flex; flex-direction:column; gap:6px;">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
     <!-- Merchant Normalization Rules -->
     <div class="card" style="margin-bottom:24px;">
       <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">

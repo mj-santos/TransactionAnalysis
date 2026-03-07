@@ -284,3 +284,236 @@ def _flush_batch(conn, updates: list[tuple], job_id: str, done: int) -> None:
         [done, job_id],
     )
     log.debug("[RENorm] Flushed batch. rows_done=%d", done)
+
+
+# ---------------------------------------------------------------------------
+# Description analysis — smart rule suggestions
+# ---------------------------------------------------------------------------
+
+# POS/payment-gateway prefixes that appear before the real merchant name
+_PLATFORM_PREFIX_RE = re.compile(
+    r"^(?:SQ \*|TST\*\s*|SP \*|PP\*|PAYPAL \*|DRI\*\s*|ADP\*\s*|CHECKCARD \d+\s+)",
+    re.IGNORECASE,
+)
+
+# Trailing noise: US state codes, store/order numbers, hash-prefixed numbers
+_TRAILING_NOISE_RE = re.compile(
+    r"(?:"
+    r"\s+[A-Z]{2}\s*$"      # " CA", " NY"
+    r"|\s+#?\d{3,}\s*$"     # " #12345", " 01234"
+    r"|\s+\d{1,4}\s*$"      # trailing 1-4 digit store number
+    r")",
+    re.IGNORECASE,
+)
+
+# Common domain TLDs to strip
+_TLD_RE = re.compile(r"\.(?:com|net|org|io|co)\s*$", re.IGNORECASE)
+
+
+def _strip_description(desc: str) -> str:
+    """
+    Strip transaction-unique noise from a raw description to expose the merchant core.
+
+    Handles:
+    - POS/gateway prefixes: "SQ *", "TST*", "PAYPAL *", etc.
+    - Transaction ID suffixes: "AMAZON.COM*AB12XY9" → "AMAZON.COM"
+    - Trailing store numbers and US state codes
+    - Common TLDs (.com, .net, .org)
+    """
+    s = desc.strip()
+    # 1. Strip known gateway prefixes
+    m = _PLATFORM_PREFIX_RE.match(s)
+    if m:
+        s = s[m.end():].strip()
+    # 2. Split on '*' — everything after is typically a transaction reference ID
+    if "*" in s:
+        s = s.split("*")[0].strip()
+    # 3. Iteratively strip trailing noise (state codes, digit strings)
+    for _ in range(4):
+        cleaned = _TRAILING_NOISE_RE.sub("", s).strip()
+        if cleaned == s:
+            break
+        s = cleaned
+    # 4. Strip trailing TLD
+    s = _TLD_RE.sub("", s).strip()
+    return s
+
+
+def _merchant_name_from_core(core: str) -> str:
+    """Convert a stripped core string to a clean merchant display name."""
+    name = re.sub(r"[._\-/\\]+", " ", core)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name.title()
+
+
+def analyze_descriptions(
+    conn,
+    min_transactions: int = 3,
+    max_suggestions: int = 50,
+) -> list[dict]:
+    """
+    Analyze transaction descriptions to suggest merchant normalization rules.
+
+    Algorithm:
+      1. Fetch all distinct descriptions with their transaction counts (up to 5 000).
+      2. Skip descriptions already matched by an existing rule.
+      3. Strip noise from each description to extract a merchant "core".
+      4. Group descriptions by their core.
+      5. Emit a suggestion for every group whose total transaction count ≥ min_transactions.
+      6. Sort by count desc and return the top max_suggestions.
+
+    Returns a list of suggestion dicts:
+      {pattern, match_type, merchant, count, num_variants, sample_descriptions}
+    """
+    from collections import defaultdict
+
+    rows = conn.execute(
+        "SELECT description, COUNT(*) AS cnt "
+        "FROM transactions_norm "
+        "WHERE description IS NOT NULL "
+        "GROUP BY description "
+        "ORDER BY cnt DESC "
+        "LIMIT 5000"
+    ).fetchall()
+
+    existing_rules = load_rules(conn)
+
+    groups: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for raw_desc, cnt in rows:
+        if not raw_desc:
+            continue
+        # Skip descriptions already normalized by an existing rule
+        if any(r.matches(raw_desc) for r in existing_rules):
+            continue
+        core = _strip_description(raw_desc)
+        if not core or len(core) < 3:
+            continue
+        groups[core].append((raw_desc, int(cnt)))
+
+    suggestions: list[dict] = []
+    for core, items in groups.items():
+        total_count = sum(cnt for _, cnt in items)
+        if total_count < min_transactions:
+            continue
+
+        items_sorted = sorted(items, key=lambda x: x[1], reverse=True)
+        sample_descs = [d for d, _ in items_sorted[:5]]
+
+        # Skip: only one variant and it already equals the core (already clean)
+        if len(items) == 1 and sample_descs[0].strip().upper() == core.strip().upper():
+            continue
+
+        # Prefer startswith when all variants share the core as a prefix
+        core_lower = core.lower()
+        all_start = all(d.lower().startswith(core_lower) for d, _ in items)
+        match_type = "startswith" if (all_start and len(core) >= 4) else "contains"
+
+        suggestions.append({
+            "pattern":            core,
+            "match_type":         match_type,
+            "merchant":           _merchant_name_from_core(core),
+            "count":              total_count,
+            "num_variants":       len(items),
+            "sample_descriptions": sample_descs,
+        })
+
+    return sorted(suggestions, key=lambda x: x["count"], reverse=True)[:max_suggestions]
+
+
+# ---------------------------------------------------------------------------
+# Category suggestions — keyword heuristics
+# ---------------------------------------------------------------------------
+
+# (category_name, [keywords that imply membership])
+_CATEGORY_HINTS: list[tuple[str, list[str]]] = [
+    ("Restaurants & Dining", [
+        "restaurant", "cafe", "coffee", "pizza", "burger", "grill", "sushi",
+        "mcdonald", "starbucks", "chipotle", "subway", "domino", "taco bell",
+        "dunkin", "doordash", "grubhub", "uber eats", "panera", "shake shack",
+        "chick-fil", "five guys", "wendy", "kfc", "popeye", "bakery", "diner",
+        "kitchen", "bistro", "eatery", "bbq", "steakhouse", "sandwich",
+        "noodle", "ramen", "thai", "tapas", "brasserie", "cantina",
+    ]),
+    ("Groceries", [
+        "grocery", "supermarket", "kroger", "safeway", "aldi", "whole foods",
+        "trader joe", "publix", "wegmans", "costco", "food mart", "fresh market",
+        "harris teeter", "meijer", "giant", "sprouts", "food lion", "h-e-b",
+        "market basket", "stop & shop", "walmart supercenter",
+    ]),
+    ("Transportation & Gas", [
+        "shell", "bp", "chevron", "exxon", "mobil", "sunoco", "marathon",
+        "valero", "phillips 66", "circle k", "wawa", "speedway", "casey",
+        "uber", "lyft", "taxi", "parking", "toll", "transit", "metro", "mta",
+        "gas station", "fuel", "petroleum",
+    ]),
+    ("Shopping & Retail", [
+        "amazon", "amzn", "ebay", "etsy", "target", "best buy", "home depot",
+        "lowes", "ikea", "nordstrom", "macy", "gap", "h&m", "zara", "uniqlo",
+        "tj maxx", "marshalls", "ross", "dollar tree", "dollar general",
+        "five below", "bath & body", "victoria secret", "old navy", "banana republic",
+        "autozone", "advance auto",
+    ]),
+    ("Entertainment & Streaming", [
+        "netflix", "spotify", "hulu", "disney", "apple tv", "youtube",
+        "hbo", "amazon prime", "peacock", "paramount", "crunchyroll",
+        "steam", "playstation", "xbox", "nintendo", "twitch",
+        "cinema", "theater", "amc", "regal", "ticketmaster", "stubhub",
+    ]),
+    ("Health & Fitness", [
+        "pharmacy", "cvs", "walgreens", "rite aid",
+        "hospital", "clinic", "doctor", "medical", "dental", "optometry",
+        "gym", "planet fitness", "la fitness", "24 hour fitness", "equinox",
+        "health", "wellness", "urgent care",
+    ]),
+    ("Travel & Lodging", [
+        "hotel", "marriott", "hilton", "hyatt", "airbnb", "vrbo", "motel",
+        "booking.com", "expedia", "delta", "united airlines", "american airlines",
+        "southwest", "jetblue", "spirit", "frontier", "alaska air",
+        "hertz", "enterprise", "avis", "budget rent",
+    ]),
+    ("Software & Subscriptions", [
+        "adobe", "microsoft", "google", "dropbox", "zoom", "slack",
+        "github", "notion", "figma", "canva", "cloudflare",
+        "aws", "azure", "digitalocean", "openai", "anthropic",
+    ]),
+    ("Utilities & Telecom", [
+        "electric", "water utility", "gas utility", "internet", "cable",
+        "comcast", "spectrum", "at&t", "att", "verizon", "t-mobile",
+        "insurance", "geico", "progressive", "state farm", "allstate",
+        "power company", "energy",
+    ]),
+    ("Financial Services", [
+        "paypal", "venmo", "cashapp", "zelle",
+        "loan", "mortgage", "fidelity", "schwab", "robinhood",
+        "coinbase", "crypto", "brokerage", "credit union",
+    ]),
+]
+
+
+def suggest_categories_for_merchants(merchants: list[str]) -> list[dict]:
+    """
+    Suggest categories for a list of merchant names using keyword heuristics.
+
+    Scores each merchant against the category keyword lists and returns
+    the best-matching category.  Merchants with no keyword match are omitted.
+
+    Returns [{merchant, suggested_category, confidence}].
+    Confidence is 'high' for 2+ keyword matches, 'medium' for 1.
+    """
+    results: list[dict] = []
+    for merchant in merchants:
+        m_lower = merchant.lower()
+        best_cat: str | None = None
+        best_score = 0
+        for category, keywords in _CATEGORY_HINTS:
+            score = sum(1 for kw in keywords if kw in m_lower)
+            if score > best_score:
+                best_score = score
+                best_cat = category
+        if best_cat:
+            results.append({
+                "merchant":           merchant,
+                "suggested_category": best_cat,
+                "confidence":         "high" if best_score >= 2 else "medium",
+            })
+    return results
