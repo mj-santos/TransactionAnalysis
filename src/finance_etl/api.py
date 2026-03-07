@@ -116,6 +116,8 @@ try:
         drop_columns:      list[str]    = Field(default_factory=list)
         preview_only:      bool         = Field(False)
         custom_headers:    list[str]    = Field(default_factory=list, description="Non-canonical CSV column names to persist in the profile")
+        # CC single-col polarity: 'format_a' (positive=spending) | 'format_b' (positive=payment)
+        cc_polarity:       Optional[str]= Field(None, description="CC single-col polarity: 'format_a' or 'format_b'")
         # Feature 1
         statement_type:    Optional[str]= Field(None, description="'credit_card' or 'bank'")
 
@@ -1021,8 +1023,9 @@ No cloud services, no external dependencies — all data stays on your machine.
         if not payload.file_paths:
             raise HTTPException(status_code=400, detail="file_paths must contain at least one path.")
 
-        # Validate mapping
-        errors = validate_wizard_mapping(payload.canonical_map)
+        # Validate mapping (pass statement_type for scoped group checks)
+        _stmt_type_for_validation = getattr(payload, "statement_type", None)
+        errors = validate_wizard_mapping(payload.canonical_map, statement_type=_stmt_type_for_validation)
         if errors:
             raise HTTPException(status_code=422, detail={"ok": False, "errors": errors})
 
@@ -1080,6 +1083,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             date_format=date_format,
             currency_default=payload.currency_default,
             drop_columns=payload.drop_columns,
+            cc_polarity=getattr(payload, "cc_polarity", None),
         )
 
         # Kick off pipeline run
@@ -1364,6 +1368,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"
+        _ra = "COALESCE(resolved_amount, 0)"
         sql = f"""
             SELECT
               COUNT(*) AS row_count,
@@ -1371,7 +1376,15 @@ No cloud services, no external dependencies — all data stays on your machine.
               SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END) AS total_income,
               ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS total_outflow,
               SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END)
-                - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount
+                - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount,
+              -- CC balance fields (subtype model)
+              COALESCE(SUM(CASE WHEN transaction_subtype = 'spending'    THEN {_ra} ELSE 0 END), 0) AS cc_spending,
+              COALESCE(SUM(CASE WHEN transaction_subtype = 'payment'     THEN {_ra} ELSE 0 END), 0) AS cc_payments,
+              COALESCE(SUM(CASE WHEN transaction_subtype = 'adjustment'  THEN {_ra} ELSE 0 END), 0) AS cc_adjustments,
+              -- Conflict rows: awaiting user resolution (not included in balance)
+              COUNT(CASE WHEN transaction_subtype = 'conflict' THEN 1 END) AS cc_conflict_count,
+              -- Legacy cc rows with NULL subtype: excluded from balance
+              COUNT(CASE WHEN statement_type = 'credit_card' AND transaction_subtype IS NULL THEN 1 END) AS cc_legacy_count
             FROM transactions_norm{where_sql}
         """
         try:
@@ -1382,14 +1395,33 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=500, detail=f"Totals query failed: {exc}") from exc
 
         if not row:
-            return {"row_count": 0, "total_spend": 0.0, "total_income": 0.0,
-                    "total_outflow": 0.0, "net_amount": 0.0}
+            return {
+                "row_count": 0, "total_spend": 0.0, "total_income": 0.0,
+                "total_outflow": 0.0, "net_amount": 0.0,
+                "cc_spending": 0.0, "cc_payments": 0.0, "cc_adjustments": 0.0,
+                "cc_balance": 0.0, "cc_conflict_count": 0, "cc_legacy_count": 0,
+            }
+
+        cc_spending    = float(row[5] or 0)
+        cc_payments    = float(row[6] or 0)
+        cc_adjustments = float(row[7] or 0)
+        # Card Balance = Total Spending − Total Payments − Total Adjustments
+        # Positive = amount still owed; Negative = overpaid (credit)
+        cc_balance = cc_spending - cc_payments - cc_adjustments
+
         return {
-            "row_count":     int(row[0] or 0),
-            "total_spend":   float(row[1] or 0),   # signed gross sum
-            "total_income":  float(row[2] or 0),   # bank: inflows only
-            "total_outflow": float(row[3] or 0),   # bank: |outflows| (positive)
-            "net_amount":    float(row[4] or 0),   # bank: income − outflow
+            "row_count":          int(row[0]  or 0),
+            "total_spend":        float(row[1] or 0),   # signed gross sum (legacy)
+            "total_income":       float(row[2] or 0),   # bank: inflows only
+            "total_outflow":      float(row[3] or 0),   # bank: |outflows|
+            "net_amount":         float(row[4] or 0),   # bank: income − outflow
+            # CC subtype balance model
+            "cc_spending":        cc_spending,
+            "cc_payments":        cc_payments,
+            "cc_adjustments":     cc_adjustments,
+            "cc_balance":         cc_balance,
+            "cc_conflict_count":  int(row[8]  or 0),
+            "cc_legacy_count":    int(row[9]  or 0),
         }
 
     # -----------------------------------------------------------------------

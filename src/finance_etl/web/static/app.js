@@ -800,19 +800,30 @@ const wizard = {
   suggestedDateFormat:  null,     // server-inferred date format hint (e.g. '%m/%d/%Y')
   includeCustomHeaders: false,    // whether "Include custom headers" checkbox is ticked
   customHeadersSelected: [],      // CSV headers user has checked for custom persistence
+  // CC transaction model
+  statementType:        null,     // 'credit_card' | 'bank' | null — now set in step 1
+  ccFormat:             null,     // 'two_col' | 'single_col' | null (from upload response)
+  ccPolarity:           null,     // 'format_a' | 'format_b' | null (user confirmed in step 1)
 };
 
 // Required canonical fields for UI validation hints
 const WIZARD_REQUIRED_FIELDS = new Set(['transaction_date']);
-// Fields removed from step 2 display (uncommon / confusing for most users)
-const STEP2_HIDDEN = new Set(['debit_amount', 'credit_amount', 'dc_flag', 'posted_date']);
-// BUG FIX 3: amount_debit / amount_credit are the Feature 2 fallback pair — visible in step 2.
-const WIZARD_AMOUNT_GROUPS   = [
+
+// CC amount groups — scoped to credit_card statement_type
+const WIZARD_CC_AMOUNT_GROUPS = [
+  ['cc_charge', 'cc_payment'],  // Format C — two-column
+  ['cc_amount'],                // Format A / B — single column
+];
+
+// Bank amount groups
+const WIZARD_BANK_AMOUNT_GROUPS = [
+  ['bank_debit', 'bank_credit'],
+  ['bank_amount'],
   ['debit_amount', 'credit_amount'],
   ['money_in', 'money_out'],
-  ['amount'],
-  ['amount_debit', 'amount_credit'],  // BUG FIX 3: fallback pair also forms a valid mapping
 ];
+
+const WIZARD_AMOUNT_GROUPS = [...WIZARD_CC_AMOUNT_GROUPS, ...WIZARD_BANK_AMOUNT_GROUPS];
 
 // ── Open / Close ─────────────────────────────────────────────
 
@@ -849,6 +860,11 @@ function wizardOpen(uploadInfo) {
   // Capture the server-inferred date format hint (first file wins)
   if (uploadInfo.suggested_date_format && !wizard.suggestedDateFormat) {
     wizard.suggestedDateFormat = uploadInfo.suggested_date_format;
+  }
+
+  // Capture cc_format from the upload response (first file wins)
+  if (uploadInfo.cc_format && !wizard.ccFormat) {
+    wizard.ccFormat = uploadInfo.cc_format;
   }
 
   // FIX 3: custom-headers is always on — always include custom headers
@@ -891,6 +907,10 @@ function wizardClose() {
   // FIX 3: keep the checkbox checked for the next upload
   const tog = document.getElementById('custom-headers-toggle');
   if (tog) tog.checked = true;
+  // CC model
+  wizard.statementType = null;
+  wizard.ccFormat      = null;
+  wizard.ccPolarity    = null;
 }
 
 // ── Navigation ────────────────────────────────────────────────
@@ -941,6 +961,30 @@ function wizardBack() {
 
 async function wizardNext() {
   if (wizard.step === 1) {
+    // Validate statement_type is selected in step 1
+    const stRadio = document.querySelector('input[name="w-stmt-type-step1"]:checked');
+    if (stRadio) {
+      wizard.statementType = stRadio.value;
+    }
+    if (!wizard.statementType) {
+      const errEl = document.getElementById('w-step1-type-error');
+      if (errEl) { errEl.style.display = ''; errEl.textContent = 'Please select a statement type before continuing.'; }
+      return;
+    }
+    // Hide error if shown
+    const errEl1 = document.getElementById('w-step1-type-error');
+    if (errEl1) errEl1.style.display = 'none';
+
+    // For cc single_col, validate polarity is confirmed
+    if (wizard.statementType === 'credit_card' && wizard.ccFormat === 'single_col') {
+      const polRadio = document.querySelector('input[name="w-cc-polarity"]:checked');
+      if (!polRadio) {
+        toast('Please confirm the amount polarity for this credit card statement.', 'error');
+        return;
+      }
+      wizard.ccPolarity = polRadio.value;
+    }
+
     // Fetch canonical fields from server if not yet loaded
     if (!wizard.canonicalFields.length && wizard.files.length) {
       try {
@@ -1044,6 +1088,95 @@ function renderWizardStep1() {
       <div class="ic-value">${esc(String(value))}</div>
     </div>`).join('');
 
+  // ── Statement Type selector (moved from step 3) ──────────────────────────
+  const typeContainerEl = document.getElementById('w-step1-stmt-type');
+  if (typeContainerEl) {
+    const ccChecked  = wizard.statementType === 'credit_card' ? 'checked' : '';
+    const bnkChecked = wizard.statementType === 'bank'        ? 'checked' : '';
+    typeContainerEl.innerHTML = `
+      <div style="margin:12px 0; padding:10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+        <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text);">
+          Statement Type <span style="color:var(--danger)">*</span>
+        </div>
+        <div style="display:flex; gap:20px; flex-wrap:wrap;">
+          <label style="cursor:pointer; display:flex; align-items:center; gap:7px; font-size:13px;">
+            <input type="radio" name="w-stmt-type-step1" value="credit_card" ${ccChecked}
+                   onchange="wizard.statementType='credit_card'; renderWizardStep1();" />
+            💳 Credit Card Statement
+          </label>
+          <label style="cursor:pointer; display:flex; align-items:center; gap:7px; font-size:13px;">
+            <input type="radio" name="w-stmt-type-step1" value="bank" ${bnkChecked}
+                   onchange="wizard.statementType='bank'; renderWizardStep1();" />
+            🏦 Bank Statement
+          </label>
+        </div>
+        <div id="w-step1-type-error" style="display:none; font-size:12px; color:var(--danger); margin-top:4px;"></div>
+      </div>`;
+  }
+
+  // ── CC Format Detection & Polarity Confirmation ────────────────────────
+  const ccPolarityEl = document.getElementById('w-cc-polarity-panel');
+  if (ccPolarityEl) {
+    if (wizard.statementType === 'credit_card' && wizard.ccFormat === 'single_col') {
+      // Show sample rows from the first file to help user confirm polarity
+      const firstFile  = wizard.files[0] || {};
+      const samples    = (firstFile.sample_rows || []).slice(0, 5);
+      const amtField   = wizard.suggestions.cc_amount || wizard.suggestions.amount;
+      const dateField  = wizard.suggestions.transaction_date;
+      const descField  = wizard.suggestions.description;
+      const sampleRows = samples.filter(r => amtField && r[amtField]);
+
+      const sampleHtml = sampleRows.length
+        ? `<table style="margin-top:8px;border-collapse:collapse;font-size:12px;width:100%;">
+            <tr style="color:var(--text-muted);">
+              ${dateField ? '<th style="text-align:left;padding:3px 8px;">Date</th>' : ''}
+              ${descField ? '<th style="text-align:left;padding:3px 8px;">Description</th>' : ''}
+              <th style="text-align:right;padding:3px 8px;">Amount</th>
+            </tr>
+            ${sampleRows.map(r => `<tr>
+              ${dateField ? `<td style="padding:3px 8px;">${esc(r[dateField]||'')}</td>` : ''}
+              ${descField ? `<td style="padding:3px 8px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(r[descField]||'')}</td>` : ''}
+              <td class="mono text-right" style="padding:3px 8px;">${esc(r[amtField]||'')}</td>
+            </tr>`).join('')}
+          </table>`
+        : '';
+
+      const faChecked = wizard.ccPolarity === 'format_a' ? 'checked' : '';
+      const fbChecked = wizard.ccPolarity === 'format_b' ? 'checked' : '';
+      ccPolarityEl.innerHTML = `
+        <div style="margin:12px 0; padding:10px 14px; background:#fefce8; border:1px solid #fde047; border-radius:8px;">
+          <div style="font-size:13px; font-weight:600; margin-bottom:4px; color:#713f12;">
+            ⚠️ Single Amount Column Detected — Confirm Polarity <span style="color:var(--danger)">*</span>
+          </div>
+          <p style="font-size:12px; color:#92400e; margin:0 0 8px;">
+            We detected a single Amount column. Please confirm the sign convention for this statement:
+          </p>
+          ${sampleHtml}
+          <div style="display:flex; gap:20px; flex-wrap:wrap; margin-top:10px;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:7px; font-size:13px;">
+              <input type="radio" name="w-cc-polarity" value="format_a" ${faChecked}
+                     onchange="wizard.ccPolarity='format_a';" />
+              Positive = purchase charged to card <em>(most US cards)</em>
+            </label>
+            <label style="cursor:pointer; display:flex; align-items:center; gap:7px; font-size:13px;">
+              <input type="radio" name="w-cc-polarity" value="format_b" ${fbChecked}
+                     onchange="wizard.ccPolarity='format_b';" />
+              Positive = payment made to card <em>(some EU/UK banks)</em>
+            </label>
+          </div>
+        </div>`;
+    } else if (wizard.statementType === 'credit_card' && wizard.ccFormat === 'two_col') {
+      ccPolarityEl.innerHTML = `
+        <div style="margin:12px 0; padding:8px 14px; background:#f0fdf4; border:1px solid #86efac; border-radius:8px;">
+          <span style="font-size:13px; color:#166534;">
+            ✅ <strong>Two-column format detected</strong> — separate charge and payment columns. Subtypes will be assigned automatically.
+          </span>
+        </div>`;
+    } else {
+      ccPolarityEl.innerHTML = '';
+    }
+  }
+
   // Header chips
   document.getElementById('w-header-chips').innerHTML =
     wizard.headers.map(h => `<span class="header-chip">${esc(h)}</span>`).join('');
@@ -1066,15 +1199,46 @@ function renderWizardStep1() {
 // ── Step 2 render ─────────────────────────────────────────────
 
 function renderWizardStep2() {
-  // Use server-provided canonical fields if available, else fall back to wizard.suggestions keys
+  // Scope canonical fields by statement_type (set in step 1)
+  const _type = wizard.statementType;
+
+  // Preferred ordered field list based on statement_type
+  let _typeFields;
+  if (_type === 'credit_card') {
+    _typeFields = [
+      'transaction_date', 'cc_amount', 'cc_charge', 'cc_payment',
+      'description', 'posted_date', 'merchant', 'category', 'account', 'notes', 'currency',
+    ];
+  } else if (_type === 'bank') {
+    _typeFields = [
+      'transaction_date',
+      'bank_amount', 'bank_debit', 'bank_credit',
+      'debit_amount', 'credit_amount',
+      'money_in', 'money_out', 'dc_flag',
+      'description', 'posted_date', 'merchant', 'category', 'account', 'notes', 'currency',
+    ];
+  } else {
+    _typeFields = [
+      'transaction_date',
+      'cc_amount', 'cc_charge', 'cc_payment',
+      'bank_amount', 'bank_debit', 'bank_credit',
+      'debit_amount', 'credit_amount', 'money_in', 'money_out', 'dc_flag',
+      'description', 'posted_date', 'merchant', 'category', 'account', 'notes', 'currency',
+    ];
+  }
+
+  // For cc two_col: hide cc_amount; for cc single_col: hide cc_charge + cc_payment
+  const _ccFmt = wizard.ccFormat;
+  const _hidden = new Set();
+  if (_type === 'credit_card') {
+    if (_ccFmt === 'two_col')    { _hidden.add('cc_amount'); }
+    if (_ccFmt === 'single_col') { _hidden.add('cc_charge'); _hidden.add('cc_payment'); }
+  }
+
   const fields = (wizard.canonicalFields.length
-    ? wizard.canonicalFields
-    : Object.keys(wizard.suggestions).concat(
-        ['transaction_date','debit_amount','credit_amount','amount','money_in','money_out',
-         'dc_flag','description','posted_date','merchant','category','account','notes','currency']
-          .filter(f => !Object.keys(wizard.suggestions).includes(f))
-      )
-  ).filter(f => !STEP2_HIDDEN.has(f));
+    ? wizard.canonicalFields.filter(f => _typeFields.includes(f))
+    : _typeFields
+  ).filter(f => !_hidden.has(f));
 
   const labels = wizard.canonicalLabels;
   const isReq = f => WIZARD_REQUIRED_FIELDS.has(f);
@@ -1155,9 +1319,19 @@ function validateMappingLocally() {
     errors.push('transaction_date is required — select the column containing the transaction date.');
   }
   const mapped = new Set(Object.entries(wizard.mapping).filter(([,v]) => v).map(([k]) => k));
-  const ok = WIZARD_AMOUNT_GROUPS.some(group => group.every(f => mapped.has(f)));
+
+  // Scope amount groups by statement_type
+  const groups = wizard.statementType === 'credit_card' ? WIZARD_CC_AMOUNT_GROUPS
+               : wizard.statementType === 'bank'        ? WIZARD_BANK_AMOUNT_GROUPS
+               : WIZARD_AMOUNT_GROUPS;
+  const ok = groups.some(group => group.every(f => mapped.has(f)));
   if (!ok) {
-    errors.push('Amount mapping required: map (debit_amount + credit_amount), (money_in + money_out), (amount), or (amount_debit + amount_credit).');
+    const hint = wizard.statementType === 'credit_card'
+      ? '(cc_charge + cc_payment) or (cc_amount)'
+      : wizard.statementType === 'bank'
+        ? '(bank_debit + bank_credit), (bank_amount), (debit_amount + credit_amount), or (money_in + money_out)'
+        : 'one of the available amount groups';
+    errors.push(`Amount mapping required: map ${hint}.`);
   }
   return errors;
 }
@@ -1179,20 +1353,26 @@ function renderWizardStep3() {
     setVal('w-date-format', wizard.suggestedDateFormat);
   }
 
-  // BUG FIX 1: Sync wizard statement_type radios from import page (if already set).
-  // This lets users who selected the type before opening the wizard skip re-selecting it.
-  // The wizard reads from its OWN radios at submit time (not the import page) to avoid
-  // sending null when the import page radios are not yet set.
-  if (!document.querySelector('input[name="w-statement-type"]:checked')) {
-    const importSel = document.querySelector('input[name="statement-type"]:checked');
-    if (importSel) {
-      const wizSel = document.querySelector(`input[name="w-statement-type"][value="${importSel.value}"]`);
-      if (wizSel) wizSel.checked = true;
+  // Statement type was confirmed in step 1; show as read-only badge in step 3
+  const typeDisplayEl = document.getElementById('w-step3-stmt-type-display');
+  if (typeDisplayEl) {
+    if (wizard.statementType === 'credit_card') {
+      let extra = '';
+      if (wizard.ccFormat === 'two_col') {
+        extra = ' · Two-column format (cc_charge / cc_payment)';
+      } else if (wizard.ccFormat === 'single_col' && wizard.ccPolarity) {
+        const polarityLabel = wizard.ccPolarity === 'format_a'
+          ? 'Positive = spending'
+          : 'Positive = payment';
+        extra = ` · Single-column · <em>${polarityLabel}</em> (saved to profile)`;
+      }
+      typeDisplayEl.innerHTML = `<span class="chip" style="background:#dbeafe;color:#1e40af;padding:3px 8px;border-radius:4px;font-size:12px;">💳 Credit Card${extra}</span>`;
+    } else if (wizard.statementType === 'bank') {
+      typeDisplayEl.innerHTML = `<span class="chip" style="background:#dcfce7;color:#166534;padding:3px 8px;border-radius:4px;font-size:12px;">🏦 Bank Statement</span>`;
+    } else {
+      typeDisplayEl.innerHTML = '';
     }
   }
-  // Hide previous error if user re-enters step 3
-  const stErr = document.getElementById('w-stmt-type-error');
-  if (stErr) stErr.style.display = 'none';
 
   // Sync wizard preview toggle with main Configure Mapping toggle and lock main toggle
   const mainTog = document.getElementById('preview-toggle');
@@ -1235,18 +1415,12 @@ async function wizardSaveAndRun() {
 
   const filePaths = wizard.files.map(f => f.path);
 
-  // BUG FIX 1 (Layer 1): Read statement_type from the wizard's OWN radio buttons.
-  // Previously read from the import page radios via getStatementType() which returned
-  // null when the user opened the wizard before selecting a type — silently sending
-  // statement_type=null to the backend and routing rows to neither tab.
-  const wizStmt = document.querySelector('input[name="w-statement-type"]:checked');
-  const statementType = wizStmt ? wizStmt.value : getStatementType();
+  // statement_type was confirmed in step 1 and stored in wizard.statementType
+  const statementType = wizard.statementType;
   console.log('[Mapping] statement_type submitted as:', statementType);
 
   if (!statementType) {
-    const stErr = document.getElementById('w-stmt-type-error');
-    if (stErr) stErr.style.display = '';
-    toast('Select a statement type (Credit Card or Bank) before saving.', 'error');
+    toast('Statement type not selected. Please go back to step 1 and select Credit Card or Bank.', 'error');
     btn.disabled = false;
     btn.textContent = 'Save & Run';
     return;
@@ -1264,8 +1438,9 @@ async function wizardSaveAndRun() {
       currency_default: currency,
       preview_only:     previewOnly,
       custom_headers:   wizard.customHeadersSelected,
-      // BUG FIX 1: read from wizard selector (not import page radio)
       statement_type:   statementType,
+      // CC polarity for single-col format
+      cc_polarity:      wizard.ccPolarity || null,
     });
 
     wizardClose();
@@ -1387,7 +1562,11 @@ async function loadTxnTab(type, reset = true) {
 
     // Pinned tfoot always reflects the full filtered set, not just the current page.
     // renderTxnTotals is defined in table_controls.js (shared utility).
-    renderTxnTotals(document.getElementById(`${p}-tfoot`), totals, type, cols.length || 10);
+    // Pass optional warnEl for CC legacy/conflict banners.
+    renderTxnTotals(
+      document.getElementById(`${p}-tfoot`), totals, type, cols.length || 10,
+      document.getElementById(`${p}-totals-warn`),
+    );
 
     // Advance pagination cursor and update meta / Load more visibility
     st.offset += rows.length;

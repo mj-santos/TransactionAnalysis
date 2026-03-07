@@ -1,6 +1,10 @@
-# Example mapping: Single signed amount column (e.g. Chase, many US credit cards)
+# Example mapping: Single signed amount column — bank statement
 # amount_format_family: signed
-# Positive = inflow (payment/refund), Negative = outflow (purchase)
+# statement_type: bank
+# Positive = inflow (deposit), Negative = outflow (withdrawal)
+#
+# Canonical field name: bank_amount → signed_amount pipeline key.
+# For credit-card single-column, use cc_amount and set cc_format/cc_polarity.
 
 bank_key: example_signed
 bank_name: "Example Bank (Signed)"
@@ -14,7 +18,6 @@ column_map:
   "Transaction Date": transaction_date
   "Post Date": posted_date
   "Description": description
-  "Amount": amount
 
 drop_columns:
   - "Category"   # drop bank's own category; we'll apply our own rules
@@ -25,7 +28,7 @@ date:
   date_format: "%m/%d/%Y"   # explicit format to avoid ambiguity
 
 amount:
-  signed_amount: "Amount"
+  signed_amount: "Amount"   # bank_amount canonical field → signed_amount pipeline key
 
 currency_default: "USD"
 

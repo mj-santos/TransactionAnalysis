@@ -77,48 +77,65 @@ Optional keys:
 - `config/canonical_schema.yaml`: canonical field reference
 - `config/categories/rules.yaml`: optional categorization rules
 
-## Optional fallback amount columns (amount_debit / amount_credit)
+## Credit-card transaction model
 
-Two optional canonical fields can supplement **any** primary `amount_format_family`:
+Credit-card rows are classified into three subtypes using `transaction_subtype`:
 
-| Key | Purpose | Sign convention |
-|-----|---------|----------------|
-| `amount.amount_debit` | Outflow / withdrawal column | Positive number → stored negative |
-| `amount.amount_credit` | Inflow / deposit column | Positive number → stored positive |
+| Subtype | Meaning | Effect on balance |
+|---------|---------|-------------------|
+| `spending` | Purchase/charge on card | Increases balance owed |
+| `payment` | Payment toward card balance | Decreases balance owed |
+| `adjustment` | Refund, chargeback, or credit | Decreases balance owed |
+| `NULL` | Legacy row — no subtype | Excluded from balance |
 
-These are resolved by `resolve_amount()` only when the primary family field is absent or empty:
+**Card Balance formula:** `Card Balance = Total Spending − Total Payments − Total Adjustments`
 
-```
-Step 1 — Parse via amount_format_family (backward-compatible)
-Step 2 — Fall back to amount_debit / amount_credit if Step 1 yields nothing
-            result = credit − debit  (positive = inflow, negative = outflow)
-Step 3 — All fields empty → row skipped with a warning
-```
+A positive balance = amount still owed. Negative = card is in credit (overpaid).
 
-They can also serve as the **sole** amount mapping (when no primary family columns are
-present).  In that case the wizard sets `amount_format_family: signed` with an empty
-`signed_amount`; Step 2 of the resolver handles the rest automatically.
+### CC amount formats
 
-Example YAML fragment:
-```yaml
-amount:
-  amount_debit: "Debit"    # outflow column (positive numbers)
-  amount_credit: "Credit"  # inflow column  (positive numbers)
-```
+**Format C (two-column):** `amount.debit_col` + `amount.credit_col` — charge/payment auto-split.
+
+**Format A** (`cc_polarity: format_a`): positive = spending (most US cards).
+
+**Format B** (`cc_polarity: format_b`): positive = payment (some EU/UK banks).
+
+`resolved_amount` is always ≥ 0. Direction is encoded entirely in `transaction_subtype`.
 
 ## Canonical field reference
+
+Canonical fields are **scoped by statement_type** in the wizard.
+
+### Credit-card fields (statement_type = credit_card)
+
+| Canonical field | Old name (retired) | Required | Description |
+|----------------|-------------------|---------|-------------|
+| `cc_amount` | `amount` | CC Group | Single signed/unsigned amount — polarity confirmed by user |
+| `cc_charge` | `amount_debit` | CC Group | Money charged to card (Format C → spending) |
+| `cc_payment` | `amount_credit` | CC Group | Money paid toward card (Format C → payment) |
+
+CC Group: one of (`cc_charge` + `cc_payment`) or (`cc_amount`) must be mapped.
+
+### Bank fields (statement_type = bank)
+
+| Canonical field | Old name | Required | Description |
+|----------------|---------|---------|-------------|
+| `bank_amount` | `amount` | Bank Group | Single signed/unsigned amount |
+| `bank_debit` | `amount_debit` | Bank Group | Money leaving the bank account |
+| `bank_credit` | `amount_credit` | Bank Group | Money entering the bank account |
+| `debit_amount` | — | Bank Group | Withdrawal (pairs with `credit_amount`) |
+| `credit_amount` | — | Bank Group | Deposit (pairs with `debit_amount`) |
+| `money_in` | — | Bank Group | Inflow (pairs with `money_out`) |
+| `money_out` | — | Bank Group | Outflow (pairs with `money_in`) |
+| `dc_flag` | — | Bank Group | Debit/Credit flag (pairs with `bank_amount`) |
+
+Bank Group: at least one complete group must be present.
+
+### Shared fields (both types)
 
 | Canonical field | Required | Description |
 |----------------|---------|-------------|
 | `transaction_date` | **Yes** | Transaction date column |
-| `debit_amount` | Group | Withdrawal amount (pairs with `credit_amount`) |
-| `credit_amount` | Group | Deposit amount (pairs with `debit_amount`) |
-| `amount` | Group | Signed amount (positive=inflow, negative=outflow) |
-| `money_in` | Group | Inflow column (pairs with `money_out`) |
-| `money_out` | Group | Outflow column (pairs with `money_in`) |
-| `dc_flag` | Group | Debit/Credit flag (pairs with `amount`) |
-| `amount_debit` | Optional | Fallback outflow column (positive number) |
-| `amount_credit` | Optional | Fallback inflow column (positive number) |
 | `description` | Optional | Transaction description / narrative |
 | `posted_date` | Optional | Settlement / posting date |
 | `merchant` | Optional | Merchant / payee name |
@@ -127,7 +144,13 @@ amount:
 | `notes` | Optional | Notes or memo |
 | `currency` | Optional | Currency code |
 
-"Group" means at least one complete group must be present for a valid mapping.
+### Retired field names (rejected by the validator with a clear error)
+
+| Retired name | Use instead (CC) | Use instead (bank) |
+|-------------|-----------------|-------------------|
+| `amount` | `cc_amount` | `bank_amount` |
+| `amount_debit` | `cc_charge` | `bank_debit` |
+| `amount_credit` | `cc_payment` | `bank_credit` |
 
 ## Validation and guardrails
 

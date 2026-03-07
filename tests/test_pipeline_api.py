@@ -549,7 +549,7 @@ def test_wizard_statement_type_credit_card_routing(tmp_path: Path):
     # Save-and-run with statement_type='credit_card', preview_only=False
     res = client.post("/wizard/save-and-run", json={
         "file_paths":      [up.json()["path"]],
-        "canonical_map":   {"transaction_date": "Date", "description": "Description", "amount": "Amount"},
+        "canonical_map":   {"transaction_date": "Date", "description": "Description", "cc_amount": "Amount"},
         "institution":     "testbank",
         "account_id":      "cc1234",
         "account_name":    "My Credit Card",
@@ -613,7 +613,7 @@ def test_wizard_statement_type_bank_routing(tmp_path: Path):
 
     res = client.post("/wizard/save-and-run", json={
         "file_paths":      [up.json()["path"]],
-        "canonical_map":   {"transaction_date": "Date", "description": "Description", "amount": "Amount"},
+        "canonical_map":   {"transaction_date": "Date", "description": "Description", "bank_amount": "Amount"},
         "institution":     "testbank",
         "account_id":      "chk1234",
         "account_name":    "My Checking",
@@ -701,8 +701,8 @@ def test_resolve_amount_debit_credit_via_wizard_canonical(tmp_path: Path):
         canonical_map={
             "transaction_date": "Date",
             "description":      "Description",
-            "amount_debit":     "Debit",    # BUG FIX 3 canonical field
-            "amount_credit":    "Credit",   # BUG FIX 3 canonical field
+            "bank_debit":       "Debit",    # BUG FIX 3 canonical field (new name)
+            "bank_credit":      "Credit",   # BUG FIX 3 canonical field (new name)
         },
         bank_name="TestBank",
         bank_key="testbank",
@@ -710,9 +710,9 @@ def test_resolve_amount_debit_credit_via_wizard_canonical(tmp_path: Path):
         account_id="amtdc01",
         date_format="%Y-%m-%d",
     )
-    # Confirm amount_debit / amount_credit flowed into the amount config
-    assert mapping_dict["amount"].get("amount_debit")  == "Debit"
-    assert mapping_dict["amount"].get("amount_credit") == "Credit"
+    # Confirm bank_debit / bank_credit flowed into the amount config as debit_col/credit_col
+    assert mapping_dict["amount"].get("debit_col")  == "Debit"
+    assert mapping_dict["amount"].get("credit_col") == "Credit"
 
     # Run the pipeline — statement_type='bank' so rows appear in bank tab
     run_with_options(
@@ -739,42 +739,44 @@ def test_resolve_amount_debit_credit_via_wizard_canonical(tmp_path: Path):
 
 def test_amount_debit_credit_in_canonical_fields():
     """
-    BUG FIX 3: amount_debit and amount_credit must appear in CANONICAL_FIELDS
-    and CANONICAL_LABELS, and form a valid AMOUNT_GROUP.
+    BUG FIX 3 (updated): bank_debit/bank_credit (new names) must appear in CANONICAL_FIELDS
+    and CANONICAL_LABELS, and form a valid AMOUNT_GROUP. The old amount_debit/amount_credit
+    names have been retired and replaced by bank_debit/bank_credit (bank) and
+    cc_charge/cc_payment (credit card).
     """
     from finance_etl.wizard_mapping import (
         CANONICAL_FIELDS, CANONICAL_LABELS, AMOUNT_GROUPS, validate_wizard_mapping
     )
 
-    assert "amount_debit"  in CANONICAL_FIELDS, "amount_debit missing from CANONICAL_FIELDS"
-    assert "amount_credit" in CANONICAL_FIELDS, "amount_credit missing from CANONICAL_FIELDS"
-    assert "amount_debit"  in CANONICAL_LABELS, "amount_debit missing from CANONICAL_LABELS"
-    assert "amount_credit" in CANONICAL_LABELS, "amount_credit missing from CANONICAL_LABELS"
-    assert {"amount_debit", "amount_credit"} in AMOUNT_GROUPS, \
-        "{'amount_debit','amount_credit'} must be a valid AMOUNT_GROUP"
+    assert "bank_debit"  in CANONICAL_FIELDS, "bank_debit missing from CANONICAL_FIELDS"
+    assert "bank_credit" in CANONICAL_FIELDS, "bank_credit missing from CANONICAL_FIELDS"
+    assert "bank_debit"  in CANONICAL_LABELS, "bank_debit missing from CANONICAL_LABELS"
+    assert "bank_credit" in CANONICAL_LABELS, "bank_credit missing from CANONICAL_LABELS"
+    assert {"bank_debit", "bank_credit"} in AMOUNT_GROUPS, \
+        "{'bank_debit','bank_credit'} must be a valid AMOUNT_GROUP"
 
-    # Validate that mapping only amount_debit + amount_credit passes validation
+    # Validate that mapping bank_debit + bank_credit passes validation
     errors = validate_wizard_mapping({
         "transaction_date": "Date",
-        "amount_debit":     "Debit",
-        "amount_credit":    "Credit",
+        "bank_debit":       "Debit",
+        "bank_credit":      "Credit",
     })
-    assert errors == [], f"amount_debit+amount_credit should form a valid mapping: {errors}"
+    assert errors == [], f"bank_debit+bank_credit should form a valid mapping: {errors}"
 
 
 def test_wizard_to_pipeline_threads_amount_debit_credit():
     """
-    BUG FIX 3: wizard_to_pipeline_mapping must include amount_debit / amount_credit
-    in the returned amount config so mapping.py populates amount_debit_raw /
-    amount_credit_raw for the normalize.py step 2 fallback.
+    BUG FIX 3 (updated): wizard_to_pipeline_mapping with bank_debit+bank_credit
+    (the new canonical names) must produce debit_col/credit_col in the amount config
+    so the debit_credit normalization family is used.
     """
     from finance_etl.wizard_mapping import wizard_to_pipeline_mapping
 
     result = wizard_to_pipeline_mapping(
         canonical_map={
             "transaction_date": "Date",
-            "amount_debit":     "Debit",
-            "amount_credit":    "Credit",
+            "bank_debit":       "Debit",
+            "bank_credit":      "Credit",
         },
         bank_name="TestBank",
         bank_key="testbank",
@@ -782,10 +784,10 @@ def test_wizard_to_pipeline_threads_amount_debit_credit():
         account_id="chk01",
     )
 
-    assert result["amount"].get("amount_debit")  == "Debit",  \
-        "amount_cfg must carry amount_debit CSV column"
-    assert result["amount"].get("amount_credit") == "Credit", \
-        "amount_cfg must carry amount_credit CSV column"
+    assert result["amount"].get("debit_col")  == "Debit",  \
+        "amount_cfg must carry debit_col CSV column"
+    assert result["amount"].get("credit_col") == "Credit", \
+        "amount_cfg must carry credit_col CSV column"
 
 
 # ===========================================================================
@@ -974,3 +976,349 @@ class TestCsvPreprocessing:
         # Metadata row strings must NOT appear as headers
         assert not any("barclays" in h.lower() for h in headers), \
             f"Metadata strings must not appear as headers; got headers={headers}"
+
+
+# ===========================================================================
+# CC Transaction Model — Subtype Classification
+# ===========================================================================
+
+def _make_stage_row(
+    debit_raw: str = "",
+    credit_raw: str = "",
+    amount_raw: str = "",
+    description_raw: str = "AMAZON PRIME",
+    source_row: int = 2,
+) -> dict:
+    """Build a minimal transactions_stage-style row dict for normalize tests."""
+    return {
+        "run_id": "test_run",
+        "file_hash": "abc123",
+        "source_file": "test.csv",
+        "source_row": source_row,
+        "bank_name": "TestBank",
+        "account_name": "My CC",
+        "account_id": "cc1234",
+        "transaction_date_raw": "2026-01-15",
+        "posted_date_raw": "",
+        "description_raw": description_raw,
+        "amount_raw": amount_raw,
+        "debit_raw": debit_raw,
+        "credit_raw": credit_raw,
+        "money_in_raw": "",
+        "money_out_raw": "",
+        "dc_flag_raw": "",
+        "currency_raw": "USD",
+        "extra_json": "{}",
+        "amount_debit_raw": "",
+        "amount_credit_raw": "",
+    }
+
+
+class TestCCSubtypeFormatC:
+    """Format C (two-column): cc_charge + cc_payment."""
+
+    def test_format_c_charge_only_is_spending(self):
+        """cc_charge populated, cc_payment empty → spending, resolved_amount = abs(charge)."""
+        from finance_etl.normalize import _classify_two_col
+        from decimal import Decimal
+
+        row = _make_stage_row(debit_raw="14.99", credit_raw="")
+        amount, subtype, resolved = _classify_two_col(row, locale_cfg={})
+
+        assert subtype == "spending"
+        assert resolved == Decimal("14.99")
+        assert resolved >= 0, "resolved_amount must always be >= 0"
+        assert amount < 0, "spending rows stored as negative amount (outflow)"
+
+    def test_format_c_payment_only_is_payment(self):
+        """cc_payment populated, cc_charge empty → payment, resolved_amount = abs(payment)."""
+        from finance_etl.normalize import _classify_two_col
+        from decimal import Decimal
+
+        row = _make_stage_row(debit_raw="", credit_raw="200.00")
+        amount, subtype, resolved = _classify_two_col(row, locale_cfg={})
+
+        assert subtype == "payment"
+        assert resolved == Decimal("200.00")
+        assert resolved >= 0
+        assert amount > 0, "payment rows stored as positive amount (inflow to card)"
+
+    def test_format_c_both_columns_is_conflict(self):
+        """Both cc_charge and cc_payment populated → conflict, no auto-split."""
+        from finance_etl.normalize import _classify_two_col
+
+        row = _make_stage_row(debit_raw="14.99", credit_raw="200.00")
+        amount, subtype, resolved = _classify_two_col(row, locale_cfg={})
+
+        assert subtype == "conflict", "Both columns populated must be flagged as conflict"
+        # No auto-split — a single row is returned with conflict label
+        assert resolved is not None
+
+    def test_format_c_correct_resolved_amount(self):
+        """resolved_amount is the absolute value of the charge, not a signed figure."""
+        from finance_etl.normalize import _classify_two_col
+        from decimal import Decimal
+
+        row = _make_stage_row(debit_raw="  $56.78 ", credit_raw="")
+        amount, subtype, resolved = _classify_two_col(row, locale_cfg={})
+
+        assert subtype == "spending"
+        assert resolved == Decimal("56.78")
+        assert resolved >= 0
+
+
+class TestCCSubtypeFormatAB:
+    """Format A / B (single-column polarity)."""
+
+    def test_format_a_positive_is_spending(self):
+        """Format A + positive amount → spending."""
+        from finance_etl.normalize import _classify_single_col
+        from decimal import Decimal
+
+        row = _make_stage_row(amount_raw="29.99")
+        amount, subtype, resolved = _classify_single_col(row, "signed", {}, "format_a")
+
+        assert subtype == "spending"
+        assert resolved == Decimal("29.99")
+        assert resolved >= 0
+
+    def test_format_a_negative_is_payment(self):
+        """Format A + negative amount → payment, resolved = abs(amount)."""
+        from finance_etl.normalize import _classify_single_col
+        from decimal import Decimal
+
+        row = _make_stage_row(amount_raw="-200.00")
+        amount, subtype, resolved = _classify_single_col(row, "signed", {}, "format_a")
+
+        assert subtype == "payment"
+        assert resolved == Decimal("200.00")
+        assert resolved >= 0
+
+    def test_format_b_positive_is_payment(self):
+        """Format B + positive amount → payment."""
+        from finance_etl.normalize import _classify_single_col
+        from decimal import Decimal
+
+        row = _make_stage_row(amount_raw="200.00")
+        amount, subtype, resolved = _classify_single_col(row, "signed", {}, "format_b")
+
+        assert subtype == "payment"
+        assert resolved == Decimal("200.00")
+        assert resolved >= 0
+
+    def test_format_b_negative_is_spending(self):
+        """Format B + negative amount → spending, resolved = abs(amount)."""
+        from finance_etl.normalize import _classify_single_col
+        from decimal import Decimal
+
+        row = _make_stage_row(amount_raw="-45.00")
+        amount, subtype, resolved = _classify_single_col(row, "signed", {}, "format_b")
+
+        assert subtype == "spending"
+        assert resolved == Decimal("45.00")
+        assert resolved >= 0
+
+    def test_zero_amount_is_adjustment(self):
+        """Zero amount → adjustment regardless of polarity."""
+        from finance_etl.normalize import _classify_single_col
+        from decimal import Decimal
+
+        row = _make_stage_row(amount_raw="0.00")
+        amount, subtype, resolved = _classify_single_col(row, "signed", {}, "format_a")
+
+        assert subtype == "adjustment"
+        assert resolved == Decimal("0")
+
+    def test_no_polarity_returns_none_subtype(self):
+        """When cc_polarity is not set, subtype is None (no classification)."""
+        from finance_etl.normalize import _classify_single_col
+
+        row = _make_stage_row(amount_raw="15.00")
+        amount, subtype, resolved = _classify_single_col(row, "signed", {}, None)
+
+        assert subtype is None
+        assert resolved is None
+
+
+class TestRefundKeywordOverride:
+    """Description keyword → adjustment override (all formats)."""
+
+    def test_refund_keyword_overrides_to_adjustment(self):
+        """Row with 'refund' in description → adjustment regardless of sign/format."""
+        from finance_etl.normalize import _normalize_row
+        from decimal import Decimal
+
+        row = _make_stage_row(
+            debit_raw="14.99",
+            credit_raw="",
+            description_raw="AMAZON REFUND - ORDER 123",
+        )
+        result = _normalize_row(
+            row,
+            family="debit_credit",
+            locale_cfg={},
+            date_format="%Y-%m-%d",
+            dc_flag_values={},
+            statement_type="credit_card",
+            cc_format="two_col",
+            cc_polarity=None,
+        )
+
+        assert result["transaction_subtype"] == "adjustment", \
+            "Refund keyword must override subtype to 'adjustment'"
+        assert result["resolved_amount"] >= 0
+
+    def test_chargeback_keyword_overrides_to_adjustment(self):
+        """Row with 'chargeback' in description → adjustment."""
+        from finance_etl.normalize import _normalize_row
+
+        row = _make_stage_row(
+            debit_raw="50.00",
+            description_raw="CHARGEBACK DISPUTE REF 999",
+        )
+        result = _normalize_row(
+            row, "debit_credit", {}, "%Y-%m-%d", {},
+            statement_type="credit_card", cc_format="two_col",
+        )
+        assert result["transaction_subtype"] == "adjustment"
+
+    def test_non_refund_spending_not_overridden(self):
+        """Normal spending description must not be overridden to adjustment."""
+        from finance_etl.normalize import _normalize_row
+
+        row = _make_stage_row(
+            debit_raw="12.50",
+            description_raw="STARBUCKS #1234 SEATTLE WA",
+        )
+        result = _normalize_row(
+            row, "debit_credit", {}, "%Y-%m-%d", {},
+            statement_type="credit_card", cc_format="two_col",
+        )
+        assert result["transaction_subtype"] == "spending"
+
+
+class TestResolvedAmountInvariant:
+    """resolved_amount must always be >= 0 for all subtypes."""
+
+    def test_resolved_amount_always_nonnegative_spending(self):
+        from finance_etl.normalize import _classify_two_col
+        row = _make_stage_row(debit_raw="99.99")
+        _, _, resolved = _classify_two_col(row, {})
+        assert resolved >= 0
+
+    def test_resolved_amount_always_nonnegative_payment(self):
+        from finance_etl.normalize import _classify_two_col
+        row = _make_stage_row(credit_raw="150.00")
+        _, _, resolved = _classify_two_col(row, {})
+        assert resolved >= 0
+
+    def test_resolved_amount_always_nonnegative_format_a(self):
+        from finance_etl.normalize import _classify_single_col
+        for raw_amount in ["25.00", "-25.00", "0.00"]:
+            row = _make_stage_row(amount_raw=raw_amount)
+            _, _, resolved = _classify_single_col(row, "signed", {}, "format_a")
+            if resolved is not None:
+                assert resolved >= 0, f"resolved_amount must be >= 0 for amount={raw_amount!r}"
+
+    def test_resolved_amount_always_nonnegative_format_b(self):
+        from finance_etl.normalize import _classify_single_col
+        for raw_amount in ["25.00", "-25.00", "0.00"]:
+            row = _make_stage_row(amount_raw=raw_amount)
+            _, _, resolved = _classify_single_col(row, "signed", {}, "format_b")
+            if resolved is not None:
+                assert resolved >= 0, f"resolved_amount must be >= 0 for amount={raw_amount!r}"
+
+
+class TestBalanceFormula:
+    """Balance formula: spending − payments − adjustments."""
+
+    def test_balance_formula_positive_owed(self):
+        """Positive balance = amount still owed."""
+        spending    = 150.00
+        payments    = 50.00
+        adjustments = 10.00
+        balance     = spending - payments - adjustments
+        assert balance == 90.00, "Balance = spending − payments − adjustments"
+
+    def test_balance_formula_zero(self):
+        """Card fully paid off → balance = 0."""
+        spending = payments = 100.00
+        balance  = spending - payments - 0
+        assert balance == 0.0
+
+    def test_balance_formula_negative_credit(self):
+        """Overpaid card → negative balance (card is in credit)."""
+        spending    = 100.00
+        payments    = 150.00
+        adjustments = 0.0
+        balance     = spending - payments - adjustments
+        assert balance < 0
+
+    def test_legacy_null_subtype_excluded_from_balance(self):
+        """Legacy rows with NULL transaction_subtype must not contribute to balance."""
+        # This is enforced in the SQL query (WHERE transaction_subtype = 'spending' etc.)
+        # Here we verify that a row with subtype=None returns resolved_amount=None
+        from finance_etl.normalize import _classify_single_col
+
+        row = _make_stage_row(amount_raw="25.00")
+        _, subtype, resolved = _classify_single_col(row, "signed", {}, None)
+
+        assert subtype is None,   "No polarity → no subtype"
+        assert resolved is None,  "No polarity → no resolved_amount (excluded from balance)"
+
+
+class TestCanonicalFieldRename:
+    """Old field names must be rejected with a clear error message."""
+
+    def test_retired_field_name_amount_rejected(self):
+        """Submitting 'amount' as a canonical field name raises a clear validation error."""
+        from finance_etl.wizard_mapping import validate_wizard_mapping
+
+        errors = validate_wizard_mapping(
+            {"transaction_date": "Date", "amount": "Amount"},
+            statement_type="credit_card",
+        )
+        assert errors, "Old field name 'amount' must produce a validation error"
+        assert any("retired" in e.lower() or "amount" in e.lower() for e in errors), \
+            f"Error message must mention the retired field; got: {errors}"
+
+    def test_retired_field_name_amount_debit_rejected(self):
+        """Submitting 'amount_debit' raises a clear validation error."""
+        from finance_etl.wizard_mapping import validate_wizard_mapping
+
+        errors = validate_wizard_mapping(
+            {"transaction_date": "Date", "amount_debit": "Charge", "amount_credit": "Payment"},
+            statement_type="credit_card",
+        )
+        assert errors
+        assert any("retired" in e.lower() for e in errors)
+
+    def test_new_cc_field_names_accepted(self):
+        """New cc_charge + cc_payment field names produce no validation errors."""
+        from finance_etl.wizard_mapping import validate_wizard_mapping
+
+        errors = validate_wizard_mapping(
+            {"transaction_date": "Date", "cc_charge": "Charge", "cc_payment": "Payment"},
+            statement_type="credit_card",
+        )
+        assert errors == [], f"New CC field names must be accepted; got: {errors}"
+
+    def test_new_cc_single_col_accepted(self):
+        """New cc_amount field name produces no validation errors."""
+        from finance_etl.wizard_mapping import validate_wizard_mapping
+
+        errors = validate_wizard_mapping(
+            {"transaction_date": "Date", "cc_amount": "Amount"},
+            statement_type="credit_card",
+        )
+        assert errors == [], f"cc_amount must be accepted for CC; got: {errors}"
+
+    def test_new_bank_fields_accepted(self):
+        """New bank_debit + bank_credit field names produce no validation errors."""
+        from finance_etl.wizard_mapping import validate_wizard_mapping
+
+        errors = validate_wizard_mapping(
+            {"transaction_date": "Date", "bank_debit": "Debit", "bank_credit": "Credit"},
+            statement_type="bank",
+        )
+        assert errors == [], f"New bank field names must be accepted; got: {errors}"

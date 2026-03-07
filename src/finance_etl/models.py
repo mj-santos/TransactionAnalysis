@@ -25,6 +25,9 @@ class AmountConfig:
     amount_col: str | None = None
     dc_flag_col: str | None = None
     dc_flag_values: dict[str, list[str]] = field(default_factory=dict)
+    # Credit-card subtype format (set by wizard_to_pipeline_mapping)
+    cc_format:   str | None = None   # 'two_col' | 'single_col' | None
+    cc_polarity: str | None = None   # 'format_a' | 'format_b' | None
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,8 @@ def parse_mapping_config(raw: dict[str, Any], mapping_path: str = "<mapping>") -
             amount_col=amount_raw.get("amount_col"),
             dc_flag_col=amount_raw.get("dc_flag_col"),
             dc_flag_values=dict(amount_raw.get("dc_flag_values") or {}),
+            cc_format=amount_raw.get("cc_format"),
+            cc_polarity=amount_raw.get("cc_polarity"),
         ),
         account_name=str(raw.get("account_name") or ""),
         account_id=str(raw.get("account_id") or ""),

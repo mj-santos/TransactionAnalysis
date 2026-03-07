@@ -1,11 +1,11 @@
 # Example mapping: Separate Debit / Credit columns (common in UK/EU bank exports)
 # amount_format_family: debit_credit
+# statement_type: bank
 # Rule: amount = credit - debit (outflow negative, inflow positive)
 #
-# BUG FIX 3: also demonstrates amount_debit / amount_credit — the optional
-# fallback canonical pair.  These can be used ALONGSIDE any primary family, or
-# on their own when the bank only exports a plain "Debit" and "Credit" column
-# that maps naturally to the fallback semantics (positive numbers, credit−debit).
+# Canonical field names (as of this release):
+#   bank_debit   → debit_col  (money leaving the bank account)
+#   bank_credit  → credit_col (money entering the bank account)
 
 bank_key: example_debit_credit
 bank_name: "Example Bank (Debit/Credit)"
@@ -27,13 +27,8 @@ date:
   date_format: "%d/%m/%Y"   # EU date format (Day/Month/Year)
 
 amount:
-  debit_col: "Debit Amount"
-  credit_col: "Credit Amount"
-  # Optional: map amount_debit / amount_credit as a supplemental fallback pair.
-  # Useful when the CSV has BOTH a primary amount column AND explicit debit/credit
-  # split columns — normalize.py uses these only when the primary family field is empty.
-  # amount_debit: "Debit Amount"    # uncomment to enable fallback
-  # amount_credit: "Credit Amount"  # uncomment to enable fallback
+  debit_col: "Debit Amount"    # bank_debit canonical field → debit_col pipeline key
+  credit_col: "Credit Amount"  # bank_credit canonical field → credit_col pipeline key
 
 currency_default: "GBP"
 

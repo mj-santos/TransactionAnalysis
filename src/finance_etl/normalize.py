@@ -6,11 +6,36 @@ ready for validation + loading.
 
 All amount/date/text normalization happens here in Python (not SQL)
 for full determinism and auditability.
+
+Credit-card rows are classified into spending / payment / adjustment
+using one of three formats:
+
+  Format C (two_col):
+    cc_charge populated, cc_payment empty  → spending
+    cc_payment populated, cc_charge empty  → payment
+    Both populated on same row             → conflict (flagged, not committed)
+
+  Format A (single_col, positive = spending):
+    Amount > 0  → spending,    resolved_amount = Amount
+    Amount < 0  → payment,     resolved_amount = abs(Amount)
+    Amount = 0  → adjustment,  resolved_amount = 0 (log warning)
+
+  Format B (single_col, positive = payment):
+    Amount > 0  → payment,     resolved_amount = Amount
+    Amount < 0  → spending,    resolved_amount = abs(Amount)
+    Amount = 0  → adjustment,  resolved_amount = 0 (log warning)
+
+  Refund override: description matches REFUND_KEYWORDS → adjustment (all formats).
+
+resolved_amount is ALWAYS stored as a positive Decimal >= 0.
+Sign direction is encoded entirely in transaction_subtype.
+Bank rows: transaction_subtype = None, resolved_amount = None.
 """
 from __future__ import annotations
 
 import datetime
 import json
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -38,6 +63,20 @@ class NormalizationError(ValueError):
     pass
 
 
+# Refund/chargeback keywords — description containing any of these overrides
+# the subtype to 'adjustment' regardless of sign or format.
+REFUND_KEYWORDS: frozenset[str] = frozenset({
+    "refund", "reversal", "chargeback", "credit adj", "creditadj",
+    "promotional credit", "fee reversal", "return credit",
+})
+
+
+def _description_is_refund(description: str) -> bool:
+    """Return True if description text matches a refund/chargeback keyword."""
+    desc_lower = description.lower()
+    return any(kw in desc_lower for kw in REFUND_KEYWORDS)
+
+
 def normalize_staged_rows(
     conn,
     run_id: str,
@@ -58,6 +97,11 @@ def normalize_staged_rows(
     locale_cfg = mapping.get("locale", {})
     date_format = mapping.get("date", {}).get("date_format")
     dc_flag_values = mapping.get("amount", {}).get("dc_flag_values", {})
+    amount_cfg = mapping.get("amount", {})
+
+    # CC-specific format info (set by wizard_to_pipeline_mapping)
+    cc_format   = amount_cfg.get("cc_format")    # 'two_col' | 'single_col' | None
+    cc_polarity = amount_cfg.get("cc_polarity")  # 'format_a' | 'format_b' | None
 
     rows = conn.execute(
         "SELECT * FROM transactions_stage WHERE run_id = ?", [run_id]
@@ -71,7 +115,10 @@ def normalize_staged_rows(
     for raw in rows:
         row = dict(zip(col_names, raw))
         try:
-            norm = _normalize_row(row, family, locale_cfg, date_format, dc_flag_values, statement_type)
+            norm = _normalize_row(
+                row, family, locale_cfg, date_format, dc_flag_values,
+                statement_type, cc_format, cc_polarity,
+            )
             normalized.append(norm)
         except (NormalizationError, AmountParseError, DateParseError) as e:
             errors.append({"source_row": row.get("source_row"), "error": str(e)})
@@ -91,9 +138,20 @@ def _normalize_row(
     date_format: str | None,
     dc_flag_values: dict,
     statement_type: str | None = None,
+    cc_format: str | None = None,
+    cc_polarity: str | None = None,
 ) -> dict:
-    # --- Amount (Feature 2: priority-based resolution) ---
-    amount = resolve_amount(row, family, locale_cfg, dc_flag_values)
+    # --- Amount + CC subtype classification ---
+    is_cc = (statement_type == "credit_card")
+
+    if is_cc:
+        amount, transaction_subtype, resolved_amount = _classify_cc_row(
+            row, family, locale_cfg, cc_format, cc_polarity,
+        )
+    else:
+        amount = resolve_amount(row, family, locale_cfg, dc_flag_values)
+        transaction_subtype = None
+        resolved_amount = None
 
     # --- Dates ---
     tx_date = parse_date(row["transaction_date_raw"], date_format=date_format, locale_cfg=locale_cfg)
@@ -110,6 +168,16 @@ def _normalize_row(
     description = normalize_description(row.get("description_raw") or "")
     if not description:
         raise NormalizationError(f"Empty description at source_row={row.get('source_row')}")
+
+    # --- Refund override for CC rows ---
+    if is_cc and transaction_subtype not in ("conflict", None):
+        if _description_is_refund(description):
+            transaction_subtype = "adjustment"
+            resolved_amount = abs(resolved_amount) if resolved_amount is not None else Decimal(0)
+            log.debug(
+                "Refund keyword override at source_row=%s: subtype → adjustment",
+                row.get("source_row"),
+            )
 
     # --- Currency ---
     currency = (row.get("currency_raw") or "USD").strip().upper() or "USD"
@@ -146,8 +214,157 @@ def _normalize_row(
         "transaction_fingerprint": fingerprint,
         # Feature 1: classify every row so bank ≠ credit_card is never mixed
         "statement_type": statement_type,
+        # CC subtype model
+        "transaction_subtype": transaction_subtype,
+        "resolved_amount": resolved_amount,
     }
 
+
+# ---------------------------------------------------------------------------
+# Credit-card subtype classification
+# ---------------------------------------------------------------------------
+
+def _classify_cc_row(
+    row: dict,
+    family: str,
+    locale_cfg: dict,
+    cc_format: str | None,
+    cc_polarity: str | None,
+) -> tuple[Decimal, str | None, Decimal | None]:
+    """
+    Classify a credit-card row into spending / payment / adjustment / conflict.
+
+    Returns (amount, transaction_subtype, resolved_amount).
+
+    amount         — the signed amount used for fingerprinting (existing semantics)
+    transaction_subtype — 'spending' | 'payment' | 'adjustment' | 'conflict' | None
+    resolved_amount — always >= 0; direction encoded in transaction_subtype
+    """
+    if cc_format == "two_col":
+        return _classify_two_col(row, locale_cfg)
+    else:
+        # Single-column (Format A or B), or unknown cc_format
+        return _classify_single_col(row, family, locale_cfg, cc_polarity)
+
+
+def _classify_two_col(
+    row: dict,
+    locale_cfg: dict,
+) -> tuple[Decimal, str, Decimal]:
+    """
+    Format C — two-column (cc_charge / cc_payment mapped to debit_raw / credit_raw).
+
+    cc_charge → debit_raw (spending)
+    cc_payment → credit_raw (payment)
+    Both populated → conflict
+    """
+    charge_raw  = (row.get("debit_raw")  or "").strip()
+    payment_raw = (row.get("credit_raw") or "").strip()
+
+    has_charge  = bool(charge_raw)
+    has_payment = bool(payment_raw)
+
+    if has_charge and has_payment:
+        # Conflict — cannot auto-split; flag for user resolution
+        # Use charge amount as the stored amount for fingerprinting (arbitrary but consistent)
+        try:
+            charge_val = parse_signed(charge_raw, locale_cfg)
+        except AmountParseError:
+            charge_val = Decimal(0)
+        log.warning(
+            "CC conflict row at source_row=%s: both cc_charge=%r and cc_payment=%r populated",
+            row.get("source_row"), charge_raw, payment_raw,
+        )
+        return (charge_val, "conflict", abs(charge_val))
+
+    if has_charge:
+        try:
+            charge_val = parse_signed(charge_raw, locale_cfg)
+            resolved = abs(charge_val)
+        except AmountParseError as exc:
+            raise NormalizationError(
+                f"Cannot parse cc_charge={charge_raw!r} at source_row={row.get('source_row')}: {exc}"
+            ) from exc
+        # Store as negative for backward compat (spending = outflow from user perspective)
+        return (-resolved, "spending", resolved)
+
+    if has_payment:
+        try:
+            payment_val = parse_signed(payment_raw, locale_cfg)
+            resolved = abs(payment_val)
+        except AmountParseError as exc:
+            raise NormalizationError(
+                f"Cannot parse cc_payment={payment_raw!r} at source_row={row.get('source_row')}: {exc}"
+            ) from exc
+        # Store as positive (payment = inflow to card balance)
+        return (resolved, "payment", resolved)
+
+    # Both empty — no amount data
+    raise NormalizationError(
+        f"CC row has no amount data (cc_charge and cc_payment both empty) "
+        f"at source_row={row.get('source_row')}"
+    )
+
+
+def _classify_single_col(
+    row: dict,
+    family: str,
+    locale_cfg: dict,
+    cc_polarity: str | None,
+) -> tuple[Decimal, str | None, Decimal | None]:
+    """
+    Format A / B — single amount column.
+
+    cc_polarity='format_a': positive → spending, negative → payment
+    cc_polarity='format_b': positive → payment,  negative → spending
+
+    If cc_polarity is not set, falls through to the legacy signed resolver
+    (no subtype is assigned).
+    """
+    amount_raw = (row.get("amount_raw") or "").strip()
+    if not amount_raw:
+        raise NormalizationError(
+            f"CC single-col row has no amount data at source_row={row.get('source_row')}"
+        )
+
+    try:
+        value = parse_signed(amount_raw, locale_cfg)
+    except AmountParseError as exc:
+        raise NormalizationError(
+            f"Cannot parse cc_amount={amount_raw!r} at source_row={row.get('source_row')}: {exc}"
+        ) from exc
+
+    resolved = abs(value)
+
+    if value == Decimal(0):
+        # Zero amount → adjustment (log warning)
+        log.warning(
+            "CC zero-amount row at source_row=%s; assigned subtype=adjustment",
+            row.get("source_row"),
+        )
+        return (Decimal(0), "adjustment", Decimal(0))
+
+    if cc_polarity == "format_a":
+        # Positive = spending (most US cards)
+        if value > 0:
+            return (-resolved, "spending", resolved)
+        else:
+            return (resolved, "payment", resolved)
+
+    if cc_polarity == "format_b":
+        # Positive = payment (some EU/UK banks)
+        if value > 0:
+            return (resolved, "payment", resolved)
+        else:
+            return (-resolved, "spending", resolved)
+
+    # No polarity confirmed — return raw amount with no subtype
+    return (value, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Legacy resolve_amount (used by bank rows)
+# ---------------------------------------------------------------------------
 
 def resolve_amount(
     row: dict,
@@ -156,12 +373,10 @@ def resolve_amount(
     dc_flag_values: dict,
 ) -> Decimal:
     """
-    Feature 2: Priority-based amount resolution.
+    Priority-based amount resolution for bank rows.
 
     Step 1 — Try the mapped amount_format_family (backward-compatible).
-    Step 2 — Fall back to amount_debit_raw / amount_credit_raw canonical fields
-              (result: credit − debit; positive = inflow, negative = outflow).
-    Step 3 — All empty → NormalizationError; row is skipped and logged.
+    Step 2 — All empty → NormalizationError; row is skipped and logged.
     """
     # Step 1: existing family-based parsing
     if family == "signed" and (row.get("amount_raw") or "").strip():
@@ -186,34 +401,17 @@ def resolve_amount(
                 locale_cfg=locale_cfg,
             )
 
-    # Step 2: fall back to amount_debit / amount_credit canonical fields
-    ad = (row.get("amount_debit_raw") or "").strip()
-    ac = (row.get("amount_credit_raw") or "").strip()
-    if ad or ac:
-        # amount_debit = outflow (positive number) → stored negative (credit - debit)
-        # amount_credit = inflow (positive number) → stored positive
-        try:
-            debit = parse_signed(ad, locale_cfg) if ad else Decimal(0)
-        except AmountParseError:
-            log.warning(
-                "Cannot parse amount_debit_raw=%r at source_row=%s; treating as 0",
-                ad, row.get("source_row"),
-            )
-            debit = Decimal(0)
-        try:
-            credit = parse_signed(ac, locale_cfg) if ac else Decimal(0)
-        except AmountParseError:
-            log.warning(
-                "Cannot parse amount_credit_raw=%r at source_row=%s; treating as 0",
-                ac, row.get("source_row"),
-            )
-            credit = Decimal(0)
-        return credit - debit
+    # Step 2: fallback to amount_debit_raw / amount_credit_raw (cc_charge/cc_payment staging cols)
+    debit_raw = (row.get("amount_debit_raw") or "").strip()
+    credit_raw = (row.get("amount_credit_raw") or "").strip()
+    if debit_raw or credit_raw:
+        debit_val = parse_signed(debit_raw, locale_cfg) if debit_raw else Decimal("0")
+        credit_val = parse_signed(credit_raw, locale_cfg) if credit_raw else Decimal("0")
+        return credit_val - debit_val
 
     # Step 3: nothing available — skip row with warning
     src = row.get("source_row", "?")
     src_file = row.get("source_file", "?")
     raise NormalizationError(
-        f"No amount data: amount, amount_debit, and amount_credit all empty "
-        f"at source_row={src} (file={src_file!r})"
+        f"No amount data at source_row={src} (file={src_file!r})"
     )
