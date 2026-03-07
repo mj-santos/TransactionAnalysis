@@ -541,6 +541,26 @@
           <tbody id="w-mapping-rows"></tbody>
         </table>
 
+        <!-- CC polarity panel — shown in step 2 when cc_amount (single-column) is mapped for a credit card -->
+        <div id="w-step2-polarity-panel" style="display:none; margin-top:18px; padding:14px 16px; background:var(--surface-alt,#f8fafc); border:1px solid var(--border); border-radius:8px;">
+          <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:10px;">
+            Amount Polarity <span style="color:var(--danger)">*</span>
+            <small style="font-weight:normal; text-transform:none; margin-left:6px;">— which sign convention does this card use?</small>
+          </div>
+          <div style="display:flex; gap:24px; flex-wrap:wrap;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:8px; font-size:13px;">
+              <input type="radio" name="w-step2-cc-polarity" value="format_a"
+                     onchange="wizard.ccPolarity='format_a';" />
+              <span><strong>Positive = charge</strong> to card &nbsp;<em style="color:var(--text-muted)">(most US cards)</em></span>
+            </label>
+            <label style="cursor:pointer; display:flex; align-items:center; gap:8px; font-size:13px;">
+              <input type="radio" name="w-step2-cc-polarity" value="format_b"
+                     onchange="wizard.ccPolarity='format_b';" />
+              <span><strong>Negative = charge</strong> to card &nbsp;<em style="color:var(--text-muted)">(some EU/UK banks)</em></span>
+            </label>
+          </div>
+        </div>
+
         <!-- Custom headers panel — shown when "Include custom headers" is checked -->
         <div id="w-custom-headers-panel" style="display:none; margin-top:18px;">
           <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">
