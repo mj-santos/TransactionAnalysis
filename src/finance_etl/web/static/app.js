@@ -898,6 +898,13 @@ function wizardClose() {
   // Re-enable main preview toggle (wizard step 3 may have locked it)
   const mainTog = document.getElementById('preview-toggle');
   if (mainTog) mainTog.disabled = false;
+  // Clear the date-format input so the next session always starts with a
+  // fresh server-detected value.  Without this, setVal() (which guards on
+  // !el.value) would preserve a stale format from the previous run and the
+  // auto-detected format for the new file would never be applied — even when
+  // a profile is auto-matched.
+  const dfEl = document.getElementById('w-date-format');
+  if (dfEl) dfEl.value = '';
   // FIX 2: clear all upload session state so the user starts fresh on next open
   _clearImportSession();
   // Reset wizard state for next session
@@ -1472,7 +1479,11 @@ function renderWizardStep3() {
     setVal('w-account-id',      mp.account_id   || '');
   }
 
-  // Pre-fill date format from server-inferred hint if the field is empty
+  // Always write the server-detected date format on the first render of step 3
+  // in a session.  The field was cleared in wizardClose(), so on the first
+  // render it is empty and setVal() will fill it.  On back/forward navigation
+  // within the same session the field already has a value (detected or user-
+  // edited) and setVal() leaves it untouched — preserving manual overrides.
   if (wizard.suggestedDateFormat) {
     setVal('w-date-format', wizard.suggestedDateFormat);
   }
