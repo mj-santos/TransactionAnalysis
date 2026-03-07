@@ -826,6 +826,10 @@ const WIZARD_BANK_AMOUNT_GROUPS = [
 
 const WIZARD_AMOUNT_GROUPS = [...WIZARD_CC_AMOUNT_GROUPS, ...WIZARD_BANK_AMOUNT_GROUPS];
 
+// Map from each amount field → its group index in WIZARD_AMOUNT_GROUPS
+const FIELD_TO_AMOUNT_GROUP = {};
+WIZARD_AMOUNT_GROUPS.forEach((grp, idx) => grp.forEach(f => { FIELD_TO_AMOUNT_GROUP[f] = idx; }));
+
 // ── Open / Close ─────────────────────────────────────────────
 
 function wizardOpen(uploadInfo) {
@@ -1256,24 +1260,46 @@ function renderWizardStep2() {
     }
   }
 
-  const fields = (wizard.canonicalFields.length
+  const allFields = (wizard.canonicalFields.length
     ? wizard.canonicalFields.filter(f => _typeFields.includes(f))
     : _typeFields
   ).filter(f => !_hidden.has(f));
 
-  const labels = wizard.canonicalLabels;
-  const isReq = f => WIZARD_REQUIRED_FIELDS.has(f);
+  // Separate amount fields from non-amount fields to render groups with OR separators
+  const amountGroupsForType = _type === 'credit_card' ? WIZARD_CC_AMOUNT_GROUPS
+                            : _type === 'bank'        ? WIZARD_BANK_AMOUNT_GROUPS
+                            : WIZARD_AMOUNT_GROUPS;
+  const amountFieldSet = new Set(amountGroupsForType.flat());
+  const nonAmountFields = allFields.filter(f => !amountFieldSet.has(f));
+  // Only include groups whose fields appear in allFields (respects format-based hiding)
+  const visibleGroups = amountGroupsForType
+    .map((grp, idx) => ({ idx, fields: grp.filter(f => allFields.includes(f)) }))
+    .filter(g => g.fields.length > 0);
 
-  const tbody = document.getElementById('w-mapping-rows');
-  tbody.innerHTML = fields.map(field => {
-    const label = labels[field] || field;
+  const labels = wizard.canonicalLabels;
+  const isReq  = f => WIZARD_REQUIRED_FIELDS.has(f);
+
+  // Determine which group is currently active (has any mapped field)
+  const activeGroupIdx = (() => {
+    for (const g of visibleGroups) {
+      if (g.fields.some(f => wizard.mapping[f])) return g.idx;
+    }
+    return null;
+  })();
+
+  const makeRow = (field) => {
+    const label   = labels[field] || field;
     const current = wizard.mapping[field] || '';
     const isSuggested = !!wizard.suggestions[field] && wizard.suggestions[field] === current;
+    const grpIdx  = FIELD_TO_AMOUNT_GROUP[field];
+    const isAmountField = grpIdx !== undefined;
+    const hidden  = isAmountField && activeGroupIdx !== null && grpIdx !== activeGroupIdx;
+    const grpAttr = isAmountField ? ` data-amount-group="${grpIdx}"` : '';
     const opts = ['', ...wizard.headers].map(h =>
       `<option value="${esc(h)}" ${h === current ? 'selected' : ''}>${h ? esc(h) : '(none)'}</option>`
     ).join('');
     return `
-      <tr>
+      <tr${grpAttr}${hidden ? ' style="display:none"' : ''}>
         <td class="field-label${isReq(field) ? ' required' : ''}">${esc(label)}</td>
         <td>
           <select data-field="${esc(field)}"
@@ -1283,7 +1309,26 @@ function renderWizardStep2() {
           </select>
         </td>
       </tr>`;
-  }).join('');
+  };
+
+  const orSep = (grpIdx) =>
+    `<tr data-amount-or-sep="${grpIdx}" style="display:${activeGroupIdx !== null ? 'none' : ''}">
+      <td colspan="2" style="text-align:center;color:var(--muted,#888);font-size:11px;padding:2px 0;user-select:none;">── or ──</td>
+    </tr>`;
+
+  const tbody = document.getElementById('w-mapping-rows');
+
+  // Build rows: non-amount first (up to transaction_date), then amount groups with OR seps,
+  // then remaining non-amount fields
+  const dateFields    = nonAmountFields.filter(f => f === 'transaction_date');
+  const metaFields    = nonAmountFields.filter(f => f !== 'transaction_date');
+  let rows = dateFields.map(makeRow).join('');
+  visibleGroups.forEach((g, i) => {
+    if (i > 0) rows += orSep(g.idx);
+    rows += g.fields.map(makeRow).join('');
+  });
+  rows += metaFields.map(makeRow).join('');
+  tbody.innerHTML = rows;
 
   // Custom headers panel — only visible when "Include custom headers" is checked
   const panel = document.getElementById('w-custom-headers-panel');
@@ -1326,6 +1371,37 @@ function onMappingChange(sel) {
   const field = sel.dataset.field;
   wizard.mapping[field] = sel.value;
   sel.classList.toggle('suggested', false);
+
+  // If an amount field changed, lock or unlock the group selection
+  if (field in FIELD_TO_AMOUNT_GROUP) {
+    _updateAmountGroupLock();
+  }
+}
+
+function _updateAmountGroupLock() {
+  // Determine which group (if any) has a mapped field
+  let activeIdx = null;
+  document.querySelectorAll('#w-mapping-rows tr[data-amount-group]').forEach(row => {
+    if (activeIdx !== null) return;
+    const sel = row.querySelector('select');
+    if (sel && sel.value) activeIdx = Number(row.dataset.amountGroup);
+  });
+
+  // Show/hide rows and OR separators based on active group
+  document.querySelectorAll('#w-mapping-rows tr[data-amount-group]').forEach(row => {
+    const grpIdx = Number(row.dataset.amountGroup);
+    const hide = activeIdx !== null && grpIdx !== activeIdx;
+    row.style.display = hide ? 'none' : '';
+    if (hide) {
+      // Clear the hidden field's mapping so it doesn't get submitted
+      const sel = row.querySelector('select');
+      if (sel) { wizard.mapping[sel.dataset.field] = ''; sel.value = ''; }
+    }
+  });
+
+  document.querySelectorAll('#w-mapping-rows tr[data-amount-or-sep]').forEach(row => {
+    row.style.display = activeIdx !== null ? 'none' : '';
+  });
 }
 
 function collectMappingSelections() {
