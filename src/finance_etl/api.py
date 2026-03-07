@@ -1243,7 +1243,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {"type": type, "sources": sources}
 
     def _build_txn_where(
-        type, date_from, date_to, account, category, merchant, source
+        type, date_from, date_to, account, category, merchant, source, subtype=None
     ) -> tuple[list, list]:
         """Build shared WHERE clause + params for /transactions and /transactions/totals."""
         where, params = [], []
@@ -1263,6 +1263,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         if merchant:
             where.append("LOWER(COALESCE(merchant, description)) LIKE ?")
             params.append(f"%{merchant.lower()}%")
+        if subtype and subtype in ("spending", "payment", "adjustment"):
+            where.append("transaction_subtype = ?"); params.append(subtype)
         # source filter: specific run_id; 'all' or absent → no additional filter
         if source and source != "all":
             where.append("run_id = ?"); params.append(source)
@@ -1278,6 +1280,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         account:   Optional[str] = Query(None,           description="Account name or ID filter"),
         category:  Optional[str] = Query(None,           description="Category substring filter"),
         merchant:  Optional[str] = Query(None,           description="Merchant/description substring"),
+        subtype:   Optional[str] = Query(None,           description="transaction_subtype filter: spending|payment|adjustment"),
         source:    Optional[str] = Query(None,           description="run_id to filter by import source; 'all' = no filter"),
         group_by:  Optional[str] = Query(None,           description="Comma-separated field(s) to group"),
         sort_by:   str           = Query("transaction_date", description="Column to sort by"),
@@ -1291,7 +1294,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Pass `source=<run_id>` to filter by a specific import; omit or pass `source=all`
         to show all rows for the given type.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         group_fields = [f.strip() for f in (group_by or "").split(",")
@@ -1350,6 +1353,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         account:   Optional[str] = Query(None),
         category:  Optional[str] = Query(None),
         merchant:  Optional[str] = Query(None),
+        subtype:   Optional[str] = Query(None, description="transaction_subtype filter: spending|payment|adjustment"),
         source:    Optional[str] = Query(None,  description="run_id to filter by import source; 'all' = no filter"),
     ):
         """
@@ -1364,7 +1368,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
         source: specific run_id to scope to one import; omit or 'all' for all rows.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"
