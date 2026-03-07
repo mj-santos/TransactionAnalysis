@@ -984,15 +984,7 @@ async function wizardNext() {
     const errEl1 = document.getElementById('w-step1-type-error');
     if (errEl1) errEl1.style.display = 'none';
 
-    // For cc single_col, validate polarity is confirmed
-    if (wizard.statementType === 'credit_card' && wizard.ccFormat === 'single_col') {
-      const polRadio = document.querySelector('input[name="w-cc-polarity"]:checked');
-      if (!polRadio) {
-        toast('Please confirm the amount polarity for this credit card statement.', 'error');
-        return;
-      }
-      wizard.ccPolarity = polRadio.value;
-    }
+    // Polarity is confirmed in step 2 (when cc_amount is mapped) — not required here
 
     // Fetch canonical fields from server if not yet loaded
     if (!wizard.canonicalFields.length && wizard.files.length) {
@@ -1026,6 +1018,24 @@ async function wizardNext() {
     collectMappingSelections();
     // Validate
     const errors = validateMappingLocally();
+
+    // For CC single-col (cc_amount), require polarity to be confirmed in step 2
+    const ccAmountGroupIdx = FIELD_TO_AMOUNT_GROUP['cc_amount'];
+    let activeAmtIdx = null;
+    document.querySelectorAll('#w-mapping-rows tr[data-amount-group]').forEach(row => {
+      if (activeAmtIdx !== null) return;
+      const sel = row.querySelector('select');
+      if (sel && sel.value) activeAmtIdx = Number(row.dataset.amountGroup);
+    });
+    if (wizard.statementType === 'credit_card' && activeAmtIdx === ccAmountGroupIdx) {
+      const polRadio = document.querySelector('input[name="w-step2-cc-polarity"]:checked');
+      if (!polRadio) {
+        errors.push('Amount polarity is required — select which sign convention this credit card uses.');
+      } else {
+        wizard.ccPolarity = polRadio.value;
+      }
+    }
+
     const errEl = document.getElementById('w-validation-errors');
     if (errors.length) {
       errEl.innerHTML = errors.map(e => `<p>• ${esc(e)}</p>`).join('');
@@ -1330,6 +1340,9 @@ function renderWizardStep2() {
   rows += metaFields.map(makeRow).join('');
   tbody.innerHTML = rows;
 
+  // Initialize amount group lock state and polarity panel visibility
+  _updateAmountGroupLock();
+
   // Custom headers panel — only visible when "Include custom headers" is checked
   const panel = document.getElementById('w-custom-headers-panel');
   if (!panel) return;
@@ -1402,6 +1415,20 @@ function _updateAmountGroupLock() {
   document.querySelectorAll('#w-mapping-rows tr[data-amount-or-sep]').forEach(row => {
     row.style.display = activeIdx !== null ? 'none' : '';
   });
+
+  // Show the step-2 polarity panel when cc_amount (single-col) group is active for CC statements
+  const polarityPanel = document.getElementById('w-step2-polarity-panel');
+  if (polarityPanel) {
+    const ccAmountGroupIdx = FIELD_TO_AMOUNT_GROUP['cc_amount'];
+    const showPolarity = wizard.statementType === 'credit_card'
+                      && activeIdx === ccAmountGroupIdx;
+    polarityPanel.style.display = showPolarity ? '' : 'none';
+    // Restore previously selected polarity if switching back
+    if (showPolarity && wizard.ccPolarity) {
+      const radio = polarityPanel.querySelector(`input[value="${wizard.ccPolarity}"]`);
+      if (radio) radio.checked = true;
+    }
+  }
 }
 
 function collectMappingSelections() {
