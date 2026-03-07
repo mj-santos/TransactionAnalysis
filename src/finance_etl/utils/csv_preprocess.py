@@ -119,12 +119,11 @@ def _strip_header_echo(
     """
     Detect and strip leading header labels embedded in cell values.
 
-    Returns the list of column names where stripping was applied.
+    Handles two sub-variants:
+      • Newline-separated  — header="Date", cell="Date\\nFeb 12 2026" → "Feb 12 2026"
+      • Inline (same line) — header="Date", cell="Date Feb 12 2026"  → "Feb 12 2026"
 
-    Examples
-    --------
-    header="Date", cell="Date\\nFeb 12 2026"    → "Feb 12 2026"
-    header="Description", cell="Description\\nAMAZON" → "AMAZON"
+    Returns the list of column names where stripping was applied.
     """
     if not rows:
         return []
@@ -143,15 +142,30 @@ def _strip_header_echo(
         if not header_norm:
             continue
 
-        # Compare against the first line of the cell value
-        first_line = cell.split("\n")[0] if "\n" in cell else cell
+        # Newline-separated variant: first sub-line exactly matches header
+        first_line = cell.split("\n")[0]
         if _normalize(first_line) == header_norm:
             cols_to_strip.append(header)
-            log.info("[PreProcess] Stripped header echo from column: %s", header)
+            log.info("[PreProcess] Stripped header echo (newline) from column: %s", header)
+            continue
+
+        # Inline variant: single-line cell begins with "Header value…"
+        # (header name immediately followed by whitespace then the real value).
+        # Only applies when there is no newline — avoids double-detection.
+        if "\n" not in cell:
+            cell_norm = _normalize(cell)
+            if cell_norm.startswith(header_norm + " "):
+                cols_to_strip.append(header)
+                log.info("[PreProcess] Stripped header echo (inline) from column: %s", header)
 
     if not cols_to_strip:
         return []
 
+    # Build per-header regex for efficient inline stripping (cached in local dict)
+    _prefix_re: dict[str, re.Pattern[str]] = {
+        h: re.compile(r"(?i)^" + re.escape(h) + r"\s+")
+        for h in cols_to_strip
+    }
     strip_set = set(cols_to_strip)
 
     for row in rows:
@@ -162,16 +176,20 @@ def _strip_header_echo(
             header_norm = _normalize(header)
 
             if "\n" in cell:
+                # Newline-separated: strip first sub-line if it matches header
                 lines = cell.split("\n")
                 if _normalize(lines[0]) == header_norm:
-                    # Join remaining sub-lines with a space
                     row[col_idx] = " ".join(
                         ln.strip() for ln in lines[1:] if ln.strip()
                     )
             else:
-                # Cell IS just the header label — clear it
+                # Single-line: strip header prefix (exact or inline)
                 if _normalize(cell) == header_norm:
                     row[col_idx] = ""
+                else:
+                    m = _prefix_re[header].match(cell)
+                    if m:
+                        row[col_idx] = cell[m.end():]
 
     return cols_to_strip
 
