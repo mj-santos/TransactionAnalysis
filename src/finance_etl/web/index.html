@@ -220,6 +220,8 @@
       <button class="btn btn-secondary btn-sm" id="cc-load-more" style="display:none;" onclick="loadMoreTxn('credit_card')">Load more</button>
       <span id="cc-meta" style="font-size:12px; color:var(--text-muted);"></span>
     </div>
+    <!-- CC legacy/conflict warning banners — populated by renderTxnTotals() -->
+    <div id="cc-totals-warn" style="margin-top:8px;"></div>
   </section>
 
   <!-- ─── BANK TRANSACTIONS PAGE ─── -->
@@ -283,6 +285,8 @@
       <button class="btn btn-secondary btn-sm" id="bk-load-more" style="display:none;" onclick="loadMoreTxn('bank')">Load more</button>
       <span id="bk-meta" style="font-size:12px; color:var(--text-muted);"></span>
     </div>
+    <!-- Bank-tab warn element (unused; kept for renderTxnTotals() API symmetry) -->
+    <div id="bk-totals-warn" style="margin-top:8px;"></div>
   </section>
 
   <!-- ─── REPORTS PAGE ─── -->
@@ -484,6 +488,12 @@
         <div id="w-preprocess-banner"></div>
         <div id="w-detect-banner"></div>
 
+        <!-- Statement type selector (moved from step 3) — populated by renderWizardStep1() -->
+        <div id="w-step1-stmt-type"></div>
+
+        <!-- CC format detection + polarity confirmation — populated by renderWizardStep1() -->
+        <div id="w-cc-polarity-panel"></div>
+
         <div class="info-grid" id="w-info-grid"></div>
 
         <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">
@@ -537,28 +547,8 @@
           Name this mapping profile. It will be saved and auto-detected on future uploads.
         </p>
 
-        <!-- BUG FIX 1: Statement type selector lives IN the wizard — not on the import page.
-             getStatementType() read from import-page radios which were often unset when
-             the wizard opened, silently sending statement_type=null to the backend. -->
-        <div class="form-group" style="margin-bottom:16px; padding:12px; background:var(--surface); border:1px solid var(--border); border-radius:6px;">
-          <label style="font-weight:600; display:block; margin-bottom:8px;">
-            Statement Type <span style="color:var(--danger)">*</span>
-            <span style="font-weight:400; font-size:12px; color:var(--text-muted);"> — required to route transactions to the correct tab</span>
-          </label>
-          <div style="display:flex; gap:20px; flex-wrap:wrap;">
-            <label style="cursor:pointer; display:flex; align-items:center; gap:7px;">
-              <input type="radio" name="w-statement-type" id="w-st-credit-card" value="credit_card" />
-              💳 Credit Card Statement
-            </label>
-            <label style="cursor:pointer; display:flex; align-items:center; gap:7px;">
-              <input type="radio" name="w-statement-type" id="w-st-bank" value="bank" />
-              🏦 Bank Statement (Checking / Savings / Cash)
-            </label>
-          </div>
-          <div id="w-stmt-type-error" style="display:none; font-size:12px; color:var(--danger); margin-top:6px;">
-            Please select a statement type before saving.
-          </div>
-        </div>
+        <!-- Statement type display (confirmed in step 1) — populated by renderWizardStep3() -->
+        <div id="w-step3-stmt-type-display" style="margin-bottom:14px;"></div>
 
         <div class="review-grid">
           <div class="form-group">

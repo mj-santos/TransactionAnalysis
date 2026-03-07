@@ -87,7 +87,11 @@ CREATE TABLE IF NOT EXISTS transactions_norm (
   transaction_fingerprint TEXT      NOT NULL,
   ingested_at           TIMESTAMP   DEFAULT CURRENT_TIMESTAMP,
   statement_type        TEXT,
-  run_id                TEXT
+  run_id                TEXT,
+  -- Credit-card classification: spending / payment / adjustment / NULL (bank rows)
+  transaction_subtype   TEXT,
+  -- Unsigned resolved amount (always >= 0), direction encoded in transaction_subtype
+  resolved_amount       DECIMAL(18,2)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_fingerprint
@@ -108,11 +112,10 @@ _MIGRATIONS = [
     "ALTER TABLE transactions_stage ADD COLUMN IF NOT EXISTS amount_credit_raw TEXT",
 
     # ── Backfill: NULL statement_type → 'bank' ──────────────────────────────
-    # Rows imported before statement_type was introduced predate credit-card
-    # support, so defaulting to 'bank' is the safe assumption — all legacy
-    # imports were bank/checking statements.  This is a one-time UPDATE and is
-    # idempotent (WHERE statement_type IS NULL ensures it only runs on untyped rows).
     "UPDATE transactions_norm SET statement_type = 'bank' WHERE statement_type IS NULL",
+    # ── Add credit-card subtype columns ─────────────────────────────────────
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS transaction_subtype TEXT",
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS resolved_amount DECIMAL(18,2)",
 
     # ── Backfill: run_id via transactions_stage join ─────────────────────────
     # Link each transaction back to the run that created it.  Rows where

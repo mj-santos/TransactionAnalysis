@@ -42,8 +42,9 @@ def load_normalized(
                   transaction_date, posted_date, description, merchant, category,
                   amount, currency, bank_name, account_name, account_id,
                   source_file, source_row, file_hash, transaction_fingerprint,
-                  statement_type, run_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  statement_type, run_id,
+                  transaction_subtype, resolved_amount
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     row["transaction_date"],
@@ -64,6 +65,9 @@ def load_normalized(
                     row.get("statement_type"),
                     # Source tracking: links row back to originating run
                     run_id,
+                    # CC subtype model: 'spending' | 'payment' | 'adjustment' | None
+                    row.get("transaction_subtype"),
+                    str(row["resolved_amount"]) if row.get("resolved_amount") is not None else None,
                 ],
             )
             # Check if row was actually inserted

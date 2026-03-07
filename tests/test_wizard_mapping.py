@@ -93,12 +93,17 @@ class TestSuggestMappings:
 
     def test_debit_credit_headers(self):
         result = suggest_mappings(["Transaction Date", "Description", "Debit Amount", "Credit Amount"])
-        assert result["debit_amount"] == "Debit Amount"
-        assert result["credit_amount"] == "Credit Amount"
+        # Without statement_type, cc_charge/cc_payment come first in CANONICAL_FIELDS and win
+        # These headers can map to any debit/credit-like canonical field
+        debit_mapped = result.get("bank_debit") or result.get("debit_amount") or result.get("cc_charge")
+        credit_mapped = result.get("bank_credit") or result.get("credit_amount") or result.get("cc_payment")
+        assert debit_mapped == "Debit Amount"
+        assert credit_mapped == "Credit Amount"
 
     def test_signed_amount_header(self):
         result = suggest_mappings(["Date", "Memo", "Amount"])
-        assert result["amount"] == "Amount"
+        # "Amount" now maps to cc_amount or bank_amount (old generic "amount" is retired)
+        assert result.get("cc_amount") == "Amount" or result.get("bank_amount") == "Amount"
 
     def test_description_variants(self):
         for col in ["Description", "Narrative", "Memo", "Payee"]:
@@ -122,7 +127,8 @@ class TestSuggestMappings:
         assert result["transaction_date"] == "Transaction Date"
         assert result["posted_date"] == "Post Date"
         assert result["description"] == "Description"
-        assert result["amount"] == "Amount"
+        # "Amount" maps to cc_amount or bank_amount (old generic "amount" is retired)
+        assert result.get("cc_amount") == "Amount" or result.get("bank_amount") == "Amount"
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +137,7 @@ class TestSuggestMappings:
 
 class TestValidateWizardMapping:
     def test_valid_signed(self):
-        mapping = {"transaction_date": "Date", "amount": "Amount"}
+        mapping = {"transaction_date": "Date", "bank_amount": "Amount"}
         errors = validate_wizard_mapping(mapping)
         assert errors == []
 
@@ -154,7 +160,7 @@ class TestValidateWizardMapping:
         assert errors == []
 
     def test_missing_transaction_date_raises_error(self):
-        mapping = {"amount": "Amount"}
+        mapping = {"bank_amount": "Amount"}
         errors = validate_wizard_mapping(mapping)
         assert any("transaction_date" in e for e in errors)
 
@@ -170,12 +176,12 @@ class TestValidateWizardMapping:
         assert any("amount" in e.lower() for e in errors)
 
     def test_none_values_treated_as_unmapped(self):
-        mapping = {"transaction_date": None, "amount": "Amount"}
+        mapping = {"transaction_date": None, "bank_amount": "Amount"}
         errors = validate_wizard_mapping(mapping)
         assert any("transaction_date" in e for e in errors)
 
     def test_empty_string_treated_as_unmapped(self):
-        mapping = {"transaction_date": "", "amount": "Amount"}
+        mapping = {"transaction_date": "", "bank_amount": "Amount"}
         errors = validate_wizard_mapping(mapping)
         assert any("transaction_date" in e for e in errors)
 
@@ -186,7 +192,7 @@ class TestValidateWizardMapping:
 
 class TestInferAmountMode:
     def test_signed(self):
-        assert infer_amount_mode({"transaction_date": "Date", "amount": "Amt"}) == "signed"
+        assert infer_amount_mode({"transaction_date": "Date", "bank_amount": "Amt"}) == "signed"
 
     def test_debit_credit(self):
         mapping = {"transaction_date": "Date", "debit_amount": "DR", "credit_amount": "CR"}
@@ -197,7 +203,7 @@ class TestInferAmountMode:
         assert infer_amount_mode(mapping) == "money_in_out"
 
     def test_amount_plus_flag(self):
-        mapping = {"transaction_date": "Date", "amount": "Amt", "dc_flag": "DR/CR"}
+        mapping = {"transaction_date": "Date", "bank_amount": "Amt", "dc_flag": "DR/CR"}
         assert infer_amount_mode(mapping) == "amount_plus_flag"
 
 
@@ -460,7 +466,7 @@ class TestWizardToPipelineMapping:
         )
 
     def test_signed_mapping(self):
-        cm = {"transaction_date": "Date", "amount": "Amount", "description": "Memo"}
+        cm = {"transaction_date": "Date", "bank_amount": "Amount", "description": "Memo"}
         result = wizard_to_pipeline_mapping(**self._base_kwargs(cm))
         assert result["amount_format_family"] == "signed"
         assert result["amount"]["signed_amount"] == "Amount"
@@ -492,7 +498,7 @@ class TestWizardToPipelineMapping:
     def test_amount_plus_flag_mapping(self):
         cm = {
             "transaction_date": "Date",
-            "amount":           "Amt",
+            "bank_amount":      "Amt",
             "dc_flag":          "DR/CR",
         }
         result = wizard_to_pipeline_mapping(**self._base_kwargs(cm))
@@ -504,18 +510,18 @@ class TestWizardToPipelineMapping:
         cm = {
             "transaction_date": "Date",
             "posted_date":      "Post Date",
-            "amount":           "Amt",
+            "bank_amount":      "Amt",
         }
         result = wizard_to_pipeline_mapping(**self._base_kwargs(cm))
         assert result["date"].get("posted_date") == "Post Date"
 
     def test_date_format_included(self):
-        cm = {"transaction_date": "Date", "amount": "Amt"}
+        cm = {"transaction_date": "Date", "bank_amount": "Amt"}
         result = wizard_to_pipeline_mapping(**self._base_kwargs(cm), date_format="%d/%m/%Y")
         assert result["date"]["date_format"] == "%d/%m/%Y"
 
     def test_required_keys_present(self):
-        cm = {"transaction_date": "Date", "amount": "Amt"}
+        cm = {"transaction_date": "Date", "bank_amount": "Amt"}
         result = wizard_to_pipeline_mapping(**self._base_kwargs(cm))
         for key in ("bank_key", "bank_name", "amount_format_family", "column_map", "date", "amount"):
             assert key in result

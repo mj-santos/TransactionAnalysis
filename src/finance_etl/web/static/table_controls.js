@@ -284,8 +284,9 @@ function makeSourceDropdown(containerId, type, onChange) {
    Renders server-computed aggregates from GET /transactions/totals
    into a visually distinct <tfoot> row with labeled value cells.
 
-   Credit card layout:
-     | TOTALS (spans) | Row Count | Total Charged | Avg / Transaction |
+   Credit card layout (subtype model):
+     | TOTALS (spans) | Row Count | Spending | Payments | Adjustments | Card Balance |
+     Followed by inline warning banners for conflict rows and legacy (NULL subtype) rows.
 
    Bank layout:
      | TOTALS (spans) | Row Count | Total Income | Total Outflow | Net |
@@ -294,11 +295,13 @@ function makeSourceDropdown(containerId, type, onChange) {
    @param {object}      totals   Response from GET /transactions/totals
    @param {string}      type     'credit_card' | 'bank'
    @param {number}      numCols  Column count of the main data table (for colspan)
+   @param {HTMLElement} [warnEl] Optional element to receive legacy/conflict warning HTML
    ========================================================= */
-function renderTxnTotals(tfootEl, totals, type, numCols) {
+function renderTxnTotals(tfootEl, totals, type, numCols, warnEl) {
   if (!tfootEl) return;
   if (!totals || !totals.row_count) {
     tfootEl.innerHTML = '';
+    if (warnEl) warnEl.innerHTML = '';
     return;
   }
 
@@ -307,13 +310,19 @@ function renderTxnTotals(tfootEl, totals, type, numCols) {
 
   let cells;
   if (type === 'credit_card') {
-    const avg = totals.row_count > 0
-      ? (Math.abs(totals.total_spend) / totals.row_count).toFixed(2)
-      : '0.00';
+    // Subtype model — spending / payments / adjustments / card balance
+    const balance = Number(totals.cc_balance || 0);
+    const balanceColor = balance > 0 ? 'var(--danger)' : balance < 0 ? '#16a34a' : 'inherit';
     cells = [
-      { label: 'Row Count',         value: fN(totals.row_count) },
-      { label: 'Total Charged',     value: f2(totals.total_spend) },
-      { label: 'Avg / Transaction', value: avg },
+      { label: 'Row Count',    value: fN(totals.row_count) },
+      { label: 'Spending',     value: f2(totals.cc_spending) },
+      { label: 'Payments',     value: f2(totals.cc_payments) },
+      { label: 'Adjustments',  value: f2(totals.cc_adjustments) },
+      {
+        label: 'Card Balance',
+        value: `<span style="color:${balanceColor}">${f2(balance)}</span>`,
+        raw: true,
+      },
     ];
   } else {
     cells = [
@@ -325,10 +334,10 @@ function renderTxnTotals(tfootEl, totals, type, numCols) {
   }
 
   const labelSpan = Math.max(1, numCols - cells.length);
-  const cellHtml  = cells.map(c =>
+  const cellHtml = cells.map(c =>
     `<td class="mono text-right" style="padding:6px 10px; white-space:nowrap; vertical-align:middle;">` +
     `<span style="color:var(--text-muted); font-size:10px; display:block; line-height:1.3;">${c.label}</span>` +
-    `${c.value}</td>`
+    `${c.raw ? c.value : c.value}</td>`
   ).join('');
 
   tfootEl.innerHTML =
@@ -336,4 +345,26 @@ function renderTxnTotals(tfootEl, totals, type, numCols) {
     `<td colspan="${labelSpan}" style="padding:6px 10px; font-size:11px; color:var(--text-muted); vertical-align:middle;">TOTALS</td>` +
     `${cellHtml}` +
     `</tr>`;
+
+  // Emit warning banners for CC legacy rows and conflict rows
+  if (warnEl && type === 'credit_card') {
+    const parts = [];
+    if ((totals.cc_conflict_count || 0) > 0) {
+      parts.push(
+        `<div class="auto-detect-banner nomatch" style="background:#fef3c7;border-color:#f59e0b;color:#92400e;margin-bottom:6px;">` +
+        `<span style="font-size:18px">⚠️</span>` +
+        `<div style="flex:1"><strong>${totals.cc_conflict_count} conflict row(s)</strong> — both cc_charge and ` +
+        `cc_payment populated on the same row. Re-import and resolve before they contribute to balance.</div></div>`
+      );
+    }
+    if ((totals.cc_legacy_count || 0) > 0) {
+      parts.push(
+        `<div class="auto-detect-banner nomatch" style="background:#fef3c7;border-color:#f59e0b;color:#92400e;margin-bottom:6px;">` +
+        `<span style="font-size:18px">⚠️</span>` +
+        `<div style="flex:1"><strong>${totals.cc_legacy_count} legacy credit card transaction(s)</strong> have no subtype. ` +
+        `Re-import those statements to enable balance tracking.</div></div>`
+      );
+    }
+    warnEl.innerHTML = parts.join('');
+  }
 }
