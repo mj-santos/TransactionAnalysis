@@ -326,6 +326,38 @@ def detect_cc_format(headers: list[str]) -> str | None:
     return None
 
 
+# Synonyms for detecting separate debit/credit columns in bank CSVs
+_BANK_DEBIT_SYNONYMS: set[str] = {
+    "debit", "debitamount", "debitamt", "withdrawal", "withdrawals", "dr", "moneyin",
+}
+_BANK_CREDIT_SYNONYMS: set[str] = {
+    "credit", "creditamount", "creditamt", "deposit", "deposits", "cr", "moneyout",
+}
+
+
+def detect_bank_format(headers: list[str]) -> str | None:
+    """
+    Detect the bank statement amount format from CSV headers.
+
+    Returns:
+      'two_col'    — headers contain both a debit and a credit column
+      'single_col' — only one amount-like column
+      None         — inconclusive (no amount columns detected)
+    """
+    normed = {_normalize_key(h) for h in headers}
+
+    has_debit  = any(any(s in n for s in _BANK_DEBIT_SYNONYMS)  for n in normed)
+    has_credit = any(any(s in n for s in _BANK_CREDIT_SYNONYMS) for n in normed)
+
+    if has_debit and has_credit:
+        return "two_col"
+    amount_synonyms = {"amount", "amt", "transactionamount", "net", "balance"}
+    has_amount = any(any(s in n for s in amount_synonyms) for n in normed)
+    if has_amount or has_debit or has_credit:
+        return "single_col"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Date format detection
 # ---------------------------------------------------------------------------
@@ -426,8 +458,9 @@ def extract_csv_headers(
 
     suggestions = suggest_mappings(headers, statement_type=statement_type)
 
-    # Detect CC format for credit-card uploads
-    cc_format = detect_cc_format(headers) if statement_type == "credit_card" else None
+    # Detect amount format from headers (statement-type-aware)
+    cc_format   = detect_cc_format(headers)   if statement_type == "credit_card" else None
+    bank_format = detect_bank_format(headers) if statement_type == "bank" else None
 
     # Try to detect the date format from a date column's sample values.
     # Use the transaction_date suggestion first; fall back to posted_date so
@@ -447,7 +480,8 @@ def extract_csv_headers(
         "row_count_estimate":    row_count,
         "suggestions":           suggestions,
         "suggested_date_format": suggested_date_format,
-        "cc_format":             cc_format,   # 'two_col' | 'single_col' | None
+        "cc_format":             cc_format,    # 'two_col' | 'single_col' | None
+        "bank_format":           bank_format,  # 'two_col' | 'single_col' | None
     }
 
 
@@ -487,23 +521,16 @@ def validate_wizard_mapping(
     # Select the right amount groups based on statement_type
     if statement_type == "credit_card":
         valid_groups = CC_AMOUNT_GROUPS
-        hint = "(cc_charge + cc_payment) for two-column format, or (cc_amount) for single-column."
+        hint = "map the Amount column, or map both Charge and Payment columns."
     elif statement_type == "bank":
         valid_groups = BANK_AMOUNT_GROUPS
-        hint = (
-            "(bank_debit + bank_credit), (bank_amount), "
-            "(debit_amount + credit_amount), or (money_in + money_out)."
-        )
+        hint = "map the Amount column, or map both Debit and Credit columns."
     else:
         valid_groups = AMOUNT_GROUPS
-        hint = (
-            "(cc_charge + cc_payment), (cc_amount), "
-            "(bank_debit + bank_credit), (bank_amount), "
-            "(debit_amount + credit_amount), or (money_in + money_out)."
-        )
+        hint = "map the Amount column, or map both Debit and Credit columns."
 
     if not any(group <= mapped for group in valid_groups):
-        errors.append(f"Amount mapping is required. Map one of: {hint}")
+        errors.append(f"Amount mapping required — {hint}")
 
     return errors
 
