@@ -2038,15 +2038,19 @@ async function loadUncategorized() {
       container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All merchants are categorized.</span>';
       return;
     }
-    container.innerHTML = data.merchants.map(m => `
-      <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
-        <span style="flex:1; font-size:13px;">${esc(m)}</span>
-        <input type="text" placeholder="Category…"
-               id="cat-input-${esc(m.replace(/[^a-zA-Z0-9]/g, '_'))}"
-               style="width:180px; padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;" />
-        <button class="btn btn-primary btn-sm" onclick="assignCategory(${JSON.stringify(m)})">Assign</button>
-      </div>
-    `).join('');
+    container.innerHTML = data.merchants.map(m => {
+      const safeId  = m.replace(/[^a-zA-Z0-9]/g, '_');
+      // JSON.stringify wraps in double-quotes; escape them for the HTML attribute
+      const jsonArg = JSON.stringify(m).replace(/"/g, '&quot;');
+      return `
+        <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
+          <span style="flex:1; font-size:13px;">${esc(m)}</span>
+          <input type="text" placeholder="Category…"
+                 id="cat-input-${safeId}"
+                 style="width:180px; padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;" />
+          <button class="btn btn-primary btn-sm" onclick="assignCategory(${jsonArg})">Assign</button>
+        </div>`;
+    }).join('');
   } catch (err) {
     container.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">Error: ${esc(err.message)}</span>`;
   }

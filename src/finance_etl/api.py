@@ -733,6 +733,11 @@ No cloud services, no external dependencies — all data stays on your machine.
             live = _async_runs.get(d["run_id"])
             if live and live["status"] in ("pending", "running", "committing"):
                 d["status"] = live["status"]
+            # Normalize datetime → ISO string so sort key is always str
+            for k in ("started_at", "finished_at"):
+                v = d.get(k)
+                if v is not None and hasattr(v, "isoformat"):
+                    d[k] = v.isoformat()
             runs.append(d)
 
         norm_cols = ["run_id", "started_at", "finished_at", "status",
@@ -741,9 +746,15 @@ No cloud services, no external dependencies — all data stays on your machine.
             d = dict(zip(norm_cols, r))
             d["type"] = "normalize"
             d["imported_file"] = None  # normalization jobs have no source file
+            # finished_at may be a datetime too
+            for k in ("started_at", "finished_at"):
+                v = d.get(k)
+                if v is not None and hasattr(v, "isoformat"):
+                    d[k] = v.isoformat()
             runs.append(d)
 
         # Re-sort merged list by started_at DESC (nulls last)
+        # All started_at values are now ISO strings or None, so sort is safe.
         runs.sort(key=lambda x: x.get("started_at") or "", reverse=True)
 
         return {"runs": runs}
