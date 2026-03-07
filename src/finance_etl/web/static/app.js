@@ -1589,6 +1589,7 @@ function _txnFilters(type) {
     account:   (document.getElementById(`${p}-account`)?.value  || '').trim(),
     category:  (document.getElementById(`${p}-category`)?.value || '').trim(),
     merchant:  (document.getElementById(`${p}-merchant`)?.value || '').trim(),
+    subtype:   document.getElementById(`${p}-subtype`)?.value   || '',  // CC only
     group_by:  document.getElementById(`${p}-group-by`)?.value  || '',
   };
 }
@@ -1618,6 +1619,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.account)   qs.set('account',   f.account);
   if (f.category)  qs.set('category',  f.category);
   if (f.merchant)  qs.set('merchant',  f.merchant);
+  if (f.subtype)   qs.set('subtype',   f.subtype);
   if (f.group_by)  qs.set('group_by',  f.group_by);
   if (f.source && f.source !== 'all') qs.set('source', f.source);
 
@@ -1628,6 +1630,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.account)   tqs.set('account',   f.account);
   if (f.category)  tqs.set('category',  f.category);
   if (f.merchant)  tqs.set('merchant',  f.merchant);
+  if (f.subtype)   tqs.set('subtype',   f.subtype);
   if (f.source && f.source !== 'all') tqs.set('source', f.source);
 
   if (reset) {
