@@ -362,18 +362,103 @@ def detect_bank_format(headers: list[str]) -> str | None:
 # Date format detection
 # ---------------------------------------------------------------------------
 
-# Ordered list of strptime formats to try (most common / unambiguous first)
+# Comprehensive ordered list of strptime formats.
+# Ordering rules:
+#   1. Fully unambiguous formats first (ISO / year-first / named-month).
+#   2. 4-digit-year regional formats before 2-digit-year variants.
+#   3. Datetime (with time component) variants after their date-only equivalents.
+#   4. Compact no-separator and Julian formats last (most ambiguous).
+#
+# In Python strptime, %m and %d match both padded (01) and unpadded (1) numbers,
+# so "D/M/YYYY" and "DD/MM/YYYY" collapse to a single format string.
 _CANDIDATE_DATE_FORMATS: list[str] = [
-    "%Y-%m-%d",    # ISO 8601       — always unambiguous
-    "%m/%d/%Y",    # US slash       — e.g. 01/15/2024
-    "%d/%m/%Y",    # EU slash       — e.g. 15/01/2024
-    "%m-%d-%Y",    # US dash        — e.g. 01-15-2024
-    "%d-%m-%Y",    # EU dash        — e.g. 15-01-2024
-    "%Y/%m/%d",    # ISO slash      — e.g. 2024/01/15
-    "%d %b %Y",    # e.g. 15 Jan 2024
-    "%b %d, %Y",   # e.g. Jan 15, 2024
-    "%d %B %Y",    # e.g. 15 January 2024
-    "%B %d, %Y",   # e.g. January 15, 2024
+    # ── Fully unambiguous: ISO 8601 / year-first ──────────────────────────
+    "%Y-%m-%d",             # 2025-01-15
+    "%Y/%m/%d",             # 2025/01/15
+    "%Y.%m.%d",             # 2025.01.15
+    "%Y%m%d",               # 20250115
+
+    # ── ISO 8601 with time component ──────────────────────────────────────
+    "%Y-%m-%dT%H:%M:%S",    # 2025-01-15T10:30:00
+    "%Y-%m-%dT%H:%M",       # 2025-01-15T10:30
+    "%Y-%m-%d %H:%M:%S",    # 2025-01-15 10:30:00
+    "%Y-%m-%d %H:%M",       # 2025-01-15 10:30
+    "%Y%m%dT%H%M%S",        # 20250115T103000
+
+    # ── Named month — day/year position is unambiguous ────────────────────
+    "%d %b %Y",             # 15 Jan 2025
+    "%d-%b-%Y",             # 15-Jan-2025
+    "%d %B %Y",             # 15 January 2025
+    "%b %d, %Y",            # Jan 15, 2025
+    "%b %d %Y",             # Jan 15 2025
+    "%B %d, %Y",            # January 15, 2025
+    "%B %d %Y",             # January 15 2025
+    "%d %b %y",             # 15 Jan 25
+    "%d-%b-%y",             # 15-Jan-25
+    "%d %B %y",             # 15 January 25
+    "%b %d, %y",            # Jan 15, 25
+    "%b %d %y",             # Jan 15 25
+    "%B %d, %y",            # January 15, 25
+    "%B %d %y",             # January 15 25
+    # Long written styles
+    "%A, %B %d, %Y",        # Monday, January 15, 2025
+    "%a, %b-%d-%Y",         # Mon, Jan-15-2025
+
+    # ── 4-digit year with separators (US ordering first) ──────────────────
+    "%m/%d/%Y",             # 01/15/2025 — US slash
+    "%d/%m/%Y",             # 15/01/2025 — EU slash
+    "%m-%d-%Y",             # 01-15-2025 — US dash
+    "%d-%m-%Y",             # 15-01-2025 — EU dash
+    "%d.%m.%Y",             # 15.01.2025 — EU/DE dot
+    "%m.%d.%Y",             # 01.15.2025 — US dot
+
+    # ── 4-digit year datetime with separators ─────────────────────────────
+    "%m/%d/%Y %H:%M:%S",    # 01/15/2025 10:30:00
+    "%m/%d/%Y %H:%M",       # 01/15/2025 10:30
+    "%d/%m/%Y %H:%M:%S",    # 15/01/2025 10:30:00
+    "%d/%m/%Y %H:%M",       # 15/01/2025 10:30
+
+    # ── 2-digit year with separators ──────────────────────────────────────
+    "%m/%d/%y",             # 01/15/25 — US slash
+    "%d/%m/%y",             # 15/01/25 — EU slash
+    "%y/%m/%d",             # 25/01/15 — Asian/ISO-short
+    "%m-%d-%y",             # 01-15-25
+    "%d-%m-%y",             # 15-01-25
+    "%y-%m-%d",             # 25-01-15
+    "%d.%m.%y",             # 15.01.25
+    "%y.%m.%d",             # 25.01.15
+
+    # ── 2-digit year datetime ─────────────────────────────────────────────
+    "%m/%d/%y %H:%M:%S",    # 01/15/25 10:30:00
+    "%d/%m/%y %H:%M:%S",    # 15/01/25 10:30:00
+
+    # ── Month + Year only (day defaults to 1 when parsed) ─────────────────
+    "%b %Y",                # Jan 2025
+    "%B %Y",                # January 2025
+    "%b %y",                # Jan 25
+    "%B %y",                # January 25
+    "%m/%Y",                # 01/2025
+    "%Y-%m",                # 2025-01
+    "%Y/%m",                # 2025/01
+    "%m-%Y",                # 01-2025
+    "%m.%Y",                # 01.2025
+
+    # ── Compact 8-digit no-separator (DDMMYYYY / MMDDYYYY) ───────────────
+    "%d%m%Y",               # 15012025 — EU compact
+    "%m%d%Y",               # 01152025 — US compact
+
+    # ── Compact 6-digit no-separator (most ambiguous — try last) ─────────
+    "%y%m%d",               # 250115  — YY MM DD
+    "%d%m%y",               # 150125  — DD MM YY
+    "%m%d%y",               # 011525  — MM DD YY
+
+    # ── Julian / ordinal day-of-year ──────────────────────────────────────
+    "%Y%j",                 # 2025015  — YYYYDDD
+    "%y%j",                 # 25015    — YYDDD
+    "%Y/%j",                # 2025/015 — YYYY/DDD
+    "%y/%j",                # 25/015   — YY/DDD
+    "%j/%Y",                # 015/2025 — DDD/YYYY
+    "%j/%y",                # 015/25   — DDD/YY
 ]
 
 
@@ -390,8 +475,6 @@ def detect_date_format(values: list[str]) -> str | None:
     >>> detect_date_format(["01/05/2024", "01/15/2024"])
     '%m/%d/%Y'
     """
-    import datetime as _dt
-
     clean = [v.strip() for v in values if v and v.strip()]
     if not clean:
         return None
@@ -405,11 +488,75 @@ def detect_date_format(values: list[str]) -> str | None:
 
 def _try_strptime(value: str, fmt: str) -> bool:
     import datetime as _dt
+    v = value.strip()
+    # Strip fractional seconds (e.g. "2025-01-15T10:30:00.123456") so that
+    # datetime formats without %f still match timestamp columns.
+    if ":" in v and "." in v:
+        v = re.sub(r"\.\d+$", "", v)
     try:
-        _dt.datetime.strptime(value, fmt)
+        _dt.datetime.strptime(v, fmt)
         return True
     except ValueError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Column-agnostic date format scanner
+# ---------------------------------------------------------------------------
+
+def _detect_date_format_any_col(
+    headers: list[str],
+    sample_rows: list[dict[str, str]],
+    suggestions: dict[str, str | None],
+) -> str | None:
+    """
+    Detect the date format from sample rows without depending on the column mapping.
+
+    Tries columns in priority order:
+      1. Suggested transaction_date / posted_date columns (highest confidence)
+      2. Columns whose name contains date-like keywords
+      3. All remaining columns
+
+    Returns the first format string that parses all non-empty values in any column,
+    or None if no column yields a consistent date format.
+    """
+    if not sample_rows:
+        return None
+
+    # Build priority-ordered list of column names to probe
+    tried: set[str] = set()
+    ordered: list[str] = []
+
+    # Priority 1 — explicitly suggested date fields
+    for field in ("transaction_date", "posted_date"):
+        col = suggestions.get(field)
+        if col and col not in tried:
+            ordered.append(col)
+            tried.add(col)
+
+    # Priority 2 — headers whose name looks date-like
+    _date_kws = re.compile(r"date|dt|posted|trans|time|val", re.IGNORECASE)
+    for h in headers:
+        if h not in tried and _date_kws.search(re.sub(r"[^\w]", "", h)):
+            ordered.append(h)
+            tried.add(h)
+
+    # Priority 3 — everything else
+    for h in headers:
+        if h not in tried:
+            ordered.append(h)
+            tried.add(h)
+
+    for col in ordered:
+        values = [row.get(col, "").strip() for row in sample_rows]
+        non_empty = [v for v in values if v]
+        if not non_empty:
+            continue
+        fmt = detect_date_format(non_empty)
+        if fmt:
+            return fmt
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -462,15 +609,10 @@ def extract_csv_headers(
     cc_format   = detect_cc_format(headers)   if statement_type == "credit_card" else None
     bank_format = detect_bank_format(headers) if statement_type == "bank" else None
 
-    # Try to detect the date format from a date column's sample values.
-    # Use the transaction_date suggestion first; fall back to posted_date so
-    # files like "Posting Date,…" (which keyword-match to posted_date) still
-    # get a useful format hint.
-    date_col = suggestions.get("transaction_date") or suggestions.get("posted_date")
-    date_values: list[str] = []
-    if date_col and sample_rows:
-        date_values = [row.get(date_col, "") for row in sample_rows]
-    suggested_date_format = detect_date_format(date_values)
+    # ── Date format detection — always runs, independent of mapping ────────
+    # Strategy: try suggested date columns first (high confidence), then scan
+    # every remaining column so that unusual header names never block detection.
+    suggested_date_format = _detect_date_format_any_col(headers, sample_rows, suggestions)
 
     return {
         "headers":               headers,
