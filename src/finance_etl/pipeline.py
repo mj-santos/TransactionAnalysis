@@ -110,13 +110,36 @@ def run_with_options(
     _acct  = (mapping.get("account_name", "") or "").strip()
     run_label = f"{_bank} \u2014 {_acct}".strip(" \u2014") if (_bank or _acct) else None
 
+    # Compute the imported_file display string from original filenames.
+    # Uploaded files may have a UUID prefix (8 hex + "_"): strip it if present.
+    def _display_name(p: Path) -> str:
+        name = p.name
+        # UUID prefix pattern: 8 hex chars + underscore + rest
+        import re as _re
+        m = _re.match(r"^[0-9a-f]{8}_(.+)$", name, _re.IGNORECASE)
+        return m.group(1) if m else name
+
+    if csv_paths:
+        first_name = _display_name(csv_paths[0])
+        if len(csv_paths) == 1:
+            imported_file = first_name
+        else:
+            imported_file = f"{first_name} +{len(csv_paths) - 1} more"
+    else:
+        imported_file = None
+
     conn = get_connection(db_path)
     counts = dict(rows_in=0, rows_staged=0, rows_normalized=0, rows_loaded=0, errors_count=0)
     stage_timings: dict[str, float] = {}
 
     try:
         t0 = time.perf_counter()
-        create_run(conn, run_id, len(csv_paths), statement_type=statement_type, run_label=run_label)
+        create_run(
+            conn, run_id, len(csv_paths),
+            statement_type=statement_type,
+            run_label=run_label,
+            imported_file=imported_file,
+        )
         registrations = register_files(conn, csv_paths, run_id, Path(raw_dir))
         stage_timings["ingest_register_s"] = time.perf_counter() - t0
 

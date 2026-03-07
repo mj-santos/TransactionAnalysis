@@ -101,12 +101,14 @@ def create_run(
     files_count: int,
     statement_type: str | None = None,
     run_label: str | None = None,
+    imported_file: str | None = None,
 ) -> None:
     """Insert the initial run record with status='running'.
 
     statement_type: 'bank' or 'credit_card' — classifies the ledger source.
     run_label: human-readable name shown in the Import Source dropdown
                (typically "<bank_name> — <account_name>" from the mapping).
+    imported_file: original filename(s) displayed in history table.
     """
     existing = conn.execute("SELECT 1 FROM runs WHERE run_id = ?", [run_id]).fetchone()
     if existing:
@@ -116,10 +118,10 @@ def create_run(
         """
         INSERT INTO runs (run_id, started_at, status, statement_type, run_label,
                           files_count, rows_in, rows_staged, rows_normalized,
-                          rows_loaded, errors_count)
-        VALUES (?, ?, 'running', ?, ?, ?, 0, 0, 0, 0, 0)
+                          rows_loaded, errors_count, imported_file)
+        VALUES (?, ?, 'running', ?, ?, ?, 0, 0, 0, 0, 0, ?)
         """,
-        [run_id, datetime.now(timezone.utc), statement_type, run_label, files_count],
+        [run_id, datetime.now(timezone.utc), statement_type, run_label, files_count, imported_file],
     )
 
 

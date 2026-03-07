@@ -30,6 +30,9 @@
     <a href="#" data-page="reports">
       <span class="icon">📊</span> Reports
     </a>
+    <a href="#" data-page="merchant-rules">
+      <span class="icon">🏪</span> Merchants
+    </a>
     <a href="#" data-page="settings">
       <span class="icon">⚙️</span> Settings
     </a>
@@ -125,6 +128,7 @@
           <thead>
             <tr>
               <th>Run ID</th>
+              <th>Imported File</th>
               <th>Started</th>
               <th>Status</th>
               <th class="text-right">In</th>
@@ -135,7 +139,7 @@
             </tr>
           </thead>
           <tbody id="history-tbody">
-            <tr><td colspan="8" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+            <tr><td colspan="9" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -458,6 +462,95 @@
       </div>
       <pre id="logs-output" class="logs-output">No logs loaded yet.</pre>
     </div>
+  </section>
+
+  <!-- ─── MERCHANT RULES PAGE ─── -->
+  <section id="page-merchant-rules" class="page">
+
+    <!-- Merchant Normalization Rules -->
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Merchant Normalization Rules</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="loadMerchantRules()">↻ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="openRuleForm(null)">+ Add Rule</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Rules map transaction descriptions to normalized merchant names. Applied in priority order (highest first) during import and re-normalization.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Priority</th>
+              <th>Match Type</th>
+              <th>Pattern</th>
+              <th>→ Merchant</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="merchant-rules-tbody">
+            <tr><td colspan="5" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Re-normalize button -->
+      <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
+        <button class="btn btn-secondary" onclick="startRenormalize()">↻ Re-normalize All Transactions</button>
+        <span id="renorm-status" style="font-size:13px; color:var(--text-muted);"></span>
+      </div>
+    </div>
+
+    <!-- Rule editor form (inline) -->
+    <div id="rule-form-card" class="card" style="display:none; margin-bottom:24px;">
+      <div class="card-title" id="rule-form-title">Add Rule</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Match Type
+          <select id="rf-match-type" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
+            <option value="contains">contains (substring)</option>
+            <option value="startswith">startswith (beginning)</option>
+            <option value="regex">regex (regular expression)</option>
+          </select>
+        </label>
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Priority (higher = first)
+          <input id="rf-priority" type="number" value="0" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Pattern
+          <input id="rf-pattern" type="text" placeholder="e.g. AMAZON, ^UBER, .*COFFEE.*" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          → Normalized Merchant Name
+          <input id="rf-merchant" type="text" placeholder="e.g. Amazon, Uber, Starbucks" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-primary btn-sm" onclick="saveRule()">Save Rule</button>
+        <button class="btn btn-secondary btn-sm" onclick="testRule()">Test Pattern</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeRuleForm()">Cancel</button>
+        <span id="rf-test-result" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+      <div id="rf-test-matches" style="display:none; margin-top:8px; font-size:12px; color:var(--text-muted); background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:8px; max-height:120px; overflow-y:auto;"></div>
+    </div>
+
+    <!-- Uncategorized Merchants panel -->
+    <div class="card">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Uncategorized Merchants</span>
+        <button class="btn btn-secondary btn-sm" onclick="loadUncategorized()">↻ Refresh</button>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Merchants in the ledger with no category assigned. Assign a category to apply it to all matching transactions.
+      </p>
+      <div id="uncategorized-list" style="display:flex; flex-direction:column; gap:8px;">
+        <span style="color:var(--text-muted); font-size:13px;">Loading…</span>
+      </div>
+    </div>
+
   </section>
 
 </div><!-- .content -->

@@ -198,6 +198,27 @@ try:
         file: Optional[str] = None
         lines: list[str]
 
+    # ---- Merchant rules models -----------------------------------------------
+
+    class MerchantRuleRequest(BaseModel):
+        pattern:    str = Field(..., description="Pattern to match against description")
+        match_type: str = Field("contains", description="'contains' | 'startswith' | 'regex'")
+        merchant:   str = Field(..., description="Normalized merchant name to assign")
+        priority:   int = Field(0, description="Higher = applied first")
+
+    class MerchantCategoryRequest(BaseModel):
+        merchant:  str = Field(..., description="Merchant name (exact, case-sensitive)")
+        category:  str = Field(..., description="Category to assign")
+
+    class NormalizeJobResponse(BaseModel):
+        job_id:      str
+        status:      str
+        rows_total:  Optional[int] = None
+        rows_done:   int = 0
+        error:       Optional[str] = None
+        started_at:  Optional[str] = None
+        finished_at: Optional[str] = None
+
     _PYDANTIC_OK = True
 
 except ImportError:
@@ -669,38 +690,61 @@ No cloud services, no external dependencies — all data stays on your machine.
     )
     def list_runs():
         """
-        Return all import runs ordered by most recent first (up to 200).
+        Return all import runs and normalization jobs ordered by most recent first (up to 200).
 
         In-flight runs (pending/running/committing) show their live status from memory;
-        completed runs are read from the database.
+        completed runs are read from the database.  Normalization jobs are merged in with
+        type='normalize'; import runs have type='import'.
         """
         try:
             conn = get_connection(db_path, read_only=True)
-            rows = conn.execute(
+            run_rows = conn.execute(
                 """
                 SELECT run_id, started_at, finished_at, status,
                        files_count, rows_in, rows_staged,
-                       rows_normalized, rows_loaded, errors_count
+                       rows_normalized, rows_loaded, errors_count, imported_file
                 FROM runs
                 ORDER BY started_at DESC
                 LIMIT 200
+                """
+            ).fetchall()
+            norm_rows = conn.execute(
+                """
+                SELECT job_id, created_at, finished_at, status,
+                       rows_total, rows_done, error
+                FROM normalization_jobs
+                ORDER BY created_at DESC
+                LIMIT 50
                 """
             ).fetchall()
             conn.close()
         except Exception:
             return {"runs": []}
 
-        cols = [
+        run_cols = [
             "run_id", "started_at", "finished_at", "status",
             "files_count", "rows_in", "rows_staged",
-            "rows_normalized", "rows_loaded", "errors_count",
+            "rows_normalized", "rows_loaded", "errors_count", "imported_file",
         ]
-        runs = [dict(zip(cols, r)) for r in rows]
-
-        for run in runs:
-            live = _async_runs.get(run["run_id"])
+        runs = []
+        for r in run_rows:
+            d = dict(zip(run_cols, r))
+            d["type"] = "import"
+            live = _async_runs.get(d["run_id"])
             if live and live["status"] in ("pending", "running", "committing"):
-                run["status"] = live["status"]
+                d["status"] = live["status"]
+            runs.append(d)
+
+        norm_cols = ["run_id", "started_at", "finished_at", "status",
+                     "rows_total", "rows_done", "error"]
+        for r in norm_rows:
+            d = dict(zip(norm_cols, r))
+            d["type"] = "normalize"
+            d["imported_file"] = None  # normalization jobs have no source file
+            runs.append(d)
+
+        # Re-sort merged list by started_at DESC (nulls last)
+        runs.sort(key=lambda x: x.get("started_at") or "", reverse=True)
 
         return {"runs": runs}
 
@@ -1654,6 +1698,230 @@ No cloud services, no external dependencies — all data stays on your machine.
             "</div></body></html>"
         )
         return HTMLResponse(content=html)
+
+    # -----------------------------------------------------------------------
+    # Merchant rules CRUD
+    # -----------------------------------------------------------------------
+
+    from finance_etl.merchant_rules import (
+        assign_category,
+        batch_renormalize,
+        create_normalization_job,
+        load_category_map,
+        load_rules,
+    )
+
+    @app.get("/merchant-rules", tags=["merchant"], summary="List merchant normalization rules")
+    def get_merchant_rules():
+        """Return all merchant rules ordered by priority DESC, id ASC."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, pattern, match_type, merchant, priority, created_at, updated_at "
+                "FROM merchant_rules ORDER BY priority DESC, id ASC"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"rules": []}
+        cols = ["id", "pattern", "match_type", "merchant", "priority", "created_at", "updated_at"]
+        return {"rules": [dict(zip(cols, r)) for r in rows]}
+
+    @app.post("/merchant-rules", tags=["merchant"], summary="Create a merchant rule", status_code=201)
+    def create_merchant_rule(payload: MerchantRuleRequest):
+        """Add a new merchant normalization rule."""
+        import re as _re
+        if payload.match_type not in ("contains", "startswith", "regex"):
+            from fastapi import HTTPException
+            raise HTTPException(400, "match_type must be 'contains', 'startswith', or 'regex'")
+        if payload.match_type == "regex":
+            try:
+                _re.compile(payload.pattern)
+            except _re.error as exc:
+                from fastapi import HTTPException
+                raise HTTPException(400, f"Invalid regex: {exc}")
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO merchant_rules (pattern, match_type, merchant, priority, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [payload.pattern, payload.match_type, payload.merchant, payload.priority, now, now],
+            )
+            row = conn.execute(
+                "SELECT id FROM merchant_rules WHERE pattern=? AND merchant=? AND created_at=?",
+                [payload.pattern, payload.merchant, now],
+            ).fetchone()
+        finally:
+            conn.close()
+        return {"id": row[0] if row else None, "status": "created"}
+
+    @app.put("/merchant-rules/{rule_id}", tags=["merchant"], summary="Update a merchant rule")
+    def update_merchant_rule(rule_id: int, payload: MerchantRuleRequest):
+        """Update an existing merchant rule by ID."""
+        import re as _re
+        if payload.match_type not in ("contains", "startswith", "regex"):
+            from fastapi import HTTPException
+            raise HTTPException(400, "match_type must be 'contains', 'startswith', or 'regex'")
+        if payload.match_type == "regex":
+            try:
+                _re.compile(payload.pattern)
+            except _re.error as exc:
+                from fastapi import HTTPException
+                raise HTTPException(400, f"Invalid regex: {exc}")
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "UPDATE merchant_rules SET pattern=?, match_type=?, merchant=?, priority=?, updated_at=? "
+                "WHERE id=?",
+                [payload.pattern, payload.match_type, payload.merchant, payload.priority, now, rule_id],
+            )
+        finally:
+            conn.close()
+        return {"status": "updated"}
+
+    @app.delete("/merchant-rules/{rule_id}", tags=["merchant"], summary="Delete a merchant rule")
+    def delete_merchant_rule(rule_id: int):
+        """Delete a merchant rule by ID."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute("DELETE FROM merchant_rules WHERE id=?", [rule_id])
+        finally:
+            conn.close()
+        return {"status": "deleted"}
+
+    @app.post("/merchant-rules/test", tags=["merchant"], summary="Test a rule against sample descriptions")
+    def test_merchant_rule(payload: MerchantRuleRequest):
+        """
+        Test how a rule would match against recent transaction descriptions.
+        Returns up to 20 matching descriptions from transactions_norm.
+        """
+        from finance_etl.merchant_rules import CompiledRule
+        rule = CompiledRule(id=0, pattern=payload.pattern, match_type=payload.match_type,
+                            merchant=payload.merchant, priority=payload.priority)
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT DISTINCT description FROM transactions_norm LIMIT 2000"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"matches": []}
+        matches = [r[0] for r in rows if rule.matches(r[0] or "")]
+        return {"matches": matches[:20], "total_sampled": len(rows)}
+
+    # -----------------------------------------------------------------------
+    # Merchant category map
+    # -----------------------------------------------------------------------
+
+    @app.get("/merchant-categories", tags=["merchant"], summary="List all merchant→category mappings")
+    def get_merchant_categories():
+        """Return all entries in merchant_category_map."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT merchant, category, source, updated_at FROM merchant_category_map ORDER BY merchant"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"categories": []}
+        cols = ["merchant", "category", "source", "updated_at"]
+        return {"categories": [dict(zip(cols, r)) for r in rows]}
+
+    @app.get("/merchant-categories/uncategorized", tags=["merchant"],
+             summary="List merchants with no category assignment")
+    def get_uncategorized_merchants():
+        """Return distinct merchants in transactions_norm that have no entry in merchant_category_map."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """
+                SELECT DISTINCT tn.merchant
+                FROM transactions_norm tn
+                WHERE tn.merchant IS NOT NULL
+                  AND LOWER(tn.merchant) NOT IN (
+                    SELECT LOWER(merchant) FROM merchant_category_map
+                  )
+                ORDER BY tn.merchant
+                LIMIT 200
+                """
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"merchants": []}
+        return {"merchants": [r[0] for r in rows]}
+
+    @app.post("/merchant-categories", tags=["merchant"], summary="Assign a category to a merchant",
+              status_code=201)
+    def set_merchant_category(payload: MerchantCategoryRequest):
+        """
+        Assign a category to a merchant (source='user').
+        Also backfills historical transactions_norm rows for this merchant.
+        """
+        conn = get_connection(db_path)
+        try:
+            assign_category(conn, payload.merchant, payload.category)
+        finally:
+            conn.close()
+        return {"status": "saved"}
+
+    @app.delete("/merchant-categories/{merchant}", tags=["merchant"],
+                summary="Remove a merchant→category mapping")
+    def delete_merchant_category(merchant: str):
+        """Remove a merchant category entry (URL-encode the merchant name)."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute("DELETE FROM merchant_category_map WHERE merchant=?", [merchant])
+        finally:
+            conn.close()
+        return {"status": "deleted"}
+
+    # -----------------------------------------------------------------------
+    # Batch re-normalization
+    # -----------------------------------------------------------------------
+
+    @app.post("/normalize/apply", tags=["merchant"],
+              summary="Start a batch re-normalization job", status_code=202)
+    async def start_renormalize(background_tasks: BackgroundTasks):
+        """
+        Apply all current merchant rules to every row in transactions_norm.
+        Returns a job_id for polling via GET /normalize/{job_id}.
+        Runs asynchronously in a background thread.
+        """
+        import threading
+        conn = get_connection(db_path)
+        try:
+            job_id = create_normalization_job(conn)
+        finally:
+            conn.close()
+
+        def _run():
+            batch_renormalize(str(db_path), job_id)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return {"job_id": job_id, "status": "pending"}
+
+    @app.get("/normalize/{job_id}", tags=["merchant"],
+             summary="Get re-normalization job status")
+    def get_normalize_job(job_id: str):
+        """Poll re-normalization progress for a given job_id."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            row = conn.execute(
+                "SELECT job_id, status, rows_total, rows_done, error, started_at, finished_at "
+                "FROM normalization_jobs WHERE job_id=?",
+                [job_id],
+            ).fetchone()
+            conn.close()
+        except Exception:
+            from fastapi import HTTPException
+            raise HTTPException(500, "DB error")
+        if not row:
+            from fastapi import HTTPException
+            raise HTTPException(404, f"Job {job_id!r} not found")
+        cols = ["job_id", "status", "rows_total", "rows_done", "error", "started_at", "finished_at"]
+        return dict(zip(cols, row))
 
     # -----------------------------------------------------------------------
     # Web UI — always registered last so all API routes take precedence
