@@ -1821,6 +1821,65 @@ No cloud services, no external dependencies — all data stays on your machine.
         matches = [r[0] for r in rows if rule.matches(r[0] or "")]
         return {"matches": matches[:20], "total_sampled": len(rows)}
 
+    @app.get("/merchant-rules/suggestions", tags=["merchant"],
+             summary="Analyze descriptions and suggest normalization rules")
+    def get_rule_suggestions(
+        min_transactions: int = Query(3, description="Min transaction count for a suggestion to appear"),
+    ):
+        """
+        Analyze all raw transaction descriptions and suggest merchant normalization rules.
+
+        Groups similar descriptions by their stripped 'core' (after removing noise like
+        transaction IDs, platform prefixes, state codes). Each group becomes a suggestion
+        with an inferred match type (startswith or contains) and a cleaned merchant name.
+
+        Already-covered descriptions (matched by existing rules) are excluded.
+        Results are sorted by transaction count — highest-impact suggestions first.
+        """
+        from finance_etl.merchant_rules import analyze_descriptions
+        try:
+            conn = get_connection(db_path, read_only=True)
+            suggestions = analyze_descriptions(conn, min_transactions=min_transactions)
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}") from exc
+        return {"suggestions": suggestions, "count": len(suggestions)}
+
+    @app.get("/merchant-categories/suggestions", tags=["merchant"],
+             summary="Suggest categories for uncategorized merchants")
+    def get_category_suggestions():
+        """
+        Suggest categories for merchants that have no category assignment yet.
+
+        Uses keyword heuristics against ~10 common category buckets (Restaurants,
+        Groceries, Gas, Shopping, Streaming, etc.).  Only merchants already present
+        in transactions_norm are considered.
+
+        Returns [{merchant, suggested_category, confidence}] where confidence is
+        'high' (≥2 keyword matches) or 'medium' (1 match).
+        """
+        from finance_etl.merchant_rules import suggest_categories_for_merchants
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """
+                SELECT DISTINCT tn.merchant
+                FROM transactions_norm tn
+                WHERE tn.merchant IS NOT NULL
+                  AND LOWER(tn.merchant) NOT IN (
+                    SELECT LOWER(merchant) FROM merchant_category_map
+                  )
+                ORDER BY tn.merchant
+                LIMIT 500
+                """
+            ).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Query failed: {exc}") from exc
+        merchants = [r[0] for r in rows if r[0]]
+        suggestions = suggest_categories_for_merchants(merchants)
+        return {"suggestions": suggestions, "count": len(suggestions)}
+
     # -----------------------------------------------------------------------
     # Merchant category map
     # -----------------------------------------------------------------------
