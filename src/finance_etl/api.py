@@ -120,6 +120,9 @@ try:
         cc_polarity:       Optional[str]= Field(None, description="CC single-col polarity: 'format_a' or 'format_b'")
         # Feature 1
         statement_type:    Optional[str]= Field(None, description="'credit_card' or 'bank'")
+        # Optional static category applied to every transaction in this import.
+        # Accepts letters A–Z only (case-insensitive); all other characters are rejected.
+        category_override: Optional[str]= Field(None, description="Letters A–Z only — overrides the category for every imported transaction")
 
     class RunStartedResponse(BaseModel):
         run_id:  str = Field(..., description="Unique run identifier — poll GET /runs/{run_id} for progress")
@@ -1071,6 +1074,16 @@ No cloud services, no external dependencies — all data stays on your machine.
             logging.getLogger("finance_etl.api").exception("Wizard profile save failed: %s", exc)
             raise HTTPException(status_code=500, detail=f"Failed to save mapping profile: {exc}") from exc
 
+        # Sanitize category_override: letters A–Z only, max 64 chars.
+        # Validated client-side too, but we enforce it unconditionally here.
+        _raw_cat = (payload.category_override or "").strip()
+        if _raw_cat and not re.fullmatch(r"[A-Za-z]{1,64}", _raw_cat):
+            raise HTTPException(
+                status_code=422,
+                detail="category_override must contain only letters A–Z (max 64 characters).",
+            )
+        category_override = _raw_cat or None
+
         # Build inline pipeline mapping dict
         bank_key = re.sub(r"[^a-z0-9_]", "_",
                           f"{payload.institution}_{payload.account_id}".lower())
@@ -1084,6 +1097,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             currency_default=payload.currency_default,
             drop_columns=payload.drop_columns,
             cc_polarity=getattr(payload, "cc_polarity", None),
+            category_override=category_override,
         )
 
         # Kick off pipeline run

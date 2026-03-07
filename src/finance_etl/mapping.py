@@ -77,6 +77,7 @@ def map_and_stage(
     col_map: dict[str, str] = mapping.get("column_map", {})
     text_cols: dict[str, str] = mapping.get("text_cols", {})   # canonical→csv (many-to-one safe)
     drop_cols: list[str] = mapping.get("drop_columns", [])
+    category_override: str | None = mapping.get("category_override") or None
     date_cfg: dict = mapping.get("date", {})
     amount_cfg: dict = mapping.get("amount", {})
     family: str = mapping["amount_format_family"]
@@ -116,6 +117,7 @@ def map_and_stage(
                 amount_cfg=amount_cfg,
                 family=family,
                 currency_default=currency_default,
+                category_override=category_override,
             )
 
             _insert_stage_row(conn, stage)
@@ -190,6 +192,7 @@ def _build_stage_row(
     family: str,
     currency_default: str,
     text_cols: dict | None = None,
+    category_override: str | None = None,
 ) -> dict:
     def get(col: str | None) -> str:
         if not col:
@@ -223,6 +226,10 @@ def _build_stage_row(
             _val = get(_src)
             if _val:
                 extra[_canon] = _val
+
+    # category_override (letters A–Z only) takes precedence over the CSV column.
+    if category_override:
+        extra["category"] = category_override
 
     return {
         "run_id": run_id,

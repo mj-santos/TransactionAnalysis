@@ -919,6 +919,7 @@ def wizard_to_pipeline_mapping(
     drop_columns: list[str] | None = None,
     locale: dict | None = None,
     cc_polarity: str | None = None,
+    category_override: str | None = None,
 ) -> dict[str, Any]:
     """
     Build a pipeline-compatible mapping dict from wizard field selections.
@@ -1004,6 +1005,7 @@ def wizard_to_pipeline_mapping(
         "currency_default":     currency_default,
         "drop_columns":         list(drop_columns or []),
         "locale":               locale or {},
+        "category_override":    category_override,  # str | None — letters only
     }
 
 

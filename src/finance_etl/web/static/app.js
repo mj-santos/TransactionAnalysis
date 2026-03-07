@@ -798,6 +798,7 @@ const wizard = {
   canonicalLabels:      {},       // {field: label}
   mapping:              {},       // {canonical_field: selected_csv_header}
   suggestedDateFormat:  null,     // server-inferred date format hint (e.g. '%m/%d/%Y')
+  categoryOverride:     null,     // A-Z letters only; when set, applied to every transaction
   includeCustomHeaders: false,    // whether "Include custom headers" checkbox is ticked
   customHeadersSelected: [],      // CSV headers user has checked for custom persistence
   // CC transaction model
@@ -916,6 +917,7 @@ function wizardClose() {
   wizard.canonicalFields     = [];
   wizard.canonicalLabels     = {};
   wizard.suggestedDateFormat = null;
+  wizard.categoryOverride    = null;
   // FIX 3: always reset to true so next wizard open shows custom-headers panel
   wizard.includeCustomHeaders  = true;
   wizard.customHeadersSelected = [];
@@ -1315,6 +1317,22 @@ function renderWizardStep2() {
     const opts = ['', ...wizard.headers].map(h =>
       `<option value="${esc(h)}" ${h === current ? 'selected' : ''}>${h ? esc(h) : '(none)'}</option>`
     ).join('');
+
+    // Category field gets an optional manual-override input (A–Z letters only).
+    const overrideInput = field === 'category' ? `
+      <div style="margin-top:5px;display:flex;align-items:center;gap:6px;">
+        <label style="font-size:11px;color:var(--text-muted,#888);white-space:nowrap;"
+               for="w-category-override">Manual override:</label>
+        <input type="text"
+               id="w-category-override"
+               value="${esc(wizard.categoryOverride || '')}"
+               maxlength="64"
+               placeholder="e.g. Shopping"
+               title="Letters A–Z only. When filled, every transaction in this import is assigned this category, overriding any value from the CSV column."
+               oninput="onCategoryOverrideInput(this)"
+               style="width:130px;font-size:12px;padding:2px 6px;border:1px solid var(--border,#ccc);border-radius:3px;">
+      </div>` : '';
+
     return `
       <tr${grpAttr}${hidden ? ' style="display:none"' : ''}>
         <td class="field-label${isReq(field) ? ' required' : ''}">${esc(label)}</td>
@@ -1324,6 +1342,7 @@ function renderWizardStep2() {
                   onchange="onMappingChange(this)">
             ${opts}
           </select>
+          ${overrideInput}
         </td>
       </tr>`;
   };
@@ -1396,6 +1415,12 @@ function onMappingChange(sel) {
   if (field in FIELD_TO_AMOUNT_GROUP) {
     _updateAmountGroupLock();
   }
+}
+
+function onCategoryOverrideInput(el) {
+  // Strip everything that is not a plain letter (A–Z / a–z) in real time.
+  el.value = el.value.replace(/[^A-Za-z]/g, '');
+  wizard.categoryOverride = el.value || null;
 }
 
 function _updateAmountGroupLock() {
@@ -1576,6 +1601,8 @@ async function wizardSaveAndRun() {
       statement_type:   statementType,
       // CC polarity for single-col format
       cc_polarity:      wizard.ccPolarity || null,
+      // Optional category override (letters only, validated client + server side)
+      category_override: wizard.categoryOverride || null,
     });
 
     wizardClose();
