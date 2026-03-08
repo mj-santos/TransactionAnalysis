@@ -1829,7 +1829,7 @@ No cloud services, no external dependencies — all data stays on your machine.
     def test_merchant_rule(payload: MerchantRuleRequest):
         """
         Test how a rule would match against recent transaction descriptions.
-        Returns up to 20 matching descriptions from transactions_norm.
+        Returns up to 50 matching descriptions from transactions_norm.
         """
         from finance_etl.merchant_rules import CompiledRule
         rule = CompiledRule(id=0, pattern=payload.pattern, match_type=payload.match_type,
@@ -1839,13 +1839,13 @@ No cloud services, no external dependencies — all data stays on your machine.
         try:
             conn = get_connection(db_path, read_only=True)
             rows = conn.execute(
-                "SELECT DISTINCT description FROM transactions_norm LIMIT 2000"
+                "SELECT DISTINCT description FROM transactions_norm"
             ).fetchall()
             conn.close()
         except Exception:
-            return {"matches": []}
-        matches = [r[0] for r in rows if rule.matches(r[0] or "")]
-        return {"matches": matches[:20], "total_sampled": len(rows)}
+            return {"matches": [], "total_matches": 0, "total_sampled": 0}
+        all_matches = [r[0] for r in rows if rule.matches(r[0] or "")]
+        return {"matches": all_matches[:50], "total_matches": len(all_matches), "total_sampled": len(rows)}
 
     @app.get("/merchant-rules/suggestions", tags=["merchant"],
              summary="Analyze descriptions and suggest normalization rules")

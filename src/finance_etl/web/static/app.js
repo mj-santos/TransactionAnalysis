@@ -1980,6 +1980,7 @@ function openRuleForm(ruleId) {
 
 function closeRuleForm() {
   _editingRuleId = null;
+  _testMatches = [];
   document.getElementById('rule-form-card').style.display = 'none';
 }
 
@@ -2034,11 +2035,34 @@ async function deleteRule(ruleId) {
   }
 }
 
+let _testMatches = [];
+const _TEST_PAGE = 5;
+
+function _renderTestMatches(showCount) {
+  const matchesEl = document.getElementById('rf-test-matches');
+  const resultEl  = document.getElementById('rf-test-result');
+  if (!_testMatches.length) return;
+  const visible = _testMatches.slice(0, showCount);
+  const remaining = _testMatches.length - visible.length;
+  matchesEl.innerHTML =
+    visible.map(m => `<div style="padding:2px 0; border-bottom:1px solid var(--border); word-break:break-all;">${esc(m)}</div>`).join('') +
+    (remaining > 0
+      ? `<button class="btn btn-secondary btn-sm" onclick="_loadMoreTestMatches(${showCount})"
+           style="margin-top:6px; font-size:12px;">Load ${Math.min(remaining, _TEST_PAGE)} more (${remaining} remaining)</button>`
+      : '');
+  matchesEl.style.display = '';
+}
+
+function _loadMoreTestMatches(currentCount) {
+  _renderTestMatches(currentCount + _TEST_PAGE);
+}
+
 async function testRule() {
   const resultEl = document.getElementById('rf-test-result');
   const matchesEl = document.getElementById('rf-test-matches');
   resultEl.textContent = 'Testing…';
   matchesEl.style.display = 'none';
+  _testMatches = [];
 
   const conditions = _getRuleConditions();
   if (conditions.some(c => !c.pattern)) {
@@ -2056,12 +2080,14 @@ async function testRule() {
   };
   try {
     const data = await api('POST', '/merchant-rules/test', body);
+    const total = data.total_matches ?? data.matches.length;
     if (!data.matches.length) {
-      resultEl.textContent = `No matches found in ${data.total_sampled} sampled descriptions.`;
+      resultEl.textContent = `No matches found (${data.total_sampled} unique descriptions scanned).`;
     } else {
-      resultEl.textContent = `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} (of ${data.total_sampled} sampled):`;
-      matchesEl.innerHTML = data.matches.map(m => `<div>${esc(m)}</div>`).join('');
-      matchesEl.style.display = '';
+      const moreNote = total > data.matches.length ? ` — showing first ${data.matches.length}` : '';
+      resultEl.textContent = `${total} match${total !== 1 ? 'es' : ''} found (${data.total_sampled} unique descriptions scanned${moreNote}):`;
+      _testMatches = data.matches;
+      _renderTestMatches(_TEST_PAGE);
     }
   } catch (err) {
     resultEl.textContent = `Error: ${err.message}`;
