@@ -1850,20 +1850,58 @@ let _editingRuleId = null; // null = creating new rule
 
 // ── Condition row helpers ──────────────────────────────────────
 
-function _conditionRowHtml(pattern = '', matchType = 'contains', negate = false) {
-  const sel = (val) => ['contains', 'startswith', 'regex']
-    .map(t => `<option value="${t}"${t === matchType ? ' selected' : ''}>${t === 'contains' ? 'contains' : t === 'startswith' ? 'startswith' : 'regex'}</option>`)
-    .join('');
-  return `<div class="rf-condition-row" style="display:flex; align-items:center; gap:8px; background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:6px 10px;">
-    <select class="rf-cond-type" style="padding:4px 6px; border-radius:5px; border:1px solid var(--border); font-size:12px;">${sel(matchType)}</select>
-    <input class="rf-cond-pattern" type="text" placeholder="e.g. AMAZON, ^UBER, .*COFFEE.*" value="${esc(pattern)}"
-      style="flex:1; padding:4px 8px; border-radius:5px; border:1px solid var(--border); font-size:12px; font-family:monospace;" />
-    <label style="display:flex; align-items:center; gap:4px; font-size:12px; white-space:nowrap; cursor:pointer;">
-      <input type="checkbox" class="rf-cond-negate"${negate ? ' checked' : ''} style="cursor:pointer;" /> NOT
-    </label>
-    <button class="btn btn-secondary btn-sm rf-cond-remove" onclick="removeConditionRow(this)" title="Remove condition"
-      style="font-size:12px; padding:2px 8px;">✕</button>
-  </div>`;
+function _makeConditionRow(pattern, matchType, negate) {
+  // Build via DOM APIs to avoid global CSS "width:100%" on select/input
+  // collapsing the pattern input to 0px inside the flex row.
+  const row = document.createElement('div');
+  row.className = 'rf-condition-row';
+  row.style.cssText = 'display:flex; align-items:center; gap:8px; background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:6px 10px;';
+
+  // Match-type select — override global width:100% so it only sizes to content
+  const sel = document.createElement('select');
+  sel.className = 'rf-cond-type';
+  sel.style.cssText = 'width:auto; flex-shrink:0; padding:4px 6px; border-radius:5px; border:1px solid var(--border); font-size:12px;';
+  ['contains', 'startswith', 'regex'].forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t;
+    opt.selected = (t === matchType);
+    sel.appendChild(opt);
+  });
+
+  // Pattern input — flex:1 grows to fill remaining space; width:auto overrides global
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.className = 'rf-cond-pattern';
+  inp.placeholder = 'e.g. AMAZON, ^UBER, .*COFFEE.*';
+  inp.value = pattern || '';
+  inp.style.cssText = 'flex:1; min-width:80px; width:auto; padding:4px 8px; border-radius:5px; border:1px solid var(--border); font-size:12px; font-family:monospace; background:var(--card-bg,#fff); color:var(--text,#222);';
+
+  // NOT label + checkbox
+  const label = document.createElement('label');
+  label.style.cssText = 'display:flex; align-items:center; gap:4px; font-size:12px; white-space:nowrap; cursor:pointer; flex-shrink:0;';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'rf-cond-negate';
+  cb.checked = !!negate;
+  cb.style.cursor = 'pointer';
+  label.appendChild(cb);
+  label.appendChild(document.createTextNode(' NOT'));
+
+  // Remove button
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-secondary btn-sm rf-cond-remove';
+  btn.textContent = '✕';
+  btn.title = 'Remove condition';
+  btn.style.cssText = 'font-size:12px; padding:2px 8px; flex-shrink:0;';
+  btn.addEventListener('click', function() { removeConditionRow(this); });
+
+  row.appendChild(sel);
+  row.appendChild(inp);
+  row.appendChild(label);
+  row.appendChild(btn);
+  return row;
 }
 
 function _updateLogicVisibility() {
@@ -1871,7 +1909,7 @@ function _updateLogicVisibility() {
   const wrap = document.getElementById('rf-logic-wrap');
   if (wrap) wrap.style.display = rows.length >= 2 ? 'flex' : 'none';
   // Update remove button visibility — always keep at least one row
-  document.querySelectorAll('#rf-conditions .rf-cond-remove').forEach((btn, i) => {
+  document.querySelectorAll('#rf-conditions .rf-cond-remove').forEach(btn => {
     btn.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
   });
 }
@@ -1879,9 +1917,7 @@ function _updateLogicVisibility() {
 function addConditionRow(pattern = '', matchType = 'contains', negate = false) {
   const container = document.getElementById('rf-conditions');
   if (!container) return;
-  const div = document.createElement('div');
-  div.innerHTML = _conditionRowHtml(pattern, matchType, negate);
-  container.appendChild(div.firstElementChild);
+  container.appendChild(_makeConditionRow(pattern, matchType, negate));
   _updateLogicVisibility();
 }
 
