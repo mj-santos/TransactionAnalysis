@@ -200,11 +200,18 @@ try:
 
     # ---- Merchant rules models -----------------------------------------------
 
+    class RuleCondition(BaseModel):
+        pattern:    str
+        match_type: str = "contains"
+        negate:     bool = False
+
     class MerchantRuleRequest(BaseModel):
         pattern:    str = Field(..., description="Pattern to match against description")
         match_type: str = Field("contains", description="'contains' | 'startswith' | 'regex'")
         merchant:   str = Field(..., description="Normalized merchant name to assign")
         priority:   int = Field(0, description="Higher = applied first")
+        conditions: Optional[list] = Field(None, description="Compound conditions [{pattern, match_type, negate}]")
+        logic:      str = Field("AND", description="'AND' | 'OR' — how conditions are combined")
 
     class MerchantCategoryRequest(BaseModel):
         merchant:  str = Field(..., description="Merchant name (exact, case-sensitive)")
@@ -1725,17 +1732,28 @@ No cloud services, no external dependencies — all data stays on your machine.
     @app.get("/merchant-rules", tags=["merchant"], summary="List merchant normalization rules")
     def get_merchant_rules():
         """Return all merchant rules ordered by priority DESC, id ASC."""
+        import json as _json
         try:
             conn = get_connection(db_path, read_only=True)
             rows = conn.execute(
-                "SELECT id, pattern, match_type, merchant, priority, created_at, updated_at "
+                "SELECT id, pattern, match_type, merchant, priority, created_at, updated_at, conditions, logic "
                 "FROM merchant_rules ORDER BY priority DESC, id ASC"
             ).fetchall()
             conn.close()
         except Exception:
             return {"rules": []}
-        cols = ["id", "pattern", "match_type", "merchant", "priority", "created_at", "updated_at"]
-        return {"rules": [dict(zip(cols, r)) for r in rows]}
+        cols = ["id", "pattern", "match_type", "merchant", "priority", "created_at", "updated_at", "conditions", "logic"]
+        result = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            if d["conditions"]:
+                try:
+                    d["conditions"] = _json.loads(d["conditions"])
+                except Exception:
+                    d["conditions"] = None
+            d["logic"] = d["logic"] or "AND"
+            result.append(d)
+        return {"rules": result}
 
     @app.post("/merchant-rules", tags=["merchant"], summary="Create a merchant rule", status_code=201)
     def create_merchant_rule(payload: MerchantRuleRequest):
@@ -1750,13 +1768,16 @@ No cloud services, no external dependencies — all data stays on your machine.
             except _re.error as exc:
                 from fastapi import HTTPException
                 raise HTTPException(400, f"Invalid regex: {exc}")
+        import json as _json
+        conditions_json = _json.dumps(payload.conditions) if payload.conditions else None
+        logic_val = payload.logic if payload.logic in ("AND", "OR") else "AND"
         now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
         conn = get_connection(db_path)
         try:
             conn.execute(
-                "INSERT INTO merchant_rules (pattern, match_type, merchant, priority, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                [payload.pattern, payload.match_type, payload.merchant, payload.priority, now, now],
+                "INSERT INTO merchant_rules (pattern, match_type, merchant, priority, created_at, updated_at, conditions, logic) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [payload.pattern, payload.match_type, payload.merchant, payload.priority, now, now, conditions_json, logic_val],
             )
             row = conn.execute(
                 "SELECT id FROM merchant_rules WHERE pattern=? AND merchant=? AND created_at=?",
@@ -1779,13 +1800,16 @@ No cloud services, no external dependencies — all data stays on your machine.
             except _re.error as exc:
                 from fastapi import HTTPException
                 raise HTTPException(400, f"Invalid regex: {exc}")
+        import json as _json
+        conditions_json = _json.dumps(payload.conditions) if payload.conditions else None
+        logic_val = payload.logic if payload.logic in ("AND", "OR") else "AND"
         now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
         conn = get_connection(db_path)
         try:
             conn.execute(
-                "UPDATE merchant_rules SET pattern=?, match_type=?, merchant=?, priority=?, updated_at=? "
+                "UPDATE merchant_rules SET pattern=?, match_type=?, merchant=?, priority=?, updated_at=?, conditions=?, logic=? "
                 "WHERE id=?",
-                [payload.pattern, payload.match_type, payload.merchant, payload.priority, now, rule_id],
+                [payload.pattern, payload.match_type, payload.merchant, payload.priority, now, conditions_json, logic_val, rule_id],
             )
         finally:
             conn.close()
@@ -1809,7 +1833,9 @@ No cloud services, no external dependencies — all data stays on your machine.
         """
         from finance_etl.merchant_rules import CompiledRule
         rule = CompiledRule(id=0, pattern=payload.pattern, match_type=payload.match_type,
-                            merchant=payload.merchant, priority=payload.priority)
+                            merchant=payload.merchant, priority=payload.priority,
+                            conditions=payload.conditions,
+                            logic=payload.logic if payload.logic in ("AND", "OR") else "AND")
         try:
             conn = get_connection(db_path, read_only=True)
             rows = conn.execute(

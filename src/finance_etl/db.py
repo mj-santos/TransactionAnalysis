@@ -182,6 +182,10 @@ _MIGRATIONS = [
       created_at  TEXT    NOT NULL
     )
     """,
+    # ── Add compound condition columns to merchant_rules ────────────────────
+    "ALTER TABLE merchant_rules ADD COLUMN IF NOT EXISTS conditions TEXT",
+    "ALTER TABLE merchant_rules ADD COLUMN IF NOT EXISTS logic TEXT DEFAULT 'AND'",
+
     # ── Backfill: run_id via transactions_stage join ─────────────────────────
     # Link each transaction back to the run that created it.  Rows where
     # transactions_stage has already been deleted (e.g., after a purge) will
