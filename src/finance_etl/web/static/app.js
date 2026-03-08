@@ -790,6 +790,60 @@ async function maybeShowLogsOnError() {
   await refreshLogs();
 }
 
+// ── Backup & Restore ──────────────────────────────────────────
+
+function downloadBackup() {
+  const statusEl = document.getElementById('backup-export-status');
+  if (statusEl) statusEl.textContent = 'Preparing export…';
+  // Trigger download via a temporary anchor pointing to the API endpoint
+  const a = document.createElement('a');
+  a.href = '/backup/export';
+  a.download = 'finance_backup.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  if (statusEl) {
+    statusEl.textContent = 'Download started.';
+    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  }
+}
+
+async function uploadBackup(input) {
+  const statusEl = document.getElementById('backup-restore-status');
+  const file = input.files[0];
+  if (!file) return;
+  if (statusEl) statusEl.textContent = 'Uploading…';
+
+  if (!confirm(
+    'This will replace all existing merchant rules, category rules, and budget goals, ' +
+    'and upsert transactions from the backup.\n\nContinue?'
+  )) {
+    input.value = '';
+    if (statusEl) statusEl.textContent = '';
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const resp = await fetch('/backup/restore', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || resp.statusText);
+    const msg = `Restored: ${data.merchant_rules_restored} merchant rules, ` +
+      `${data.category_rules_restored} category rules, ` +
+      `${data.merchant_categories_restored} merchant categories, ` +
+      `${data.budget_goals_restored} budget goals, ` +
+      `${data.transactions_inserted} transactions inserted (${data.transactions_skipped} skipped).`;
+    if (statusEl) statusEl.textContent = msg;
+    toast('Backup restored successfully.', 'success', 6000);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Error: ${err.message}`;
+    toast(`Restore failed: ${err.message}`, 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
 // ── Utilities ─────────────────────────────────────────────────
 function esc(str) {
   return String(str)
@@ -2238,19 +2292,12 @@ let _catSuggestions  = [];   // {merchant, suggested_category, confidence}
 
 function _clearSuggestions() {
   _ruleSuggestions = [];
-  _catSuggestions  = [];
   const rl = document.getElementById('rule-suggestions-list');
-  const cl = document.getElementById('cat-suggestions-list');
   if (rl) rl.innerHTML = '';
-  if (cl) cl.innerHTML = '';
   const raBtn = document.getElementById('rule-suggest-accept-all');
-  const caBtn = document.getElementById('cat-suggest-accept-all');
   if (raBtn) raBtn.style.display = 'none';
-  if (caBtn) caBtn.style.display = 'none';
   const rs = document.getElementById('rule-suggest-status');
-  const cs = document.getElementById('cat-suggest-status');
   if (rs) rs.textContent = '';
-  if (cs) cs.textContent = '';
 }
 
 async function loadRuleSuggestions() {
@@ -2722,9 +2769,9 @@ async function deleteCatRule(id) {
 // ── Category Suggestions ─────────────────────────────────────
 
 async function loadCatSuggestions() {
-  const statusEl = document.getElementById('cat-suggest-status');
-  const listEl   = document.getElementById('cat-suggestions-list');
-  const acceptAllBtn = document.getElementById('cat-suggest-accept-all');
+  const statusEl = document.getElementById('crule-suggest-status');
+  const listEl   = document.getElementById('crule-suggestions-list');
+  const acceptAllBtn = document.getElementById('crule-suggest-accept-all');
   if (!listEl) return;
   statusEl.textContent = 'Loading…';
   listEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:4px 0;">Scanning categories…</div>`;
@@ -2747,12 +2794,12 @@ async function loadCatSuggestions() {
 }
 
 function _renderCatSuggestions() {
-  const listEl = document.getElementById('cat-suggestions-list');
+  const listEl = document.getElementById('crule-suggestions-list');
   if (!listEl) return;
   const visible = _catSuggestionsData.filter(s => !s._dismissed);
   if (!visible.length) {
     listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All suggestions reviewed.</span>';
-    const ab = document.getElementById('cat-suggest-accept-all'); if(ab) ab.style.display='none';
+    const ab = document.getElementById('crule-suggest-accept-all'); if(ab) ab.style.display='none';
     return;
   }
   listEl.innerHTML = visible.map((s, i) => {

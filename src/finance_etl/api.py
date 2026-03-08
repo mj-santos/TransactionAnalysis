@@ -2442,6 +2442,175 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
+    # Backup & Restore
+    # -----------------------------------------------------------------------
+
+    @app.get("/backup/export", tags=["backup"], summary="Export all user data as JSON")
+    def export_backup():
+        """
+        Export all user-configurable data (rules, categories, budgets, transactions)
+        as a single JSON document suitable for restoring on a fresh installation.
+        """
+        from fastapi.responses import Response as FastAPIResponse
+        import datetime
+
+        try:
+            from finance_etl.db import get_connection as _gc
+            conn = _gc(db_path, read_only=True)
+
+            def rows_to_dicts(cursor_result):
+                cols = [d[0] for d in cursor_result.description]
+                return [dict(zip(cols, row)) for row in cursor_result.fetchall()]
+
+            merchant_rules = rows_to_dicts(conn.execute(
+                "SELECT * FROM merchant_rules ORDER BY priority DESC, id ASC"
+            ))
+            merchant_categories = rows_to_dicts(conn.execute(
+                "SELECT * FROM merchant_category_map ORDER BY merchant"
+            ))
+            category_rules = rows_to_dicts(conn.execute(
+                "SELECT * FROM category_rules ORDER BY parent, category"
+            ))
+            budget_goals = rows_to_dicts(conn.execute(
+                "SELECT * FROM budget_goals ORDER BY parent, category"
+            ))
+            transactions = rows_to_dicts(conn.execute(
+                "SELECT * FROM transactions_norm ORDER BY transaction_date, transaction_fingerprint"
+            ))
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
+
+        payload = {
+            "backup_version": 1,
+            "exported_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "merchant_rules": merchant_rules,
+            "merchant_categories": merchant_categories,
+            "category_rules": category_rules,
+            "budget_goals": budget_goals,
+            "transactions": transactions,
+        }
+        body = json.dumps(payload, indent=2, default=str)
+        return FastAPIResponse(
+            content=body,
+            media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="finance_backup.json"'},
+        )
+
+    @app.post("/backup/restore", tags=["backup"], summary="Restore user data from a JSON backup",
+              status_code=200)
+    async def restore_backup(file: UploadFile = File(...)):
+        """
+        Restore all user data from a JSON backup file produced by GET /backup/export.
+        Existing rules, categories, and budgets are replaced.  Transactions are
+        upserted by fingerprint so duplicates are not created.
+        """
+        import datetime
+
+        raw = await file.read()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON file.")
+
+        if payload.get("backup_version") != 1:
+            raise HTTPException(status_code=400, detail="Unsupported backup version.")
+
+        try:
+            from finance_etl.db import get_connection as _gc
+            conn = _gc(db_path)
+            now = datetime.datetime.utcnow().isoformat()
+
+            # ── Merchant rules ───────────────────────────────────────────────
+            conn.execute("DELETE FROM merchant_rules")
+            for r in payload.get("merchant_rules", []):
+                conn.execute(
+                    """INSERT INTO merchant_rules
+                       (pattern, match_type, merchant, priority, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?)""",
+                    [r["pattern"], r.get("match_type", "contains"), r["merchant"],
+                     r.get("priority", 0), r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # ── Merchant categories ──────────────────────────────────────────
+            conn.execute("DELETE FROM merchant_category_map")
+            for r in payload.get("merchant_categories", []):
+                conn.execute(
+                    """INSERT INTO merchant_category_map (merchant, category, source, updated_at)
+                       VALUES (?,?,?,?)""",
+                    [r["merchant"], r["category"], r.get("source", "user"),
+                     r.get("updated_at", now)],
+                )
+
+            # ── Category rules ───────────────────────────────────────────────
+            conn.execute("DELETE FROM category_rules")
+            for r in payload.get("category_rules", []):
+                conn.execute(
+                    """INSERT INTO category_rules (raw_category, category, parent, created_at, updated_at)
+                       VALUES (?,?,?,?,?)""",
+                    [r["raw_category"], r["category"], r["parent"],
+                     r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # ── Budget goals ─────────────────────────────────────────────────
+            conn.execute("DELETE FROM budget_goals")
+            for r in payload.get("budget_goals", []):
+                conn.execute(
+                    """INSERT INTO budget_goals (parent, category, monthly_amount, created_at, updated_at)
+                       VALUES (?,?,?,?,?)""",
+                    [r["parent"], r.get("category"), r["monthly_amount"],
+                     r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # ── Transactions (upsert by fingerprint) ─────────────────────────
+            tx_inserted = 0
+            tx_skipped = 0
+            for r in payload.get("transactions", []):
+                fp = r.get("transaction_fingerprint")
+                if not fp:
+                    tx_skipped += 1
+                    continue
+                existing = conn.execute(
+                    "SELECT 1 FROM transactions_norm WHERE transaction_fingerprint = ?", [fp]
+                ).fetchone()
+                if existing:
+                    tx_skipped += 1
+                    continue
+                conn.execute(
+                    """INSERT INTO transactions_norm (
+                         transaction_date, posted_date, description, merchant, category,
+                         amount, currency, bank_name, account_name, account_id,
+                         source_file, source_row, file_hash, transaction_fingerprint,
+                         ingested_at, statement_type, run_id, transaction_subtype,
+                         resolved_amount, category_normalized, category_parent
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        r.get("transaction_date"), r.get("posted_date"), r.get("description", ""),
+                        r.get("merchant"), r.get("category"), r.get("amount", 0),
+                        r.get("currency", "USD"), r.get("bank_name", ""), r.get("account_name", ""),
+                        r.get("account_id", ""), r.get("source_file", ""), r.get("source_row", 0),
+                        r.get("file_hash", ""), fp, r.get("ingested_at", now),
+                        r.get("statement_type"), r.get("run_id"), r.get("transaction_subtype"),
+                        r.get("resolved_amount"), r.get("category_normalized"), r.get("category_parent"),
+                    ],
+                )
+                tx_inserted += 1
+
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Restore failed: {exc}") from exc
+
+        return {
+            "status": "ok",
+            "merchant_rules_restored": len(payload.get("merchant_rules", [])),
+            "merchant_categories_restored": len(payload.get("merchant_categories", [])),
+            "category_rules_restored": len(payload.get("category_rules", [])),
+            "budget_goals_restored": len(payload.get("budget_goals", [])),
+            "transactions_inserted": tx_inserted,
+            "transactions_skipped": tx_skipped,
+        }
+
+    # -----------------------------------------------------------------------
     # Web UI — always registered last so all API routes take precedence
     # -----------------------------------------------------------------------
 
