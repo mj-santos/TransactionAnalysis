@@ -1,244 +1,327 @@
 """
-Category normalization rules engine.
+Category normalization engine.
 
-Maps raw bank category strings → (normalized_category, parent_group) pairs.
+Maps raw bank-provided category strings to a normalized two-tier taxonomy:
+  category  — normalized subcategory (e.g. "Hotels & Lodging")
+  parent    — top-level group       (e.g. "Travel")
 
-Two sources of rules (checked in order):
-  1. DB table category_rules  — user-editable
-  2. BUILT_IN_CATEGORY_MAP    — bundled defaults
+Two sources of mappings (in priority order):
+  1. user-defined rules in the `category_rules` DB table (exact match, case-insensitive)
+  2. built-in fallback map (BUILT_IN_CATEGORY_MAP)
 
-Matching is exact-string (case-sensitive, as bank data varies).
+apply_category_rules() walks all transactions_norm rows and writes
+category_normalized + category_parent, tracking progress in normalization_jobs.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from finance_etl.utils.log import get_logger
 
 log = get_logger(__name__)
 
-
 # ---------------------------------------------------------------------------
-# Built-in category map
+# Built-in taxonomy — maps raw bank category → (normalized_category, parent)
 # ---------------------------------------------------------------------------
 
 BUILT_IN_CATEGORY_MAP: dict[str, tuple[str, str]] = {
-    # Food & Dining
-    "Groceries": ("Groceries", "Food & Dining"),
-    "Supermarkets": ("Groceries", "Food & Dining"),
-    "Merchandise & Supplies-Groceries": ("Groceries", "Food & Dining"),
-    "Restaurant-Restaurant": ("Restaurants", "Food & Dining"),
-    "Restaurants & Dining": ("Restaurants", "Food & Dining"),
-    "Restaurant": ("Restaurants", "Food & Dining"),
-    "Dining": ("Restaurants", "Food & Dining"),
-    "Fast Food": ("Fast Food", "Food & Dining"),
-    "Restaurant-Bar & Café": ("Bars & Cafes", "Food & Dining"),
-    "Bar/Cafe": ("Bars & Cafes", "Food & Dining"),
-    "Coffee Shops": ("Coffee Shops", "Food & Dining"),
-    # Shopping
-    "Shopping & Retail": ("General Retail", "Shopping"),
-    "Merchandise": ("General Retail", "Shopping"),
-    "Merchandise & Supplies-General Retail": ("General Retail", "Shopping"),
-    "Merchandise & Supplies-Department Stores": ("Department Stores", "Shopping"),
-    "Merchandise & Supplies-Clothing Stores": ("Clothing", "Shopping"),
-    "Merchandise & Supplies-Wholesale Stores": ("Wholesale Clubs", "Shopping"),
-    "Merchandise & Supplies-Internet Purchase": ("Online Retail", "Shopping"),
-    "Merchandise & Supplies-Mail Order": ("Online Retail", "Shopping"),
-    "Merchandise & Supplies-Sporting Goods Stores": ("Sporting Goods", "Shopping"),
-    "Merchandise & Supplies-Book Stores": ("Books & Hobbies", "Shopping"),
-    "Merchandise & Supplies-Arts & Jewelry": ("Arts & Jewelry", "Shopping"),
-    "Merchandise & Supplies-Music & Video": ("Electronics & Media", "Shopping"),
-    "Merchandise & Supplies-Hardware Supplies": ("Hardware & Home Improvement", "Shopping"),
-    "Merchandise & Supplies-Florists & Garden": ("Home & Garden", "Shopping"),
-    "Merchandise & Supplies-Furnishing": ("Home Furnishings", "Shopping"),
-    "Merchandise & Supplies-Pharmacies": ("Pharmacy", "Shopping"),
-    # Travel
-    "Travel-Airline": ("Airlines", "Travel"),
-    "Travel Airline": ("Airlines", "Travel"),
-    "Travel-Lodging": ("Hotels & Lodging", "Travel"),
-    "Travel & Lodging": ("Hotels & Lodging", "Travel"),
-    "Hotel": ("Hotels & Lodging", "Travel"),
-    "Travel-Vehicle Rental": ("Rental Cars", "Travel"),
-    "Rental Car": ("Rental Cars", "Travel"),
-    "Other Travel": ("Other Travel", "Travel"),
-    # Transportation
-    "Transportation-Fuel": ("Gas & Fuel", "Transportation"),
-    "Gas/Automotive": ("Gas & Fuel", "Transportation"),
-    "Gas Stations": ("Gas & Fuel", "Transportation"),
-    "Transportation-Parking Charges": ("Parking & Tolls", "Transportation"),
-    "Transportation-Tolls & Fees": ("Parking & Tolls", "Transportation"),
-    "Parking": ("Parking & Tolls", "Transportation"),
-    "Transportation-Taxis & Coach": ("Rideshare & Taxis", "Transportation"),
-    "Rideshare": ("Rideshare & Taxis", "Transportation"),
-    "Transportation-Rail Services": ("Rail & Transit", "Transportation"),
-    "Transportation-Auto Services": ("Auto Services", "Transportation"),
-    "Transportation-Vehicle Leasing & Purchase": ("Auto Purchase & Lease", "Transportation"),
-    # Entertainment
-    "STREAMING SERVICES": ("Streaming", "Entertainment"),
-    "Streaming Services": ("Streaming", "Entertainment"),
-    "Movies & Music": ("Movies & Music", "Entertainment"),
-    "Sports": ("Sports & Recreation", "Entertainment"),
-    # Health & Wellness
-    "Health Care": ("Medical", "Health & Wellness"),
-    "Health & Fitness": ("Fitness", "Health & Wellness"),
-    "Medical": ("Medical", "Health & Wellness"),
-    "Pharmacy": ("Pharmacy", "Health & Wellness"),
-    # Bills & Utilities
-    "Utilities": ("Utilities", "Bills & Utilities"),
-    "Internet": ("Internet & Cable", "Bills & Utilities"),
-    "Phone": ("Phone", "Bills & Utilities"),
-    "Insurance": ("Insurance", "Bills & Utilities"),
-    # Financial
-    "Payment/Credit": ("Credit Card Payment", "Financial"),
-    "Payments and Credits": ("Credit Card Payment", "Financial"),
-    "Credit Card Payment": ("Credit Card Payment", "Financial"),
-    "Fees & Adjustments-Fees & Adjustments": ("Bank Fees", "Financial"),
-    "Fees & Adjustments": ("Bank Fees", "Financial"),
-    "Bank Fees": ("Bank Fees", "Financial"),
-    "Other-Government Services": ("Government & Taxes", "Financial"),
-    # Education
-    "Other-Education": ("Education", "Education"),
-    "Education": ("Education", "Education"),
-    # Gifts & Charity
-    "Other-Charities": ("Charitable Giving", "Gifts & Charity"),
-    "Charity": ("Charitable Giving", "Gifts & Charity"),
-    "Gifts": ("Gifts", "Gifts & Charity"),
-    # Other
-    "Other-Miscellaneous": ("Miscellaneous", "Other"),
-    "Other Services": ("Other Services", "Other"),
-    "Other": ("Other", "Other"),
+    # ── Food & Dining ────────────────────────────────────────────────────────
+    "Groceries":                                    ("Groceries",             "Food & Dining"),
+    "Supermarkets":                                 ("Groceries",             "Food & Dining"),
+    "Merchandise & Supplies-Groceries":             ("Groceries",             "Food & Dining"),
+    "Restaurant-Restaurant":                        ("Restaurants",           "Food & Dining"),
+    "Restaurants & Dining":                         ("Restaurants",           "Food & Dining"),
+    "Restaurant":                                   ("Restaurants",           "Food & Dining"),
+    "Dining":                                       ("Restaurants",           "Food & Dining"),
+    "Fast Food":                                    ("Fast Food",             "Food & Dining"),
+    "Restaurant-Bar & Café":                        ("Bars & Cafes",          "Food & Dining"),
+    "Bar/Cafe":                                     ("Bars & Cafes",          "Food & Dining"),
+    "Coffee Shops":                                 ("Coffee Shops",          "Food & Dining"),
+    "Food & Drink":                                 ("Restaurants",           "Food & Dining"),
+    # ── Shopping ─────────────────────────────────────────────────────────────
+    "Shopping & Retail":                            ("General Retail",        "Shopping"),
+    "Merchandise":                                  ("General Retail",        "Shopping"),
+    "Merchandise & Supplies-General Retail":        ("General Retail",        "Shopping"),
+    "Merchandise & Supplies-Department Stores":     ("Department Stores",     "Shopping"),
+    "Merchandise & Supplies-Clothing Stores":       ("Clothing",              "Shopping"),
+    "Merchandise & Supplies-Wholesale Stores":      ("Wholesale Clubs",       "Shopping"),
+    "Merchandise & Supplies-Internet Purchase":     ("Online Retail",         "Shopping"),
+    "Merchandise & Supplies-Mail Order":            ("Online Retail",         "Shopping"),
+    "Merchandise & Supplies-Sporting Goods Stores": ("Sporting Goods",        "Shopping"),
+    "Merchandise & Supplies-Book Stores":           ("Books & Hobbies",       "Shopping"),
+    "Merchandise & Supplies-Arts & Jewelry":        ("Arts & Jewelry",        "Shopping"),
+    "Merchandise & Supplies-Music & Video":         ("Electronics & Media",   "Shopping"),
+    "Merchandise & Supplies-Hardware Supplies":     ("Hardware & Home Improvement", "Shopping"),
+    "Merchandise & Supplies-Florists & Garden":     ("Home & Garden",         "Shopping"),
+    "Merchandise & Supplies-Furnishing":            ("Home Furnishings",      "Shopping"),
+    "Merchandise & Supplies-Pharmacies":            ("Pharmacy",              "Shopping"),
+    "Electronics":                                  ("Electronics & Media",   "Shopping"),
+    "Clothing":                                     ("Clothing",              "Shopping"),
+    "Online Shopping":                              ("Online Retail",         "Shopping"),
+    # ── Travel ───────────────────────────────────────────────────────────────
+    "Travel-Airline":                               ("Airlines",              "Travel"),
+    "Travel Airline":                               ("Airlines",              "Travel"),
+    "Travel-Lodging":                               ("Hotels & Lodging",      "Travel"),
+    "Travel & Lodging":                             ("Hotels & Lodging",      "Travel"),
+    "Hotel":                                        ("Hotels & Lodging",      "Travel"),
+    "Hotels":                                       ("Hotels & Lodging",      "Travel"),
+    "Travel-Vehicle Rental":                        ("Rental Cars",           "Travel"),
+    "Rental Car":                                   ("Rental Cars",           "Travel"),
+    "Other Travel":                                 ("Other Travel",          "Travel"),
+    "Travel":                                       ("Other Travel",          "Travel"),
+    # ── Transportation ───────────────────────────────────────────────────────
+    "Transportation-Fuel":                          ("Gas & Fuel",            "Transportation"),
+    "Gas/Automotive":                               ("Gas & Fuel",            "Transportation"),
+    "Gas Stations":                                 ("Gas & Fuel",            "Transportation"),
+    "Transportation-Parking Charges":               ("Parking & Tolls",       "Transportation"),
+    "Transportation-Tolls & Fees":                  ("Parking & Tolls",       "Transportation"),
+    "Parking":                                      ("Parking & Tolls",       "Transportation"),
+    "Transportation-Taxis & Coach":                 ("Rideshare & Taxis",     "Transportation"),
+    "Rideshare":                                    ("Rideshare & Taxis",     "Transportation"),
+    "Transportation-Rail Services":                 ("Rail & Transit",        "Transportation"),
+    "Transportation-Auto Services":                 ("Auto Services",         "Transportation"),
+    "Transportation-Vehicle Leasing & Purchase":    ("Auto Purchase & Lease", "Transportation"),
+    "Auto & Transport":                             ("Auto Services",         "Transportation"),
+    # ── Entertainment ────────────────────────────────────────────────────────
+    "STREAMING SERVICES":                           ("Streaming",             "Entertainment"),
+    "Streaming Services":                           ("Streaming",             "Entertainment"),
+    "Movies & Music":                               ("Movies & Music",        "Entertainment"),
+    "Sports":                                       ("Sports & Recreation",   "Entertainment"),
+    "Recreation":                                   ("Sports & Recreation",   "Entertainment"),
+    "Entertainment":                                ("Entertainment",         "Entertainment"),
+    "Arts & Entertainment":                         ("Entertainment",         "Entertainment"),
+    # ── Health & Wellness ────────────────────────────────────────────────────
+    "Health Care":                                  ("Medical",               "Health & Wellness"),
+    "Health & Fitness":                             ("Fitness",               "Health & Wellness"),
+    "Medical":                                      ("Medical",               "Health & Wellness"),
+    "Pharmacy":                                     ("Pharmacy",              "Health & Wellness"),
+    "Doctor":                                       ("Medical",               "Health & Wellness"),
+    "Dentist":                                      ("Medical",               "Health & Wellness"),
+    # ── Bills & Utilities ────────────────────────────────────────────────────
+    "Utilities":                                    ("Utilities",             "Bills & Utilities"),
+    "Internet":                                     ("Internet & Cable",      "Bills & Utilities"),
+    "Phone":                                        ("Phone",                 "Bills & Utilities"),
+    "Insurance":                                    ("Insurance",             "Bills & Utilities"),
+    "Cable/Satellite":                              ("Internet & Cable",      "Bills & Utilities"),
+    "Water":                                        ("Utilities",             "Bills & Utilities"),
+    "Electric":                                     ("Utilities",             "Bills & Utilities"),
+    # ── Financial ────────────────────────────────────────────────────────────
+    "Payment/Credit":                               ("Credit Card Payment",   "Financial"),
+    "Payments and Credits":                         ("Credit Card Payment",   "Financial"),
+    "Credit Card Payment":                          ("Credit Card Payment",   "Financial"),
+    "Fees & Adjustments-Fees & Adjustments":        ("Bank Fees",             "Financial"),
+    "Fees & Adjustments":                           ("Bank Fees",             "Financial"),
+    "Bank Fees":                                    ("Bank Fees",             "Financial"),
+    "ATM Fee":                                      ("Bank Fees",             "Financial"),
+    "Other-Government Services":                    ("Government & Taxes",    "Financial"),
+    "Taxes":                                        ("Government & Taxes",    "Financial"),
+    "Financial":                                    ("Other Financial",       "Financial"),
+    # ── Education ────────────────────────────────────────────────────────────
+    "Other-Education":                              ("Education",             "Education"),
+    "Education":                                    ("Education",             "Education"),
+    "Tuition":                                      ("Education",             "Education"),
+    # ── Home ─────────────────────────────────────────────────────────────────
+    "Home":                                         ("Home",                  "Home"),
+    "Mortgage":                                     ("Mortgage & Rent",       "Home"),
+    "Rent":                                         ("Mortgage & Rent",       "Home"),
+    "Home Improvement":                             ("Hardware & Home Improvement", "Home"),
+    # ── Gifts & Charity ──────────────────────────────────────────────────────
+    "Other-Charities":                              ("Charitable Giving",     "Gifts & Charity"),
+    "Charity":                                      ("Charitable Giving",     "Gifts & Charity"),
+    "Gifts":                                        ("Gifts",                 "Gifts & Charity"),
+    "Charitable Giving":                            ("Charitable Giving",     "Gifts & Charity"),
+    # ── Other ────────────────────────────────────────────────────────────────
+    "Other-Miscellaneous":                          ("Miscellaneous",         "Other"),
+    "Other Services":                               ("Other Services",        "Other"),
+    "Other":                                        ("Other",                 "Other"),
+}
+
+# Lowercase lookup for case-insensitive matching
+_BUILT_IN_LOWER: dict[str, tuple[str, str]] = {
+    k.lower(): v for k, v in BUILT_IN_CATEGORY_MAP.items()
 }
 
 
 # ---------------------------------------------------------------------------
-# Load rules from DB
+# Normalize a single raw category
+# ---------------------------------------------------------------------------
+
+def normalize_category(raw: str | None,
+                        user_rules: dict[str, tuple[str, str]]) -> tuple[str | None, str | None]:
+    """
+    Return (category_normalized, category_parent) for a raw bank category string.
+    user_rules takes priority over the built-in map.
+    Returns (None, None) if raw is None/empty.
+    """
+    if not raw:
+        return None, None
+    key = raw.lower()
+    if key in user_rules:
+        return user_rules[key]
+    if key in _BUILT_IN_LOWER:
+        return _BUILT_IN_LOWER[key]
+    return raw, "Other"   # fallback: keep original, assign Other parent
+
+
+# ---------------------------------------------------------------------------
+# Load user rules from DB → {lower(raw_category): (category, parent)}
 # ---------------------------------------------------------------------------
 
 def load_category_rules(conn) -> dict[str, tuple[str, str]]:
-    """Return {raw_category: (category, parent)} from DB category_rules table."""
-    rows = conn.execute(
-        "SELECT raw_category, category, parent FROM category_rules"
-    ).fetchall()
-    return {r[0]: (r[1], r[2]) for r in rows}
+    """Return user-defined category rules as {lower(raw_category): (category, parent)}."""
+    try:
+        rows = conn.execute(
+            "SELECT raw_category, category, parent FROM category_rules"
+        ).fetchall()
+    except Exception:
+        return {}
+    return {r[0].lower(): (r[1], r[2]) for r in rows}
 
 
 # ---------------------------------------------------------------------------
-# Resolve a raw category string
+# Apply job — backfill category_normalized + category_parent
+# ---------------------------------------------------------------------------
+
+def create_category_job(conn) -> str:
+    """Create a normalization_jobs entry for category apply; return job_id."""
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    total = conn.execute("SELECT COUNT(*) FROM transactions_norm").fetchone()[0]
+    conn.execute(
+        "INSERT INTO normalization_jobs (job_id, status, rows_total, rows_done, created_at) "
+        "VALUES (?, 'pending', ?, 0, ?)",
+        [job_id, total, now],
+    )
+    return job_id
+
+
+def apply_category_rules(db_path: str, job_id: str) -> None:
+    """
+    Background job: iterate all transactions_norm rows, normalize category,
+    write back category_normalized + category_parent.
+    Updates normalization_jobs for progress tracking.
+    """
+    import duckdb
+
+    conn = duckdb.connect(db_path)
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute(
+            "UPDATE normalization_jobs SET status='running', started_at=? WHERE job_id=?",
+            [now, job_id],
+        )
+        user_rules = load_category_rules(conn)
+        rows = conn.execute(
+            "SELECT transaction_fingerprint, category FROM transactions_norm"
+        ).fetchall()
+        total = len(rows)
+        done = 0
+        BATCH = 500
+        updates: list[tuple[str | None, str | None, str]] = []
+
+        for fingerprint, raw_cat in rows:
+            cat_n, cat_p = normalize_category(raw_cat, user_rules)
+            updates.append((cat_n, cat_p, fingerprint))
+            done += 1
+            if len(updates) >= BATCH:
+                conn.executemany(
+                    "UPDATE transactions_norm "
+                    "SET category_normalized=?, category_parent=? "
+                    "WHERE transaction_fingerprint=?",
+                    updates,
+                )
+                conn.execute(
+                    "UPDATE normalization_jobs SET rows_done=? WHERE job_id=?",
+                    [done, job_id],
+                )
+                updates = []
+
+        if updates:
+            conn.executemany(
+                "UPDATE transactions_norm "
+                "SET category_normalized=?, category_parent=? "
+                "WHERE transaction_fingerprint=?",
+                updates,
+            )
+
+        finished = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE normalization_jobs "
+            "SET status='success', rows_done=?, finished_at=? WHERE job_id=?",
+            [total, finished, job_id],
+        )
+        log.info("Category normalization complete: %d rows", total)
+    except Exception as exc:
+        log.exception("Category normalization job failed")
+        conn.execute(
+            "UPDATE normalization_jobs SET status='failed', error=? WHERE job_id=?",
+            [str(exc), job_id],
+        )
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Suggestions — unmapped raw categories + built-in matches
+# ---------------------------------------------------------------------------
+
+def get_unmapped_categories(conn) -> list[dict]:
+    """Return distinct raw categories that have no user rule, with tx counts."""
+    try:
+        rows = conn.execute(
+            "SELECT category, COUNT(*) as cnt FROM transactions_norm "
+            "WHERE category IS NOT NULL "
+            "GROUP BY category ORDER BY cnt DESC"
+        ).fetchall()
+    except Exception:
+        return []
+    user_rules = load_category_rules(conn)
+    unmapped = []
+    for raw, cnt in rows:
+        if raw and raw.lower() not in user_rules:
+            unmapped.append({"raw_category": raw, "count": cnt})
+    return unmapped
+
+
+def get_category_suggestions(conn) -> list[dict]:
+    """
+    For every unmapped raw category, check if the built-in map has a match.
+    Returns suggestions with is_builtin=True/False.
+    """
+    unmapped = get_unmapped_categories(conn)
+    suggestions = []
+    for item in unmapped:
+        raw = item["raw_category"]
+        key = raw.lower()
+        if key in _BUILT_IN_LOWER:
+            cat, parent = _BUILT_IN_LOWER[key]
+            suggestions.append({
+                "raw_category": raw,
+                "category": cat,
+                "parent": parent,
+                "count": item["count"],
+                "is_builtin": True,
+            })
+        else:
+            suggestions.append({
+                "raw_category": raw,
+                "category": raw,
+                "parent": "Other",
+                "count": item["count"],
+                "is_builtin": False,
+            })
+    return suggestions
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility alias
 # ---------------------------------------------------------------------------
 
 def resolve_category(
     raw_category: str | None,
     rules: dict[str, tuple[str, str]],
 ) -> tuple[str | None, str | None]:
-    """
-    Return (normalized_category, parent_group) for a raw_category.
-
-    Lookup order:
-      1. DB rules (user-editable, highest priority)
-      2. BUILT_IN_CATEGORY_MAP
-      3. (None, None) if no match found
-    """
-    if not raw_category:
-        return (None, None)
-
-    # 1. DB rules
-    if raw_category in rules:
-        return rules[raw_category]
-
-    # 2. Built-in map
-    if raw_category in BUILT_IN_CATEGORY_MAP:
-        return BUILT_IN_CATEGORY_MAP[raw_category]
-
-    return (None, None)
-
-
-# ---------------------------------------------------------------------------
-# Batch apply category normalization
-# ---------------------------------------------------------------------------
-
-def apply_category_rules(db_path: str, job_id: str, batch_size: int = 500) -> None:
-    """
-    Background job: update category_normalized and category_parent on all
-    transactions_norm rows.
-
-    Uses normalization_jobs table (same table as merchant normalize jobs) to
-    track progress. job_id must already exist in normalization_jobs.
-    """
-    from finance_etl.db import get_connection
-
-    conn = get_connection(db_path)
-    now_str = datetime.now(timezone.utc).isoformat()
-
-    try:
-        conn.execute(
-            "UPDATE normalization_jobs SET status='running', started_at=?, rows_done=0 "
-            "WHERE job_id=?",
-            [now_str, job_id],
-        )
-
-        rules = load_category_rules(conn)
-
-        # Fetch all distinct (fingerprint, category) pairs
-        all_rows = conn.execute(
-            "SELECT transaction_fingerprint, category FROM transactions_norm"
-        ).fetchall()
-
-        total = len(all_rows)
-        conn.execute(
-            "UPDATE normalization_jobs SET rows_total=? WHERE job_id=?",
-            [total, job_id],
-        )
-        log.info("[CATNorm] job=%s total=%d rows", job_id, total)
-
-        done = 0
-        batch_updates: list[tuple] = []
-
-        for fp, raw_category in all_rows:
-            cat_normalized, cat_parent = resolve_category(raw_category, rules)
-            batch_updates.append((cat_normalized, cat_parent, fp))
-            done += 1
-
-            if len(batch_updates) >= batch_size:
-                _flush_category_batch(conn, batch_updates, job_id, done)
-                batch_updates = []
-
-        # Flush remainder
-        if batch_updates:
-            _flush_category_batch(conn, batch_updates, job_id, done)
-
-        finished = datetime.now(timezone.utc).isoformat()
-        conn.execute(
-            "UPDATE normalization_jobs SET status='success', rows_done=?, finished_at=? "
-            "WHERE job_id=?",
-            [done, finished, job_id],
-        )
-        log.info("[CATNorm] job=%s done. %d rows updated.", job_id, done)
-
-    except Exception as exc:
-        log.exception("[CATNorm] job=%s failed: %s", job_id, exc)
-        try:
-            conn.execute(
-                "UPDATE normalization_jobs SET status='failed', error=?, finished_at=? "
-                "WHERE job_id=?",
-                [str(exc), datetime.now(timezone.utc).isoformat(), job_id],
-            )
-        except Exception:
-            pass
-        raise
-    finally:
-        conn.close()
-
-
-def _flush_category_batch(conn, updates: list[tuple], job_id: str, done: int) -> None:
-    """Execute a batch UPDATE and commit progress."""
-    for cat_normalized, cat_parent, fp in updates:
-        conn.execute(
-            "UPDATE transactions_norm SET category_normalized=?, category_parent=? "
-            "WHERE transaction_fingerprint=?",
-            [cat_normalized, cat_parent, fp],
-        )
-    conn.execute(
-        "UPDATE normalization_jobs SET rows_done=? WHERE job_id=?",
-        [done, job_id],
-    )
-    log.debug("[CATNorm] Flushed batch. rows_done=%d", done)
+    """Alias for normalize_category (backward compatibility)."""
+    return normalize_category(raw_category, rules)
