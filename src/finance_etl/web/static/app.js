@@ -2271,10 +2271,9 @@ function editRuleSuggestion(idx) {
   if (!s) return;
   // Pre-fill the rule editor and scroll to it
   openRuleForm(null);
-  document.getElementById('rf-match-type').value = s.match_type;
-  document.getElementById('rf-priority').value   = '0';
-  document.getElementById('rf-pattern').value    = s.pattern;
-  document.getElementById('rf-merchant').value   = s.merchant;
+  document.getElementById('rf-priority').value = '0';
+  document.getElementById('rf-merchant').value = s.merchant;
+  _setRuleConditions([{pattern: s.pattern, match_type: s.match_type, negate: false}], 'AND');
   document.getElementById('rule-form-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   // Mark as dismissed from suggestions (will be created via the form)
   s._dismissed = true;
