@@ -59,7 +59,7 @@ TransactionAnalysis/
 ├── docker-compose.yml          ← single service: finance-etl-api on port 8000
 ├── run_dev.py                  ← dev convenience: starts uvicorn directly
 ├── setup_wizard.py             ← standalone CLI wizard (legacy; duplicated by web wizard)
-├── conftest.py                 ← pytest shared fixtures
+├── conftest.py                 ← pytest path fix: inserts src/ into sys.path so tests can find finance_etl without pip install
 ├── pytest.ini                  ← pytest config
 ├── install.sh                  ← bash installer for non-Docker usage
 ├── .env / .env.example         ← API host/port overrides
@@ -139,15 +139,16 @@ TransactionAnalysis/
 │   │   └── setup_wizard.py         ← CLI interactive wizard (called by `finance_etl wizard`)
 │   │
 │   └── web/
-│       ├── index.html          ← Single-page UI (1,060+ lines); all pages embedded
+│       ├── index.html          ← Single-page UI (1,061 lines); all pages embedded as hidden sections
 │       └── static/
-│           ├── app.js          ← All UI logic (~2,980 lines); no bundler/framework
-│           ├── style.css       ← All styles (~700 lines)
-│           └── table_controls.js ← Reusable Import Source dropdown widget
+│           ├── app.js          ← All UI logic (2,968 lines); no bundler/framework
+│           ├── style.css       ← All styles (696 lines)
+│           └── table_controls.js ← Two reusable widgets (370 lines):
+│                                   makeSourceDropdown() — Import Source radio-dropdown
+│                                   renderTxnTotals()   — pinned tfoot totals row (CC + bank)
 │
 └── tests/
-    ├── __init__.py
-    ├── conftest.py (root)      ← shared fixtures
+    ├── __init__.py             ← package marker only (empty)
     ├── fixtures/               ← test CSVs and golden output JSON
     │   ├── golden/
     │   │   ├── expected_norm.json
@@ -167,9 +168,10 @@ TransactionAnalysis/
 ```
 
 **Potentially unused / orphaned files:**
-- `setup_wizard.py` (root) — standalone script that appears to duplicate `src/finance_etl/wizard/setup_wizard.py`; the web wizard has superseded both
+- `setup_wizard.py` (repo root) — standalone script that appears to duplicate `src/finance_etl/wizard/setup_wizard.py`; the web wizard has superseded both
 - `config/categories/rules.yaml` — YAML category rules are no longer read by the active code path; the DB `category_rules` table is the active source
-- `src/finance_etl/wizard/` — the entire wizard/ subpackage is partially superseded by `wizard_mapping.py` and the web UI wizard. `header_inference.py` and `mapping_rules.py` may be called by the CLI `wizard` command only. `category_suggestion.py` is not referenced by any active web UI code path.
+- `src/finance_etl/wizard/` — the subpackage is only invoked via `cli.py`'s `finance_etl wizard` command (line 245), which calls `wizard/setup_wizard.py`. That module in turn calls `header_inference.py`, `mapping_rules.py`, and `category_suggestion.py`. No web API endpoint references the `wizard/` subpackage directly. If the CLI wizard command is removed, the entire `wizard/` subpackage becomes dead code.
+- `pytest.ini` — duplicates the `[tool.pytest.ini_options]` block in `pyproject.toml` with identical settings (`testpaths = tests`, `pythonpath = src`, `addopts = -v`). pytest picks up `pytest.ini` first; the `pyproject.toml` section is redundant.
 
 ---
 
@@ -432,7 +434,7 @@ Applied in order: `priority DESC, id ASC`. First matching rule wins.
 
 Lookup priority: user rules (DB) > built-in `BUILT_IN_CATEGORY_MAP` in `category_rules.py` > fallback (keep raw, assign parent "Other").
 
-**Built-in taxonomy covers 80+ raw category strings** across: Food & Dining, Shopping, Travel, Transportation, Entertainment, Health & Wellness, Bills & Utilities, Financial, Education, Home, Gifts & Charity, Other.
+**Built-in taxonomy covers ~97 raw category strings** across 12 parent groups: Food & Dining, Shopping, Travel, Transportation, Entertainment, Health & Wellness, Bills & Utilities, Financial, Education, Home, Gifts & Charity, Other.
 
 ---
 
@@ -464,7 +466,7 @@ Lookup priority: user rules (DB) > built-in `BUILT_IN_CATEGORY_MAP` in `category
 | `finished_at` | TEXT | ISO timestamp |
 | `created_at` | TEXT NOT NULL | ISO timestamp |
 
-Used by both merchant renormalization (`batch_renormalize`) and category normalization (`apply_category_rules`). Status values are inconsistent: merchant jobs use `'fail'`; category jobs use `'failed'`.
+Used by both merchant renormalization (`batch_renormalize`) and category normalization (`apply_category_rules`). Status values are inconsistent: merchant jobs use `'fail'`; category jobs use `'failed'`. Job IDs are prefixed differently: merchant jobs use `"norm_"` prefix; category jobs use `"catnorm_"` prefix. Both are polled via `GET /normalize/{job_id}`.
 
 ---
 
@@ -497,9 +499,9 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 
 ### Hardcoded Values & Workarounds
 
-- **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">` in the category rule editor, ~12 options). This list is not derived from the database or `BUILT_IN_CATEGORY_MAP` — it must be manually kept in sync.
-- **Budget form** has a hardcoded parent group list (same 12 values) in the dashboard section of `index.html`. Same sync problem.
-- **`_CATEGORY_HINTS`** in `merchant_rules.py` (keyword → category mapping for merchant suggestions) uses different category names than `BUILT_IN_CATEGORY_MAP` in `category_rules.py`. For example, hints use "Restaurants & Dining" while the built-in map uses "Restaurants" / "Food & Dining". This causes suggestions to produce category names that don't align with the normalized taxonomy.
+- **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">` in the category rule editor) with exactly 12 options: Food & Dining, Shopping, Travel, Transportation, Entertainment, Health & Wellness, Bills & Utilities, Financial, Education, Home, Gifts & Charity, Other. These currently match `BUILT_IN_CATEGORY_MAP`'s parent groups exactly, but are not dynamically derived — adding a new taxonomy parent requires editing both `category_rules.py` and `index.html` manually.
+- **Budget form** (`bf-parent`) uses a free-text `<input>`, NOT a select. No sync risk, but also no validation against the taxonomy. User can type any string.
+- **`_CATEGORY_HINTS`** in `merchant_rules.py` (keyword → category mapping for merchant suggestions) uses different category names than `BUILT_IN_CATEGORY_MAP` in `category_rules.py`. For example, hints use "Restaurants & Dining" while the built-in map maps that raw string to subcategory "Restaurants" / parent "Food & Dining". Accepted merchant category suggestions may not match the normalized taxonomy's subcategory naming convention.
 - **`min_transactions = 3`** in `analyze_descriptions()` is hardcoded. No UI control.
 - **Backup restore** does not restore `merchant_rules.conditions` / `logic` — the JSON-serialized compound conditions column is included in the export but the restore INSERT does not pass these fields (only `pattern`, `match_type`, `merchant`, `priority`).
 
@@ -516,14 +518,18 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 - **`imported_file` column** exists in `runs` table (added by migration) but is not in the base DDL. It's populated during import runs but not consistently shown in the history UI.
 - **`transactions_stage` is never explicitly purged** after commit. The pipeline commits rows to `transactions_norm` but does not clear `transactions_stage`. Staging rows accumulate unless the user deletes runs.
 - **`category` vs `category_normalized`**: `transactions_norm.category` holds the raw bank category string; `category_normalized` holds the applied rule result. The raw `category` column is what drives the category rules system. If a transaction was imported without a bank category, `category_normalized` and `category_parent` will be NULL even after running Apply Normalization.
-- **`runs.status` value `'committing'`** exists in the UI state machine but may not be written to the DB during the commit background task — the API sets `running` in `_async_runs` but the DB run record status during commit is not explicitly tracked.
+- **`runs.status` value `'committing'`** exists in the UI state machine (the client-side `pollRun` displays this label) but is never written to the `runs` DB table — the DB shows `'running'` and then goes to `'success'` or `'fail'`. The UI manufactures `'committing'` purely as a display label after the user clicks "Commit".
+- **`_staged_runs` dict is in-memory only** — if the uvicorn process restarts between a staged preview and the user clicking "Commit", the staged run is lost. `GET /runs/{id}` will still return the DB row (which says `'staged'`), but `POST /runs/{id}/commit` will raise a `KeyError` because the dict is gone. No persistence or recovery mechanism exists.
+- **`start_category_normalize` in `api.py`** inserts a `normalization_jobs` row without setting `rows_total` (it's NULL until the background thread starts). The `create_category_job()` helper in `category_rules.py` pre-computes and sets `rows_total`, but the API endpoint bypasses it in favor of an inline INSERT. The UI progress bar may show 0/NULL total until the first batch completes.
 
 ### Dead / Unreferenced Code
 
-- `src/finance_etl/wizard/category_suggestion.py` — not called from any web API endpoint. Only referenced (if at all) via the legacy CLI wizard.
-- `src/finance_etl/wizard/mapping_rules.py` — same; legacy CLI only.
-- `src/finance_etl/wizard/header_inference.py` — the web wizard uses `wizard_mapping.py` for inference; this module may only be used by the CLI wizard.
-- `config/categories/rules.yaml` — not read by any active code path.
+- `src/finance_etl/wizard/category_suggestion.py` — called by `wizard/setup_wizard.py` (CLI path only). No web API endpoint touches it.
+- `src/finance_etl/wizard/mapping_rules.py` — same; CLI only.
+- `src/finance_etl/wizard/header_inference.py` — CLI only; web wizard uses `wizard_mapping.py`.
+- `config/categories/rules.yaml` — not read by any active code path (superseded by DB table).
+- `resolve_category()` in `category_rules.py` — a backward-compat alias for `normalize_category()`. Imported in `api.py` at line 2051 but never actually called within `api.py`. The import itself is dead.
+- `get_unmapped_categories()` and `get_category_suggestions()` in `category_rules.py` — defined but the API endpoints implement equivalent logic inline (at lines 2128 and 2162) rather than calling these module-level helpers.
 
 ---
 
@@ -551,6 +557,7 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 - **Preview-then-commit workflow**: Every import run goes through a `staged` state where the user reviews rows before they hit the ledger. This prevents bad data from being permanently loaded. The "Commit" step is a separate API call.
 - **Deterministic fingerprinting**: Each transaction row gets a `transaction_fingerprint` built from hash(date + description + amount + account). This is the dedup key — re-importing the same CSV is safe.
 - **Background threads (not async workers)**: Normalization and category-apply jobs run in Python threads via `BackgroundTasks`. There is no Celery, Redis, or worker queue. The UI polls `/normalize/{job_id}` every 1500ms.
+- **`_staged_runs` is process-local**: Staged run state (pending commit) is stored in `pipeline._staged_runs: dict[str, dict]` which lives only in the uvicorn process memory. A server restart between staging and commit loses the staged data — the DB shows `'staged'` but commit will fail with `KeyError`.
 - **YAML wizard profiles** persist column mappings per institution/account. On re-upload, the wizard auto-matches headers against existing profiles and pre-fills the field selectors.
 - **`source='user'` vs `source='learned'`** in `merchant_category_map`: User-assigned categories are never overwritten by the learn mechanism. Learned associations (from transaction data) are lower priority.
 
