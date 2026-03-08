@@ -19,6 +19,7 @@ _REPORT_FIELDS = frozenset({
     "transaction_date", "description", "merchant", "category",
     "amount", "currency", "bank_name", "account_name", "account_id",
     "statement_type",  # Feature 1: allow filtering by statement type
+    "category_normalized", "category_parent",
 })
 # Fields that may be used in ORDER BY
 _SORT_FIELDS = frozenset({
@@ -216,6 +217,16 @@ try:
     class MerchantCategoryRequest(BaseModel):
         merchant:  str = Field(..., description="Merchant name (exact, case-sensitive)")
         category:  str = Field(..., description="Category to assign")
+
+    class CategoryRuleRequest(BaseModel):
+        raw_category: str = Field(..., description="Exact raw category string from bank")
+        category:     str = Field(..., description="Normalized subcategory")
+        parent:       str = Field(..., description="Parent group (e.g. 'Food & Dining')")
+
+    class BudgetGoalRequest(BaseModel):
+        parent:         str           = Field(..., description="Parent category group")
+        category:       Optional[str] = Field(None, description="Specific subcategory (None = whole parent)")
+        monthly_amount: float         = Field(..., description="Monthly budget in dollars")
 
     class NormalizeJobResponse(BaseModel):
         job_id:      str
@@ -2028,6 +2039,407 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(404, f"Job {job_id!r} not found")
         cols = ["job_id", "status", "rows_total", "rows_done", "error", "started_at", "finished_at"]
         return dict(zip(cols, row))
+
+    # -----------------------------------------------------------------------
+    # Category rules CRUD
+    # -----------------------------------------------------------------------
+
+    from finance_etl.category_rules import (
+        BUILT_IN_CATEGORY_MAP,
+        apply_category_rules,
+        load_category_rules,
+        resolve_category,
+    )
+
+    @app.get("/category-rules", tags=["categories"], summary="List all category rules")
+    def get_category_rules():
+        """Return all entries in category_rules ordered by parent, category."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, raw_category, category, parent, created_at, updated_at "
+                "FROM category_rules ORDER BY parent ASC, category ASC"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"rules": []}
+        cols = ["id", "raw_category", "category", "parent", "created_at", "updated_at"]
+        return {"rules": [dict(zip(cols, r)) for r in rows]}
+
+    @app.post("/category-rules", tags=["categories"], summary="Create or update a category rule",
+              status_code=201)
+    def create_category_rule(payload: CategoryRuleRequest):
+        """Insert a category rule; on UNIQUE conflict update existing entry."""
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conn = get_connection(db_path)
+        try:
+            existing = conn.execute(
+                "SELECT id FROM category_rules WHERE raw_category=?",
+                [payload.raw_category],
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO category_rules (raw_category, category, parent, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [payload.raw_category, payload.category, payload.parent, now, now],
+                )
+                row_id = conn.execute(
+                    "SELECT id FROM category_rules WHERE raw_category=?",
+                    [payload.raw_category],
+                ).fetchone()[0]
+                status = "created"
+            else:
+                conn.execute(
+                    "UPDATE category_rules SET category=?, parent=?, updated_at=? WHERE raw_category=?",
+                    [payload.category, payload.parent, now, payload.raw_category],
+                )
+                row_id = existing[0]
+                status = "updated"
+        finally:
+            conn.close()
+        return {"id": row_id, "status": status}
+
+    @app.put("/category-rules/{rule_id}", tags=["categories"], summary="Update a category rule")
+    def update_category_rule(rule_id: int, payload: CategoryRuleRequest):
+        """Update an existing category rule by ID."""
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "UPDATE category_rules SET raw_category=?, category=?, parent=?, updated_at=? WHERE id=?",
+                [payload.raw_category, payload.category, payload.parent, now, rule_id],
+            )
+        finally:
+            conn.close()
+        return {"status": "updated"}
+
+    @app.delete("/category-rules/{rule_id}", tags=["categories"], summary="Delete a category rule")
+    def delete_category_rule(rule_id: int):
+        """Delete a category rule by ID."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute("DELETE FROM category_rules WHERE id=?", [rule_id])
+        finally:
+            conn.close()
+        return {"status": "deleted"}
+
+    @app.get("/category-rules/unmapped", tags=["categories"],
+             summary="List raw categories not covered by any rule")
+    def get_unmapped_categories():
+        """
+        Return raw categories in transactions_norm that have no user-defined rule.
+        Each entry also indicates whether a built-in suggestion exists.
+        """
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """
+                SELECT category, COUNT(*) AS cnt
+                FROM transactions_norm
+                WHERE category IS NOT NULL AND category != ''
+                  AND category NOT IN (SELECT raw_category FROM category_rules)
+                GROUP BY category
+                ORDER BY cnt DESC
+                """
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"unmapped": []}
+        result = []
+        for raw_cat, cnt in rows:
+            builtin = BUILT_IN_CATEGORY_MAP.get(raw_cat)
+            result.append({
+                "raw_category": raw_cat,
+                "count": cnt,
+                "has_builtin_suggestion": builtin is not None,
+                "builtin_category": builtin[0] if builtin else None,
+                "builtin_parent": builtin[1] if builtin else None,
+            })
+        return {"unmapped": result}
+
+    @app.get("/category-rules/suggestions", tags=["categories"],
+             summary="Suggest category rules from built-in map")
+    def get_category_rule_suggestions():
+        """
+        Return raw categories from transactions_norm not already in category_rules
+        that have a matching entry in BUILT_IN_CATEGORY_MAP.
+        """
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """
+                SELECT category, COUNT(*) AS cnt
+                FROM transactions_norm
+                WHERE category IS NOT NULL AND category != ''
+                  AND category NOT IN (SELECT raw_category FROM category_rules)
+                GROUP BY category
+                ORDER BY cnt DESC
+                """
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"suggestions": []}
+        suggestions = []
+        for raw_cat, cnt in rows:
+            builtin = BUILT_IN_CATEGORY_MAP.get(raw_cat)
+            if builtin:
+                suggestions.append({
+                    "raw_category": raw_cat,
+                    "category": builtin[0],
+                    "parent": builtin[1],
+                    "count": cnt,
+                })
+        return {"suggestions": suggestions}
+
+    @app.post("/category-rules/apply", tags=["categories"],
+              summary="Start a batch category normalization job", status_code=202)
+    async def start_category_normalize():
+        """
+        Apply all current category rules to every row in transactions_norm.
+        Returns a job_id for polling via GET /normalize/{job_id}.
+        Runs asynchronously in a background thread.
+        """
+        import threading
+        job_id = "catnorm_" + __import__("uuid").uuid4().hex[:16]
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO normalization_jobs (job_id, status, rows_done, created_at) "
+                "VALUES (?, 'pending', 0, ?)",
+                [job_id, now],
+            )
+        finally:
+            conn.close()
+
+        def _run():
+            apply_category_rules(str(db_path), job_id)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        return {"job_id": job_id, "status": "pending"}
+
+    # -----------------------------------------------------------------------
+    # Budget goals CRUD
+    # -----------------------------------------------------------------------
+
+    @app.get("/budgets", tags=["budgets"], summary="List all budget goals")
+    def get_budgets():
+        """Return all budget goals ordered by parent, category."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, parent, category, monthly_amount, created_at, updated_at "
+                "FROM budget_goals ORDER BY parent, category"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"budgets": []}
+        cols = ["id", "parent", "category", "monthly_amount", "created_at", "updated_at"]
+        return {"budgets": [dict(zip(cols, r)) for r in rows]}
+
+    @app.post("/budgets", tags=["budgets"], summary="Create or update a budget goal",
+              status_code=201)
+    def create_budget(payload: BudgetGoalRequest):
+        """Insert a budget goal; on UNIQUE conflict update monthly_amount."""
+        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conn = get_connection(db_path)
+        try:
+            existing = conn.execute(
+                "SELECT id FROM budget_goals WHERE parent=? AND category IS NOT DISTINCT FROM ?",
+                [payload.parent, payload.category],
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO budget_goals (parent, category, monthly_amount, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [payload.parent, payload.category, payload.monthly_amount, now, now],
+                )
+                row = conn.execute(
+                    "SELECT id FROM budget_goals WHERE parent=? AND category IS NOT DISTINCT FROM ?",
+                    [payload.parent, payload.category],
+                ).fetchone()
+                row_id = row[0]
+                status = "created"
+            else:
+                conn.execute(
+                    "UPDATE budget_goals SET monthly_amount=?, updated_at=? WHERE id=?",
+                    [payload.monthly_amount, now, existing[0]],
+                )
+                row_id = existing[0]
+                status = "updated"
+        finally:
+            conn.close()
+        return {"id": row_id, "status": status}
+
+    @app.delete("/budgets/{budget_id}", tags=["budgets"], summary="Delete a budget goal")
+    def delete_budget(budget_id: int):
+        """Delete a budget goal by ID."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute("DELETE FROM budget_goals WHERE id=?", [budget_id])
+        finally:
+            conn.close()
+        return {"status": "deleted"}
+
+    # -----------------------------------------------------------------------
+    # Dashboard summary
+    # -----------------------------------------------------------------------
+
+    @app.get("/dashboard/summary", tags=["dashboard"], summary="Dashboard summary metrics")
+    def get_dashboard_summary(
+        year: int = Query(
+            default=__import__("datetime").datetime.now().year,
+            description="Year for MTD summary",
+        ),
+        month: int = Query(
+            default=__import__("datetime").datetime.now().month,
+            description="Month for MTD summary (1-12)",
+        ),
+    ):
+        """
+        Return dashboard summary metrics for a given year+month:
+          - mtd_spend, mtd_count
+          - top_categories (top 8 by spending)
+          - top_merchants (top 8 by spending)
+          - recent_transactions (last 10)
+          - budgets_vs_actual
+        """
+        try:
+            conn = get_connection(db_path, read_only=True)
+
+            # MTD spend & count
+            mtd_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(resolved_amount), 0), COUNT(*)
+                FROM transactions_norm
+                WHERE transaction_subtype = 'spending'
+                  AND YEAR(transaction_date) = ?
+                  AND MONTH(transaction_date) = ?
+                """,
+                [year, month],
+            ).fetchone()
+            mtd_spend = float(mtd_row[0]) if mtd_row else 0.0
+            mtd_count = int(mtd_row[1]) if mtd_row else 0
+
+            # Top categories
+            top_cat_rows = conn.execute(
+                """
+                SELECT
+                    COALESCE(category_parent, category) AS grp,
+                    SUM(resolved_amount) AS total_amount,
+                    COUNT(*) AS cnt
+                FROM transactions_norm
+                WHERE transaction_subtype = 'spending'
+                  AND YEAR(transaction_date) = ?
+                  AND MONTH(transaction_date) = ?
+                  AND COALESCE(category_parent, category) IS NOT NULL
+                GROUP BY grp
+                ORDER BY total_amount DESC
+                LIMIT 8
+                """,
+                [year, month],
+            ).fetchall()
+            top_categories = [
+                {"category_parent": r[0], "total_amount": float(r[1]), "count": int(r[2])}
+                for r in top_cat_rows
+            ]
+
+            # Top merchants
+            top_merch_rows = conn.execute(
+                """
+                SELECT merchant, SUM(resolved_amount) AS total_amount, COUNT(*) AS cnt
+                FROM transactions_norm
+                WHERE transaction_subtype = 'spending'
+                  AND YEAR(transaction_date) = ?
+                  AND MONTH(transaction_date) = ?
+                  AND merchant IS NOT NULL
+                GROUP BY merchant
+                ORDER BY total_amount DESC
+                LIMIT 8
+                """,
+                [year, month],
+            ).fetchall()
+            top_merchants = [
+                {"merchant": r[0], "total_amount": float(r[1]), "count": int(r[2])}
+                for r in top_merch_rows
+            ]
+
+            # Recent transactions
+            recent_rows = conn.execute(
+                """
+                SELECT transaction_date, description, merchant, category_normalized,
+                       category_parent, resolved_amount, bank_name
+                FROM transactions_norm
+                ORDER BY transaction_date DESC, ingested_at DESC
+                LIMIT 10
+                """
+            ).fetchall()
+            recent_cols = [
+                "transaction_date", "description", "merchant",
+                "category_normalized", "category_parent", "amount", "bank_name",
+            ]
+            recent_transactions = [
+                {k: (_isoformat(v) if k == "transaction_date" else v)
+                 for k, v in zip(recent_cols, r)}
+                for r in recent_rows
+            ]
+
+            # Budgets vs actual
+            budget_rows = conn.execute(
+                "SELECT id, parent, category, monthly_amount FROM budget_goals ORDER BY parent, category"
+            ).fetchall()
+            budgets_vs_actual = []
+            for _bid, parent, category, monthly_amount in budget_rows:
+                if category:
+                    actual_row = conn.execute(
+                        """
+                        SELECT COALESCE(SUM(resolved_amount), 0)
+                        FROM transactions_norm
+                        WHERE transaction_subtype = 'spending'
+                          AND YEAR(transaction_date) = ?
+                          AND MONTH(transaction_date) = ?
+                          AND category_parent = ?
+                          AND category_normalized = ?
+                        """,
+                        [year, month, parent, category],
+                    ).fetchone()
+                else:
+                    actual_row = conn.execute(
+                        """
+                        SELECT COALESCE(SUM(resolved_amount), 0)
+                        FROM transactions_norm
+                        WHERE transaction_subtype = 'spending'
+                          AND YEAR(transaction_date) = ?
+                          AND MONTH(transaction_date) = ?
+                          AND category_parent = ?
+                        """,
+                        [year, month, parent],
+                    ).fetchone()
+                actual = float(actual_row[0]) if actual_row else 0.0
+                monthly_f = float(monthly_amount)
+                pct = round(actual / monthly_f * 100, 1) if monthly_f > 0 else None
+                budgets_vs_actual.append({
+                    "parent": parent,
+                    "monthly_amount": monthly_f,
+                    "actual_amount": actual,
+                    "pct": pct,
+                })
+
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Dashboard query failed: {exc}") from exc
+
+        return {
+            "year": year,
+            "month": month,
+            "mtd_spend": mtd_spend,
+            "mtd_count": mtd_count,
+            "top_categories": top_categories,
+            "top_merchants": top_merchants,
+            "recent_transactions": recent_transactions,
+            "budgets_vs_actual": budgets_vs_actual,
+        }
 
     # -----------------------------------------------------------------------
     # Web UI — always registered last so all API routes take precedence

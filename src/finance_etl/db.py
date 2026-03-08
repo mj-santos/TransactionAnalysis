@@ -200,6 +200,35 @@ _MIGRATIONS = [
     )
     WHERE run_id IS NULL
     """,
+
+    # ── Category normalization ───────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_category_rules_id",
+    """
+CREATE TABLE IF NOT EXISTS category_rules (
+  id           BIGINT DEFAULT nextval('seq_category_rules_id') PRIMARY KEY,
+  raw_category TEXT    NOT NULL UNIQUE,
+  category     TEXT    NOT NULL,
+  parent       TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  updated_at   TEXT    NOT NULL
+)
+""",
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS category_normalized TEXT",
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS category_parent TEXT",
+
+    # ── Budget goals ─────────────────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_budget_goals_id",
+    """
+CREATE TABLE IF NOT EXISTS budget_goals (
+  id             BIGINT DEFAULT nextval('seq_budget_goals_id') PRIMARY KEY,
+  parent         TEXT    NOT NULL,
+  category       TEXT,
+  monthly_amount DECIMAL(18,2) NOT NULL,
+  created_at     TEXT    NOT NULL,
+  updated_at     TEXT    NOT NULL,
+  UNIQUE(parent, category)
+)
+""",
 ]
 
 
