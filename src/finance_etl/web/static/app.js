@@ -40,12 +40,14 @@ function navigate(page) {
   if (section) section.classList.add('active');
 
   const titles = {
+    dashboard:          'Dashboard',
     import:             'Import Transactions',
     history:            'Import History',
     'credit-cards':     'Credit Card Transactions',
     'bank-transactions':'Bank Transactions',
     reports:            'Analytics Reports',
     'merchant-rules':   'Merchant Rules & Categories',
+    'category-rules':   'Category Rules',
     settings:           'Settings & Logs',
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
@@ -56,6 +58,7 @@ function navigate(page) {
   if (page === 'credit-cards')       loadTxnTab('credit_card');
   if (page === 'bank-transactions')  loadTxnTab('bank');
   if (page === 'merchant-rules')     { loadMerchantRules(); loadUncategorized(); _clearSuggestions(); }
+  if (page === 'category-rules')     { loadCategoryRules(); }
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -798,6 +801,7 @@ function esc(str) {
 
 // ── Boot ───────────────────────────────────────────────────────
 loadSettings();
+loadDashboard();
 // FIX 3: ensure custom-headers checkbox is always checked on page load
 (function() {
   const tog = document.getElementById('custom-headers-toggle');
@@ -2465,4 +2469,453 @@ async function acceptAllCategorySuggestions() {
   toast(`${ok} categor${ok !== 1 ? 'ies' : 'y'} assigned${fail ? ` (${fail} failed)` : ''}.`, ok ? 'success' : 'error');
   _renderCategorySuggestions();
   loadUncategorized();
+}
+
+// ── Dashboard ─────────────────────────────────────────────────
+
+let _dashYear  = new Date().getFullYear();
+let _dashMonth = new Date().getMonth() + 1;
+
+const _MONTH_NAMES = ['January','February','March','April','May','June',
+                      'July','August','September','October','November','December'];
+
+function dashboardPrevMonth() {
+  _dashMonth--;
+  if (_dashMonth < 1) { _dashMonth = 12; _dashYear--; }
+  loadDashboard();
+}
+function dashboardNextMonth() {
+  _dashMonth++;
+  if (_dashMonth > 12) { _dashMonth = 1; _dashYear++; }
+  loadDashboard();
+}
+
+async function loadDashboard() {
+  const label = document.getElementById('dash-month-label');
+  if (label) label.textContent = `${_MONTH_NAMES[_dashMonth - 1]} ${_dashYear}`;
+
+  try {
+    const data = await api('GET', `/dashboard/summary?year=${_dashYear}&month=${_dashMonth}`);
+    _renderDashboard(data);
+  } catch (err) {
+    const el = document.getElementById('dash-mtd');
+    if (el) el.textContent = 'Error loading';
+  }
+}
+
+function _fmt$(v) {
+  return '$' + Number(v || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+function _renderDashboard(data) {
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerHTML = val; };
+
+  set('dash-mtd', _fmt$(data.mtd_spend));
+  set('dash-prev-spend', _fmt$(data.prev_spend));
+
+  if (data.pct_change != null) {
+    const arrow = data.pct_change >= 0 ? '▲' : '▼';
+    const color = data.pct_change >= 0 ? '#ef4444' : '#22c55e';
+    set('dash-vs-prev', `<span style="color:${color};">${arrow} ${Math.abs(data.pct_change)}% vs last month</span>`);
+  } else {
+    set('dash-vs-prev', 'No prior month data');
+  }
+
+  const topCat = data.top_categories[0];
+  set('dash-top-cat', topCat ? esc(topCat.parent) : '—');
+
+  // Top categories bar chart
+  const catList = document.getElementById('dash-cat-list');
+  if (catList && data.top_categories.length) {
+    const maxAmt = Math.max(...data.top_categories.map(c => c.amount), 1);
+    catList.innerHTML = data.top_categories.map(c => {
+      const pct = Math.round(c.amount / maxAmt * 100);
+      return `<div style="margin-bottom:4px;">
+        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;">
+          <span>${esc(c.parent)}</span>
+          <span style="font-weight:600;">${_fmt$(c.amount)}</span>
+        </div>
+        <div style="background:var(--border); border-radius:4px; height:6px;">
+          <div style="background:var(--primary,#3b82f6); border-radius:4px; height:6px; width:${pct}%;"></div>
+        </div>
+      </div>`;
+    }).join('');
+  } else if (catList) {
+    catList.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No spending data for this month.</span>';
+  }
+
+  // Budget tracker
+  const budgetList = document.getElementById('dash-budget-list');
+  if (budgetList) {
+    if (data.budgets && data.budgets.length) {
+      budgetList.innerHTML = data.budgets.map(b => {
+        const pct = Math.min(b.pct || 0, 100);
+        const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
+        const label = b.category || b.parent;
+        return `<div>
+          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px;">
+            <span>${esc(label)}</span>
+            <span>${_fmt$(b.spent)} / ${_fmt$(b.budget)} <span style="color:${color};">(${b.pct ?? 0}%)</span></span>
+          </div>
+          <div style="background:var(--border); border-radius:4px; height:6px;">
+            <div style="background:${color}; border-radius:4px; height:6px; width:${pct}%;"></div>
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      budgetList.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No budgets set. Click "+ Set Budget" to add one.</span>';
+    }
+  }
+
+  // Recent transactions
+  const tbody = document.getElementById('dash-recent-tbody');
+  if (tbody) {
+    if (data.recent_transactions.length) {
+      tbody.innerHTML = data.recent_transactions.map(tx => {
+        const amt = tx.resolved_amount ?? tx.amount;
+        const amtFmt = _fmt$(Math.abs(amt));
+        const isCredit = tx.subtype === 'payment' || amt < 0;
+        const amtColor = isCredit ? 'color:#22c55e;' : '';
+        const merchant = tx.merchant || tx.description;
+        return `<tr>
+          <td style="white-space:nowrap;">${esc(tx.date || '')}</td>
+          <td>${esc(merchant || '')}<br><span style="font-size:11px;color:var(--text-muted);">${esc(tx.description || '')}</span></td>
+          <td style="font-size:12px;">${esc(tx.category || '')}</td>
+          <td style="font-size:12px;">${esc(tx.account || '')}</td>
+          <td class="text-right" style="${amtColor} font-weight:600;">${isCredit ? '+' : ''}${amtFmt}</td>
+        </tr>`;
+      }).join('');
+    } else {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px;">No transactions found.</td></tr>';
+    }
+  }
+}
+
+// ── Budget form ────────────────────────────────────────────────
+
+function openBudgetForm() {
+  document.getElementById('budget-form').style.display = '';
+}
+function closeBudgetForm() {
+  document.getElementById('budget-form').style.display = 'none';
+  ['bf-parent','bf-category','bf-amount'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+}
+async function saveBudget() {
+  const parent = document.getElementById('bf-parent').value.trim();
+  const category = document.getElementById('bf-category').value.trim() || null;
+  const amount = parseFloat(document.getElementById('bf-amount').value);
+  if (!parent || isNaN(amount) || amount <= 0) {
+    toast('Parent group and a positive amount are required.', 'error'); return;
+  }
+  try {
+    await api('POST', '/budgets', { parent, category, monthly_amount: amount });
+    toast('Budget saved.', 'success');
+    closeBudgetForm();
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+async function deleteBudget(id) {
+  if (!confirm('Delete this budget?')) return;
+  try {
+    await api('DELETE', `/budgets/${id}`);
+    toast('Budget deleted.', 'success');
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+// ── Category Rules ────────────────────────────────────────────
+
+let _editingCatRuleId = null;
+let _catSuggestionsData = [];
+
+async function loadCategoryRules() {
+  const tbody = document.getElementById('category-rules-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:24px">Loading…</td></tr>';
+  try {
+    const data = await api('GET', '/category-rules');
+    if (!data.rules.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:24px">No rules yet. Click "+ Add Rule" or use "Analyze My Data" to create them.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.rules.map(r => `<tr>
+      <td class="mono" style="font-size:12px;">${esc(r.raw_category)}</td>
+      <td>${esc(r.category)}</td>
+      <td><span class="badge badge-running" style="font-size:11px;">${esc(r.parent)}</span></td>
+      <td>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="openCatRuleForm(${r.id})">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCatRule(${r.id})">Delete</button>
+        </div>
+      </td>
+    </tr>`).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+  }
+}
+
+function openCatRuleForm(ruleId) {
+  _editingCatRuleId = ruleId;
+  const card = document.getElementById('cat-rule-form-card');
+  document.getElementById('cat-rule-form-title').textContent = ruleId ? 'Edit Category Rule' : 'Add Category Rule';
+  card.style.display = '';
+  document.getElementById('crf-status').textContent = '';
+  if (!ruleId) {
+    ['crf-raw','crf-category'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    document.getElementById('crf-parent').value = '';
+    return;
+  }
+  api('GET', '/category-rules').then(data => {
+    const rule = data.rules.find(r => r.id === ruleId);
+    if (!rule) return;
+    document.getElementById('crf-raw').value      = rule.raw_category;
+    document.getElementById('crf-category').value = rule.category;
+    document.getElementById('crf-parent').value   = rule.parent;
+  });
+}
+
+function closeCatRuleForm() {
+  _editingCatRuleId = null;
+  document.getElementById('cat-rule-form-card').style.display = 'none';
+}
+
+async function saveCatRule() {
+  const raw      = document.getElementById('crf-raw').value.trim();
+  const category = document.getElementById('crf-category').value.trim();
+  const parent   = document.getElementById('crf-parent').value;
+  if (!raw || !category || !parent) {
+    toast('All fields are required.', 'error'); return;
+  }
+  const body = { raw_category: raw, category, parent };
+  try {
+    if (_editingCatRuleId) {
+      await api('PUT', `/category-rules/${_editingCatRuleId}`, body);
+      toast('Rule updated.', 'success');
+    } else {
+      await api('POST', '/category-rules', body);
+      toast('Rule created.', 'success');
+    }
+    closeCatRuleForm();
+    loadCategoryRules();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function deleteCatRule(id) {
+  if (!confirm('Delete this category rule?')) return;
+  try {
+    await api('DELETE', `/category-rules/${id}`);
+    toast('Rule deleted.', 'success');
+    loadCategoryRules();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+// ── Category Suggestions ─────────────────────────────────────
+
+async function loadCatSuggestions() {
+  const statusEl = document.getElementById('cat-suggest-status');
+  const listEl   = document.getElementById('cat-suggestions-list');
+  const acceptAllBtn = document.getElementById('cat-suggest-accept-all');
+  if (!listEl) return;
+  statusEl.textContent = 'Loading…';
+  listEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:4px 0;">Scanning categories…</div>`;
+  if (acceptAllBtn) acceptAllBtn.style.display = 'none';
+  try {
+    const data = await api('GET', '/category-rules/suggestions');
+    _catSuggestionsData = data.suggestions || [];
+    if (!_catSuggestionsData.length) {
+      statusEl.textContent = 'All categories are mapped.';
+      listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No unmapped categories found.</span>';
+      return;
+    }
+    statusEl.textContent = `${_catSuggestionsData.length} unmapped category${_catSuggestionsData.length>1?'s':''}`;
+    if (acceptAllBtn) acceptAllBtn.style.display = '';
+    _renderCatSuggestions();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+    listEl.innerHTML = '';
+  }
+}
+
+function _renderCatSuggestions() {
+  const listEl = document.getElementById('cat-suggestions-list');
+  if (!listEl) return;
+  const visible = _catSuggestionsData.filter(s => !s._dismissed);
+  if (!visible.length) {
+    listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All suggestions reviewed.</span>';
+    const ab = document.getElementById('cat-suggest-accept-all'); if(ab) ab.style.display='none';
+    return;
+  }
+  listEl.innerHTML = visible.map((s, i) => {
+    const realIdx = _catSuggestionsData.indexOf(s);
+    const builtinBadge = s.is_builtin
+      ? `<span style="font-size:10px; background:#22c55e22; color:#16a34a; border-radius:4px; padding:1px 6px; font-weight:600;">built-in</span>`
+      : `<span style="font-size:10px; background:#94a3b822; color:#64748b; border-radius:4px; padding:1px 6px;">manual</span>`;
+    return `<div style="display:flex; gap:12px; align-items:flex-start; padding:8px 12px; background:var(--bg-alt,#f8faff); border-radius:8px; border:1px solid var(--border);">
+      <div style="flex:1; min-width:0;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          ${builtinBadge}
+          <span class="mono" style="font-size:13px; font-weight:600;">${esc(s.raw_category)}</span>
+          <span style="color:var(--text-muted);">→</span>
+          <span style="font-size:13px;">${esc(s.category)}</span>
+          <span style="font-size:11px; color:var(--text-muted); background:#e2e8f0; border-radius:10px; padding:1px 8px;">${esc(s.parent)}</span>
+          <span style="font-size:11px; color:var(--text-muted);">${s.count} tx</span>
+        </div>
+      </div>
+      <div style="display:flex; gap:6px; flex-shrink:0;">
+        <button class="btn btn-primary btn-sm" onclick="acceptCatSuggestion(${realIdx})">✓ Accept</button>
+        <button class="btn btn-secondary btn-sm" onclick="editCatSuggestion(${realIdx})">Edit</button>
+        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissCatSuggestion(${realIdx})">✗</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function acceptCatSuggestion(idx) {
+  const s = _catSuggestionsData[idx]; if (!s) return;
+  try {
+    await api('POST', '/category-rules', { raw_category: s.raw_category, category: s.category, parent: s.parent });
+    s._dismissed = true;
+    toast(`Rule created: "${s.raw_category}" → ${s.category}`, 'success');
+    _renderCatSuggestions();
+    loadCategoryRules();
+  } catch (err) { toast(`Failed: ${err.message}`, 'error'); }
+}
+
+function editCatSuggestion(idx) {
+  const s = _catSuggestionsData[idx]; if (!s) return;
+  openCatRuleForm(null);
+  document.getElementById('crf-raw').value      = s.raw_category;
+  document.getElementById('crf-category').value = s.category;
+  document.getElementById('crf-parent').value   = s.parent;
+  s._dismissed = true;
+  _renderCatSuggestions();
+  document.getElementById('cat-rule-form-card').scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function dismissCatSuggestion(idx) {
+  if (_catSuggestionsData[idx]) _catSuggestionsData[idx]._dismissed = true;
+  _renderCatSuggestions();
+}
+
+async function acceptAllCatSuggestions() {
+  const visible = _catSuggestionsData.filter(s => !s._dismissed);
+  if (!visible.length) return;
+  let ok = 0, fail = 0;
+  for (const s of visible) {
+    try {
+      await api('POST', '/category-rules', { raw_category: s.raw_category, category: s.category, parent: s.parent });
+      s._dismissed = true; ok++;
+    } catch (_) { fail++; }
+  }
+  toast(`${ok} rule${ok!==1?'s':''} created${fail?` (${fail} failed)`:''}`, ok?'success':'error');
+  _renderCatSuggestions();
+  loadCategoryRules();
+}
+
+// ── Category Normalization Apply ──────────────────────────────
+
+let _catNormJobId = null;
+let _catNormPoll  = null;
+
+async function startCategoryNormalize() {
+  if (!confirm('Apply category rules to all transactions? This may take a moment.')) return;
+  const statusEl = document.getElementById('cat-norm-status');
+  statusEl.textContent = 'Starting…';
+  try {
+    const data = await api('POST', '/category-rules/apply');
+    _catNormJobId = data.job_id;
+    statusEl.textContent = `Job started…`;
+    _pollCatNorm();
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
+}
+
+function _pollCatNorm() {
+  if (_catNormPoll) clearInterval(_catNormPoll);
+  _catNormPoll = setInterval(async () => {
+    try {
+      const data = await api('GET', `/category-normalize/${_catNormJobId}`);
+      const statusEl = document.getElementById('cat-norm-status');
+      if (data.status === 'success') {
+        clearInterval(_catNormPoll);
+        statusEl.textContent = `Done — ${data.rows_done} transactions normalized.`;
+        toast('Category normalization complete.', 'success');
+      } else if (data.status === 'failed') {
+        clearInterval(_catNormPoll);
+        statusEl.textContent = `Failed: ${data.error || 'unknown error'}`;
+      } else {
+        const pct = data.rows_total ? Math.round(data.rows_done / data.rows_total * 100) : 0;
+        if(statusEl) statusEl.textContent = `Running… ${data.rows_done}/${data.rows_total} (${pct}%)`;
+      }
+    } catch (_) {}
+  }, 1500);
+}
+
+// ── Date presets ──────────────────────────────────────────────
+
+function _presetDates(preset) {
+  const now = new Date();
+  let from, to;
+  const pad = n => String(n).padStart(2,'0');
+  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  switch (preset) {
+    case 'this_month': {
+      from = new Date(now.getFullYear(), now.getMonth(), 1);
+      to   = new Date(now.getFullYear(), now.getMonth()+1, 0);
+      break;
+    }
+    case 'last_month': {
+      from = new Date(now.getFullYear(), now.getMonth()-1, 1);
+      to   = new Date(now.getFullYear(), now.getMonth(), 0);
+      break;
+    }
+    case '3months': {
+      from = new Date(now.getFullYear(), now.getMonth()-2, 1);
+      to   = new Date(now.getFullYear(), now.getMonth()+1, 0);
+      break;
+    }
+    case 'ytd': {
+      from = new Date(now.getFullYear(), 0, 1);
+      to   = now;
+      break;
+    }
+    default: { from = null; to = null; }
+  }
+  return { from: from ? fmt(from) : '', to: to ? fmt(to) : '' };
+}
+
+function setDatePreset(tab, preset) {
+  const { from, to } = _presetDates(preset);
+  if (tab === 'credit_card') {
+    const f = document.getElementById('cc-date-from');
+    const t = document.getElementById('cc-date-to');
+    if (f) f.value = from;
+    if (t) t.value = to;
+    loadTxnTab('credit_card');
+  } else if (tab === 'bank') {
+    const f = document.getElementById('bk-date-from');
+    const t = document.getElementById('bk-date-to');
+    if (f) f.value = from;
+    if (t) t.value = to;
+    loadTxnTab('bank');
+  }
+}
+
+function setReportDatePreset(preset) {
+  const { from, to } = _presetDates(preset);
+  const f = document.getElementById('report-date-from');
+  const t = document.getElementById('report-date-to');
+  if (f) f.value = from;
+  if (t) t.value = to;
 }
