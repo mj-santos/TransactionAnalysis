@@ -1990,13 +1990,10 @@ async function saveRule() {
     toast('Merchant name is required.', 'error');
     return;
   }
-  const conditions = _getRuleConditions();
-  if (conditions.some(c => !c.pattern)) {
-    toast('All condition patterns must be filled in.', 'error');
-    return;
-  }
+  // Strip any accidentally-empty condition rows
+  const conditions = _getRuleConditions().filter(c => c.pattern);
   if (!conditions.length) {
-    toast('At least one condition is required.', 'error');
+    toast('At least one condition pattern is required.', 'error');
     return;
   }
   const logic = (document.getElementById('rf-logic') || {}).value || 'AND';
@@ -2040,12 +2037,18 @@ const _TEST_PAGE = 5;
 
 function _renderTestMatches(showCount) {
   const matchesEl = document.getElementById('rf-test-matches');
-  const resultEl  = document.getElementById('rf-test-result');
   if (!_testMatches.length) return;
   const visible = _testMatches.slice(0, showCount);
   const remaining = _testMatches.length - visible.length;
   matchesEl.innerHTML =
-    visible.map(m => `<div style="padding:2px 0; border-bottom:1px solid var(--border); word-break:break-all;">${esc(m)}</div>`).join('') +
+    visible.map(m => {
+      const desc = m.description ?? m;
+      const cnt  = m.count;
+      return `<div style="display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid var(--border); word-break:break-all;">
+        <span class="mono" style="font-size:12px;">${esc(desc)}</span>
+        ${cnt != null ? `<span style="flex-shrink:0; margin-left:8px; font-size:11px; color:var(--text-muted); white-space:nowrap;">${cnt} tx</span>` : ''}
+      </div>`;
+    }).join('') +
     (remaining > 0
       ? `<button class="btn btn-secondary btn-sm" onclick="_loadMoreTestMatches(${showCount})"
            style="margin-top:6px; font-size:12px;">Load ${Math.min(remaining, _TEST_PAGE)} more (${remaining} remaining)</button>`
@@ -2064,9 +2067,10 @@ async function testRule() {
   matchesEl.style.display = 'none';
   _testMatches = [];
 
-  const conditions = _getRuleConditions();
-  if (conditions.some(c => !c.pattern)) {
-    resultEl.textContent = 'Fill in all condition patterns first.';
+  // Strip empty rows — don't block on accidental blank rows
+  const conditions = _getRuleConditions().filter(c => c.pattern);
+  if (!conditions.length) {
+    resultEl.textContent = 'Enter at least one condition pattern first.';
     return;
   }
   const logic = (document.getElementById('rf-logic') || {}).value || 'AND';
@@ -2080,12 +2084,14 @@ async function testRule() {
   };
   try {
     const data = await api('POST', '/merchant-rules/test', body);
-    const total = data.total_matches ?? data.matches.length;
+    const uniqueCount = data.total_matches ?? data.matches.length;
+    const txCount     = data.total_transactions;
     if (!data.matches.length) {
       resultEl.textContent = `No matches found (${data.total_sampled} unique descriptions scanned).`;
     } else {
-      const moreNote = total > data.matches.length ? ` — showing first ${data.matches.length}` : '';
-      resultEl.textContent = `${total} match${total !== 1 ? 'es' : ''} found (${data.total_sampled} unique descriptions scanned${moreNote}):`;
+      const txNote = txCount != null ? `, ${txCount} total transaction${txCount !== 1 ? 's' : ''}` : '';
+      const moreNote = uniqueCount > data.matches.length ? ` — showing first ${data.matches.length}` : '';
+      resultEl.textContent = `${uniqueCount} unique description${uniqueCount !== 1 ? 's' : ''} matched${txNote}${moreNote}:`;
       _testMatches = data.matches;
       _renderTestMatches(_TEST_PAGE);
     }

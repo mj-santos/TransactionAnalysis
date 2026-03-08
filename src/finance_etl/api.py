@@ -1828,8 +1828,8 @@ No cloud services, no external dependencies — all data stays on your machine.
     @app.post("/merchant-rules/test", tags=["merchant"], summary="Test a rule against sample descriptions")
     def test_merchant_rule(payload: MerchantRuleRequest):
         """
-        Test how a rule would match against recent transaction descriptions.
-        Returns up to 50 matching descriptions from transactions_norm.
+        Test how a rule would match against transaction descriptions.
+        Returns matching descriptions with transaction counts, ordered by frequency.
         """
         from finance_etl.merchant_rules import CompiledRule
         rule = CompiledRule(id=0, pattern=payload.pattern, match_type=payload.match_type,
@@ -1839,13 +1839,23 @@ No cloud services, no external dependencies — all data stays on your machine.
         try:
             conn = get_connection(db_path, read_only=True)
             rows = conn.execute(
-                "SELECT DISTINCT description FROM transactions_norm"
+                "SELECT description, COUNT(*) as cnt FROM transactions_norm "
+                "GROUP BY description ORDER BY cnt DESC"
             ).fetchall()
             conn.close()
         except Exception:
             return {"matches": [], "total_matches": 0, "total_sampled": 0}
-        all_matches = [r[0] for r in rows if rule.matches(r[0] or "")]
-        return {"matches": all_matches[:50], "total_matches": len(all_matches), "total_sampled": len(rows)}
+        all_matches = [
+            {"description": r[0], "count": r[1]}
+            for r in rows if rule.matches(r[0] or "")
+        ]
+        total_transactions = sum(m["count"] for m in all_matches)
+        return {
+            "matches": all_matches[:50],
+            "total_matches": len(all_matches),
+            "total_transactions": total_transactions,
+            "total_sampled": len(rows),
+        }
 
     @app.get("/merchant-rules/suggestions", tags=["merchant"],
              summary="Analyze descriptions and suggest normalization rules")
