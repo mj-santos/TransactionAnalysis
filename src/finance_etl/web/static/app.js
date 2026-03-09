@@ -1848,6 +1848,7 @@ function _renderTxnHeaders(p, cols, type) {
   const thead = document.getElementById(`${p}-thead`);
   if (!thead) return;
   const st = _txnState[type];
+  // Hide metadata columns used only for review logic; append a Review header instead
   const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed']);
   thead.innerHTML = cols.filter(c => !HIDDEN_COLS.has(c)).map(c => {
     const isSorted = c === st.sortBy;
@@ -1895,6 +1896,7 @@ function _renderTxnBody(p, rows, cols, append) {
   const visibleCols = cols.filter(c => !HIDDEN_COLS.has(c));
 
   const html = rows.map(row => {
+    // DuckDB may serialize booleans as true or 'true' depending on driver version
     const isUnreviewed = row.unreviewed === true || row.unreviewed === 'true';
     const fp = row.transaction_fingerprint || '';
     const rowCls = isUnreviewed ? ' class="unreviewed-row"' : '';
@@ -2707,6 +2709,7 @@ function _renderDashboard(data) {
         const isCredit = tx.subtype === 'payment' || amt < 0;
         const amtColor = isCredit ? 'color:#22c55e;' : '';
         const merchant = tx.merchant || tx.description;
+        // Show orange dot indicator for unreviewed transactions in dashboard recent list
         const isUnreviewed = tx.unreviewed === true || tx.unreviewed === 'true';
         const dot = isUnreviewed ? '<span class="unreviewed-dot" title="Unreviewed" style="margin-right:4px;"></span>' : '';
         return `<tr${isUnreviewed ? ' class="unreviewed-row"' : ''}>

@@ -1343,6 +1343,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         if source and source != "all":
             where.append("run_id = ?"); params.append(source)
         # review status filter
+        # COALESCE handles pre-migration rows where unreviewed is NULL (treated as unreviewed)
         if unreviewed_only:
             where.append("COALESCE(unreviewed, TRUE) = TRUE")
         return where, params
