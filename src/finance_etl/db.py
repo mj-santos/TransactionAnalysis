@@ -229,6 +229,9 @@ CREATE TABLE IF NOT EXISTS budget_goals (
   UNIQUE(parent, category)
 )
 """,
+
+    # ── Transaction review tracking ──────────────────────────────────────────
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS unreviewed BOOLEAN DEFAULT TRUE",
 ]
 
 

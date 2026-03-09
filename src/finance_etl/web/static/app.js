@@ -856,6 +856,7 @@ function esc(str) {
 // ── Boot ───────────────────────────────────────────────────────
 loadSettings();
 loadDashboard();
+refreshUnreviewedBadge();
 // FIX 3: ensure custom-headers checkbox is always checked on page load
 (function() {
   const tog = document.getElementById('custom-headers-toggle');
@@ -1699,14 +1700,15 @@ const _srcCtrl = {
 function _txnFilters(type) {
   const p = _pfx(type);
   return {
-    source:    _srcCtrl[type].value(),                                   // from radio-dropdown
-    date_from: document.getElementById(`${p}-date-from`)?.value || '',
-    date_to:   document.getElementById(`${p}-date-to`)?.value   || '',
-    account:   (document.getElementById(`${p}-account`)?.value  || '').trim(),
-    category:  (document.getElementById(`${p}-category`)?.value || '').trim(),
-    merchant:  (document.getElementById(`${p}-merchant`)?.value || '').trim(),
-    subtype:   document.getElementById(`${p}-subtype`)?.value   || '',  // CC only
-    group_by:  document.getElementById(`${p}-group-by`)?.value  || '',
+    source:          _srcCtrl[type].value(),                                   // from radio-dropdown
+    date_from:       document.getElementById(`${p}-date-from`)?.value || '',
+    date_to:         document.getElementById(`${p}-date-to`)?.value   || '',
+    account:         (document.getElementById(`${p}-account`)?.value  || '').trim(),
+    category:        (document.getElementById(`${p}-category`)?.value || '').trim(),
+    merchant:        (document.getElementById(`${p}-merchant`)?.value || '').trim(),
+    subtype:         document.getElementById(`${p}-subtype`)?.value   || '',  // CC only
+    group_by:        document.getElementById(`${p}-group-by`)?.value  || '',
+    unreviewed_only: document.getElementById(`${p}-unreviewed-only`)?.checked || false,
   };
 }
 
@@ -1738,6 +1740,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.subtype)   qs.set('subtype',   f.subtype);
   if (f.group_by)  qs.set('group_by',  f.group_by);
   if (f.source && f.source !== 'all') qs.set('source', f.source);
+  if (f.unreviewed_only) qs.set('unreviewed_only', 'true');
 
   // Totals endpoint uses the same filter params (no pagination or sort)
   const tqs = new URLSearchParams({ type });
@@ -1748,6 +1751,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.merchant)  tqs.set('merchant',  f.merchant);
   if (f.subtype)   tqs.set('subtype',   f.subtype);
   if (f.source && f.source !== 'all') tqs.set('source', f.source);
+  if (f.unreviewed_only) tqs.set('unreviewed_only', 'true');
 
   if (reset) {
     document.getElementById(`${p}-tbody`).innerHTML =
@@ -1824,6 +1828,8 @@ function clearTxnFilters(type) {
   });
   const grp = document.getElementById(`${p}-group-by`);
   if (grp) grp.value = '';
+  const unrev = document.getElementById(`${p}-unreviewed-only`);
+  if (unrev) unrev.checked = false;
   _txnState[type].sortBy  = 'transaction_date';
   _txnState[type].sortDir = 'desc';
   loadTxnTab(type);
@@ -1842,11 +1848,12 @@ function _renderTxnHeaders(p, cols, type) {
   const thead = document.getElementById(`${p}-thead`);
   if (!thead) return;
   const st = _txnState[type];
-  thead.innerHTML = cols.map(c => {
+  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed']);
+  thead.innerHTML = cols.filter(c => !HIDDEN_COLS.has(c)).map(c => {
     const isSorted = c === st.sortBy;
     const arrow    = isSorted ? (st.sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
     return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}</th>`;
-  }).join('');
+  }).join('') + '<th class="text-center" style="min-width:90px;">Review</th>';
 }
 
 /**
@@ -1882,19 +1889,89 @@ function _renderTxnBody(p, rows, cols, append) {
   const NUMERIC_COLS = new Set([
     'amount', 'total_spend', 'total_income', 'total_outflow', 'net_amount', 'row_count',
   ]);
+  // Columns hidden from the user (used for review logic only)
+  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed']);
 
-  const html = rows.map(row =>
-    `<tr>${cols.map(c => {
+  const visibleCols = cols.filter(c => !HIDDEN_COLS.has(c));
+
+  const html = rows.map(row => {
+    const isUnreviewed = row.unreviewed === true || row.unreviewed === 'true';
+    const fp = row.transaction_fingerprint || '';
+    const rowCls = isUnreviewed ? ' class="unreviewed-row"' : '';
+    const cells = visibleCols.map(c => {
       const val = row[c] != null ? String(row[c]) : '';
       const cls = NUMERIC_COLS.has(c) ? ' class="mono text-right"' : '';
       return `<td${cls}>${esc(val)}</td>`;
-    }).join('')}</tr>`
-  ).join('');
+    }).join('');
+    // Review status cell: dot indicator + button
+    const reviewCell = fp
+      ? `<td class="text-center" style="white-space:nowrap;">${
+          isUnreviewed
+            ? `<span class="unreviewed-dot" title="Unreviewed"></span> <button class="btn btn-secondary btn-sm" style="padding:2px 8px; font-size:11px;" onclick="markReviewed('${esc(fp)}')">Reviewed</button>`
+            : '<span style="color:var(--success); font-size:11px;">&#10003;</span>'
+        }</td>`
+      : '<td></td>';
+    return `<tr${rowCls}>${cells}${reviewCell}</tr>`;
+  }).join('');
 
   if (append) {
     tbody.insertAdjacentHTML('beforeend', html);
   } else {
     tbody.innerHTML = html;
+  }
+}
+
+// ── Transaction Review ────────────────────────────────────────
+
+/** Mark a single transaction as reviewed by fingerprint. */
+async function markReviewed(fingerprint) {
+  try {
+    await api('POST', '/transactions/mark-reviewed', { fingerprints: [fingerprint] });
+    // Optimistically update the row in the DOM
+    const row = document.querySelector(`button[onclick="markReviewed('${fingerprint}')"]`);
+    if (row) {
+      const tr = row.closest('tr');
+      if (tr) {
+        tr.classList.remove('unreviewed-row');
+        const reviewCell = tr.querySelector('td:last-child');
+        if (reviewCell) reviewCell.innerHTML = '<span style="color:var(--success); font-size:11px;">&#10003;</span>';
+      }
+    }
+    refreshUnreviewedBadge();
+  } catch (err) {
+    toast('Failed to mark as reviewed: ' + err.message, 'error');
+  }
+}
+
+/** Mark all currently filtered transactions as reviewed. */
+async function markAllReviewed(type) {
+  const f = _txnFilters(type);
+  const qs = new URLSearchParams({ type });
+  if (f.date_from) qs.set('date_from', f.date_from);
+  if (f.date_to)   qs.set('date_to',   f.date_to);
+  if (f.account)   qs.set('account',   f.account);
+  if (f.category)  qs.set('category',  f.category);
+  if (f.merchant)  qs.set('merchant',  f.merchant);
+  if (f.subtype)   qs.set('subtype',   f.subtype);
+  if (f.source && f.source !== 'all') qs.set('source', f.source);
+  try {
+    const result = await api('POST', `/transactions/mark-all-reviewed?${qs}`);
+    toast(`Marked ${result.updated} transaction${result.updated !== 1 ? 's' : ''} as reviewed`, 'success');
+    loadTxnTab(type);
+    refreshUnreviewedBadge();
+  } catch (err) {
+    toast('Failed to mark all as reviewed: ' + err.message, 'error');
+  }
+}
+
+/** Refresh the unreviewed count badge in the sidebar nav. */
+async function refreshUnreviewedBadge() {
+  try {
+    const data = await api('GET', '/transactions/unreviewed-count');
+    const badge = document.getElementById('nav-unreviewed-badge');
+    if (badge) badge.textContent = data.unreviewed_count > 0 ? data.unreviewed_count : '';
+  } catch {
+    // Silently ignore — badge is non-critical
   }
 }
 
@@ -2560,6 +2637,12 @@ function _renderDashboard(data) {
   set('dash-mtd', _fmt$(data.mtd_spend));
   set('dash-prev-spend', _fmt$(data.prev_spend));
 
+  // Unreviewed count KPI + sidebar badge
+  const unrevCount = data.unreviewed_count || 0;
+  set('dash-unreviewed', String(unrevCount));
+  const navBadge = document.getElementById('nav-unreviewed-badge');
+  if (navBadge) navBadge.textContent = unrevCount > 0 ? unrevCount : '';
+
   if (data.pct_change != null) {
     const arrow = data.pct_change >= 0 ? '▲' : '▼';
     const color = data.pct_change >= 0 ? '#ef4444' : '#22c55e';
@@ -2624,8 +2707,10 @@ function _renderDashboard(data) {
         const isCredit = tx.subtype === 'payment' || amt < 0;
         const amtColor = isCredit ? 'color:#22c55e;' : '';
         const merchant = tx.merchant || tx.description;
-        return `<tr>
-          <td style="white-space:nowrap;">${esc(tx.date || '')}</td>
+        const isUnreviewed = tx.unreviewed === true || tx.unreviewed === 'true';
+        const dot = isUnreviewed ? '<span class="unreviewed-dot" title="Unreviewed" style="margin-right:4px;"></span>' : '';
+        return `<tr${isUnreviewed ? ' class="unreviewed-row"' : ''}>
+          <td style="white-space:nowrap;">${dot}${esc(tx.date || '')}</td>
           <td>${esc(merchant || '')}<br><span style="font-size:11px;color:var(--text-muted);">${esc(tx.description || '')}</span></td>
           <td style="font-size:12px;">${esc(tx.category || '')}</td>
           <td style="font-size:12px;">${esc(tx.account || '')}</td>

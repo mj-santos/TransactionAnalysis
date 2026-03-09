@@ -1316,7 +1316,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {"type": type, "sources": sources}
 
     def _build_txn_where(
-        type, date_from, date_to, account, category, merchant, source, subtype=None
+        type, date_from, date_to, account, category, merchant, source, subtype=None,
+        unreviewed_only=False,
     ) -> tuple[list, list]:
         """Build shared WHERE clause + params for /transactions and /transactions/totals."""
         where, params = [], []
@@ -1341,6 +1342,9 @@ No cloud services, no external dependencies — all data stays on your machine.
         # source filter: specific run_id; 'all' or absent → no additional filter
         if source and source != "all":
             where.append("run_id = ?"); params.append(source)
+        # review status filter
+        if unreviewed_only:
+            where.append("COALESCE(unreviewed, TRUE) = TRUE")
         return where, params
 
     @app.get("/transactions", tags=["transactions"], summary="List transactions with filters")
@@ -1358,6 +1362,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         group_by:  Optional[str] = Query(None,           description="Comma-separated field(s) to group"),
         sort_by:   str           = Query("transaction_date", description="Column to sort by"),
         sort_dir:  str           = Query("desc",          description="'asc' or 'desc'"),
+        unreviewed_only: bool    = Query(False,           description="Show only unreviewed transactions"),
     ):
         """
         Filtered transaction list.
@@ -1367,7 +1372,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Pass `source=<run_id>` to filter by a specific import; omit or pass `source=all`
         to show all rows for the given type.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         group_fields = [f.strip() for f in (group_by or "").split(",")
@@ -1397,7 +1402,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                 col_names = [
                     "transaction_date", "description", "merchant", "category",
                     "amount", "currency", "bank_name", "account_name", "account_id",
-                    "statement_type",
+                    "statement_type", "transaction_fingerprint",
+                    "unreviewed",
                 ]
                 sql = (f"SELECT {', '.join(col_names)} FROM transactions_norm{where_sql}"
                        f" ORDER BY {safe_sort} {safe_dir}"
@@ -1428,6 +1434,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         merchant:  Optional[str] = Query(None),
         subtype:   Optional[str] = Query(None, description="transaction_subtype filter: spending|payment|adjustment"),
         source:    Optional[str] = Query(None,  description="run_id to filter by import source; 'all' = no filter"),
+        unreviewed_only: bool    = Query(False, description="Show only unreviewed transactions"),
     ):
         """
         Return aggregate totals for the filtered set (without fetching all rows).
@@ -1441,7 +1448,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
         source: specific run_id to scope to one import; omit or 'all' for all rows.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"
@@ -1500,6 +1507,80 @@ No cloud services, no external dependencies — all data stays on your machine.
             "cc_conflict_count":  int(row[8]  or 0),
             "cc_legacy_count":    int(row[9]  or 0),
         }
+
+    # -----------------------------------------------------------------------
+    # Transaction Review
+    # -----------------------------------------------------------------------
+
+    @app.get("/transactions/unreviewed-count", tags=["transactions"],
+             summary="Count of unreviewed transactions")
+    def unreviewed_count():
+        """Return the total number of unreviewed transactions across all types."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            row = conn.execute(
+                "SELECT COUNT(*) FROM transactions_norm WHERE COALESCE(unreviewed, TRUE) = TRUE"
+            ).fetchone()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Count query failed: {exc}") from exc
+        return {"unreviewed_count": int(row[0]) if row else 0}
+
+    @app.post("/transactions/mark-reviewed", tags=["transactions"],
+              summary="Mark specific transactions as reviewed")
+    def mark_reviewed(body: dict):
+        """
+        Mark one or more transactions as reviewed.
+
+        Body: {"fingerprints": ["fp1", "fp2", ...]}
+        """
+        fingerprints = body.get("fingerprints", [])
+        if not fingerprints or not isinstance(fingerprints, list):
+            raise HTTPException(status_code=400, detail="'fingerprints' must be a non-empty list.")
+        try:
+            conn = get_connection(db_path)
+            placeholders = ", ".join(["?"] * len(fingerprints))
+            conn.execute(
+                f"UPDATE transactions_norm SET unreviewed = FALSE "
+                f"WHERE transaction_fingerprint IN ({placeholders})",
+                fingerprints,
+            )
+            row = conn.execute("SELECT changes()").fetchone()
+            updated = int(row[0]) if row else 0
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
+        return {"updated": updated}
+
+    @app.post("/transactions/mark-all-reviewed", tags=["transactions"],
+              summary="Mark all filtered transactions as reviewed")
+    def mark_all_reviewed(
+        type:      Optional[str] = Query(None,  description="'credit_card' or 'bank'"),
+        date_from: Optional[str] = Query(None),
+        date_to:   Optional[str] = Query(None),
+        account:   Optional[str] = Query(None),
+        category:  Optional[str] = Query(None),
+        merchant:  Optional[str] = Query(None),
+        subtype:   Optional[str] = Query(None),
+        source:    Optional[str] = Query(None),
+    ):
+        """Mark all transactions matching the current filters as reviewed."""
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype)
+        # Only update unreviewed ones
+        where.append("COALESCE(unreviewed, TRUE) = TRUE")
+        where_sql = " WHERE " + " AND ".join(where) if where else ""
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                f"UPDATE transactions_norm SET unreviewed = FALSE{where_sql}",
+                params,
+            )
+            row = conn.execute("SELECT changes()").fetchone()
+            updated = int(row[0]) if row else 0
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Bulk update failed: {exc}") from exc
+        return {"updated": updated}
 
     # -----------------------------------------------------------------------
     # Reports
@@ -2369,7 +2450,9 @@ No cloud services, no external dependencies — all data stays on your machine.
             recent_rows = conn.execute(
                 """
                 SELECT transaction_date, description, merchant, category_normalized,
-                       category_parent, resolved_amount, bank_name
+                       category_parent, resolved_amount, bank_name,
+                       COALESCE(unreviewed, TRUE) AS unreviewed,
+                       transaction_fingerprint
                 FROM transactions_norm
                 ORDER BY transaction_date DESC, ingested_at DESC
                 LIMIT 10
@@ -2378,6 +2461,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             recent_cols = [
                 "transaction_date", "description", "merchant",
                 "category_normalized", "category_parent", "amount", "bank_name",
+                "unreviewed", "transaction_fingerprint",
             ]
             recent_transactions = [
                 {k: (_isoformat(v) if k == "transaction_date" else v)
@@ -2426,6 +2510,12 @@ No cloud services, no external dependencies — all data stays on your machine.
                     "pct": pct,
                 })
 
+            # Unreviewed count (global, not month-scoped)
+            unrev_row = conn.execute(
+                "SELECT COUNT(*) FROM transactions_norm WHERE COALESCE(unreviewed, TRUE) = TRUE"
+            ).fetchone()
+            unreviewed_count = int(unrev_row[0]) if unrev_row else 0
+
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Dashboard query failed: {exc}") from exc
@@ -2439,6 +2529,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "top_merchants": top_merchants,
             "recent_transactions": recent_transactions,
             "budgets_vs_actual": budgets_vs_actual,
+            "unreviewed_count": unreviewed_count,
         }
 
     # -----------------------------------------------------------------------
@@ -2582,8 +2673,9 @@ No cloud services, no external dependencies — all data stays on your machine.
                          amount, currency, bank_name, account_name, account_id,
                          source_file, source_row, file_hash, transaction_fingerprint,
                          ingested_at, statement_type, run_id, transaction_subtype,
-                         resolved_amount, category_normalized, category_parent
-                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         resolved_amount, category_normalized, category_parent,
+                         unreviewed
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [
                         r.get("transaction_date"), r.get("posted_date"), r.get("description", ""),
                         r.get("merchant"), r.get("category"), r.get("amount", 0),
@@ -2592,6 +2684,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                         r.get("file_hash", ""), fp, r.get("ingested_at", now),
                         r.get("statement_type"), r.get("run_id"), r.get("transaction_subtype"),
                         r.get("resolved_amount"), r.get("category_normalized"), r.get("category_parent"),
+                        r.get("unreviewed", True),
                     ],
                 )
                 tx_inserted += 1

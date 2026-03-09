@@ -194,11 +194,12 @@ TransactionAnalysis/
 ### Feature Details
 
 **Dashboard (`#page-dashboard`)**
-- MTD spend KPI card, transaction count card
+- MTD spend KPI card, transaction count card, unreviewed count KPI card
 - Month navigation (prev/next arrows) — `dashboardPrevMonth()`, `dashboardNextMonth()`
 - Top categories bar chart (horizontal, CSS-rendered)
 - Budget tracker with inline add/edit/delete form — `openBudgetForm()`, `saveBudget()`, `deleteBudget()`
-- Recent transactions table (last 10)
+- Recent transactions table (last 10) with unreviewed dot indicators
+- Unreviewed count badge on sidebar Dashboard nav link
 - API: `GET /dashboard/summary?year=&month=`
 
 **Import (`#page-import`)**
@@ -230,10 +231,13 @@ TransactionAnalysis/
 - Quick date preset buttons: This Month, Last Month, 3 Months, YTD, All
 - Import Source dropdown (per statement type)
 - Group-by selector (including `category_normalized`, `category_parent`)
+- "Show Unreviewed Only" toggle filter
 - Sortable columns
 - Infinite scroll / "Load more" (100 rows per page)
 - Totals footer row
-- API: `GET /transactions`, `GET /transaction-totals`, `GET /transactions/sources`
+- Per-transaction "Mark as Reviewed" button with unreviewed dot indicator
+- "Mark All Reviewed" bulk action (respects current filters)
+- API: `GET /transactions`, `GET /transaction-totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`
 
 **Reports (`#page-reports`)**
 - Static report cards: spend_by_month_category, cashflow_by_month, spend_by_merchant, totals_by_account, top_merchants
@@ -315,6 +319,7 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 | `resolved_amount` | DECIMAL(18,2) | Always ≥ 0; direction encoded in `transaction_subtype` |
 | `category_normalized` | TEXT | Normalized category from category rules (added by migration) |
 | `category_parent` | TEXT | Parent group (e.g. "Food & Dining") from category rules |
+| `unreviewed` | BOOLEAN DEFAULT TRUE | Review tracking flag; TRUE on import, set to FALSE when user marks reviewed |
 
 **Index:** `UNIQUE INDEX idx_tx_fingerprint ON transactions_norm(transaction_fingerprint)`
 
@@ -617,6 +622,9 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/transactions/sources` | transactions | List available import sources per statement type |
 | `GET` | `/transactions` | transactions | Query transactions with filters/grouping/sort/pagination |
 | `GET` | `/transaction-totals` | transactions | Aggregate totals for filtered transactions |
+| `GET` | `/transactions/unreviewed-count` | transactions | Count of all unreviewed transactions |
+| `POST` | `/transactions/mark-reviewed` | transactions | Mark specific transactions as reviewed (by fingerprint) |
+| `POST` | `/transactions/mark-all-reviewed` | transactions | Mark all filtered transactions as reviewed |
 | `GET` | `/reports` | reports | List available analytics CSV reports |
 | `GET` | `/reports/{name}/download` | reports | Download a report CSV |
 | `POST` | `/custom-report` | reports | Run a custom SQL report query |

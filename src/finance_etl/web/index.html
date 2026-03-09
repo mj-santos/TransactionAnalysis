@@ -17,6 +17,7 @@
   <nav>
     <a href="#" class="active" data-page="dashboard">
       <span class="icon">🏠</span> Dashboard
+      <span id="nav-unreviewed-badge" class="nav-badge"></span>
     </a>
     <a href="#" data-page="import">
       <span class="icon">📥</span> Import
@@ -82,6 +83,11 @@
       <div class="card" style="padding:16px 20px;">
         <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Top Category</div>
         <div id="dash-top-cat" style="font-size:18px; font-weight:700; margin-top:4px;">—</div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Unreviewed</div>
+        <div id="dash-unreviewed" style="font-size:28px; font-weight:700; margin-top:4px; color:var(--warning);">—</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">transactions pending review</div>
       </div>
     </div>
 
@@ -312,8 +318,13 @@
             <option value="account_name">Account</option>
           </select>
         </div>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="cc-unreviewed-only" onchange="loadTxnTab('credit_card')" />
+          Unreviewed Only
+        </label>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('credit_card')">✕ Clear</button>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('credit_card')">↻ Refresh</button>
+        <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('credit_card')">Mark All Reviewed</button>
       </div>
     </div>
     <!-- Transaction table -->
@@ -388,8 +399,13 @@
             <option value="account_name">Account</option>
           </select>
         </div>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="bk-unreviewed-only" onchange="loadTxnTab('bank')" />
+          Unreviewed Only
+        </label>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('bank')">✕ Clear</button>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('bank')">↻ Refresh</button>
+        <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('bank')">Mark All Reviewed</button>
       </div>
     </div>
     <!-- Transaction table -->
