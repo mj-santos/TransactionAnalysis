@@ -2610,6 +2610,8 @@ No cloud services, no external dependencies — all data stays on your machine.
             now = datetime.datetime.utcnow().isoformat()
 
             # ── Merchant rules ───────────────────────────────────────────────
+            # conditions (JSON array) and logic ('AND'/'OR') are needed to
+            # preserve compound rule configurations across backup/restore.
             conn.execute("DELETE FROM merchant_rules")
             for r in payload.get("merchant_rules", []):
                 conn.execute(

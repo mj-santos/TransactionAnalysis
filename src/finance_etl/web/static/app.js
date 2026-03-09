@@ -2562,7 +2562,8 @@ function _renderCategorySuggestions() {
   }).join('');
 }
 
-// BUG-1 fix: renamed from acceptCatSuggestion to avoid collision with category-rules version
+/** Accept a merchant→category suggestion. Operates on _catSuggestions data
+ *  (from /merchant-categories/suggestions) and POSTs to /merchant-categories. */
 async function acceptMerchantCatSuggestion(idx) {
   const s = _catSuggestions[idx];
   if (!s) return;
@@ -2577,7 +2578,7 @@ async function acceptMerchantCatSuggestion(idx) {
   }
 }
 
-// BUG-1 fix: renamed from dismissCatSuggestion to avoid collision with category-rules version
+/** Dismiss a merchant→category suggestion. Operates on _catSuggestions data. */
 function dismissMerchantCatSuggestion(idx) {
   if (_catSuggestions[idx]) _catSuggestions[idx]._dismissed = true;
   _renderCategorySuggestions();
@@ -2917,6 +2918,8 @@ function _renderCatSuggestions() {
   }).join('');
 }
 
+/** Accept a raw-category→normalized mapping suggestion. Operates on _catSuggestionsData
+ *  (from /category-rules/suggestions) and POSTs to /category-rules. */
 async function acceptCatSuggestion(idx) {
   const s = _catSuggestionsData[idx]; if (!s) return;
   try {
@@ -2939,6 +2942,7 @@ function editCatSuggestion(idx) {
   document.getElementById('cat-rule-form-card').scrollIntoView({ behavior:'smooth', block:'nearest' });
 }
 
+/** Dismiss a raw-category→normalized mapping suggestion. Operates on _catSuggestionsData. */
 function dismissCatSuggestion(idx) {
   if (_catSuggestionsData[idx]) _catSuggestionsData[idx]._dismissed = true;
   _renderCatSuggestions();
