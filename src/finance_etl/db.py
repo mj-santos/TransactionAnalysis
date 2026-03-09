@@ -232,6 +232,11 @@ CREATE TABLE IF NOT EXISTS budget_goals (
 
     # ── Transaction review tracking ──────────────────────────────────────────
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS unreviewed BOOLEAN DEFAULT TRUE",
+
+    # ── Schema version tracking (for backup compatibility) ────────────────
+    "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
+    # Seed with version 1 if table is empty (first migration)
+    "INSERT INTO schema_version SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version)",
 ]
 
 

@@ -589,19 +589,28 @@
       </div>
     </div>
 
-    <!-- Backup & Restore -->
+    <!-- Backup & Restore (v2) -->
     <div class="card" style="margin-top:20px;">
-      <div class="card-title">Data Backup &amp; Restore</div>
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Data Backup &amp; Restore</span>
+        <span id="backup-version-badge" class="badge" style="font-size:11px; background:var(--primary); color:#fff; padding:2px 8px; border-radius:4px;">v2</span>
+      </div>
       <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
-        Export all your data (transactions, merchant rules, category rules, budgets) to a JSON file.
-        Use the same file to restore everything on a fresh installation — zero data loss.
+        Export the complete application state (all 8 tables + wizard profiles) as a single JSON file.
+        Restoring from a backup replaces all data. Auto-backups are created on every successful import commit.
       </p>
+
+      <!-- Last backup info -->
+      <div id="backup-info" style="font-size:12px; color:var(--text-muted); margin-bottom:16px; display:none;">
+        <span id="backup-last-export"></span>
+        <span id="backup-auto-count" style="margin-left:12px;"></span>
+      </div>
 
       <!-- Export -->
       <div style="margin-bottom:20px;">
         <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Export</div>
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <button class="btn btn-primary btn-sm" onclick="downloadBackup()">⬇ Download Backup (JSON)</button>
+          <button class="btn btn-primary btn-sm" onclick="downloadBackup()">Download Full Backup (JSON)</button>
           <span id="backup-export-status" style="font-size:12px; color:var(--text-muted);"></span>
         </div>
       </div>
@@ -610,12 +619,30 @@
       <div>
         <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Restore</div>
         <p style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">
-          Select a <code>finance_backup.json</code> file. Existing rules and budgets will be replaced.
-          Transactions are upserted — no duplicates will be created.
+          Select a backup JSON file (v1 or v2). A snapshot of the current state is saved automatically before overwriting.
+          All existing data will be <strong>replaced</strong>.
         </p>
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <input type="file" id="restore-file-input" accept=".json" style="font-size:13px;" onchange="uploadBackup(this)" />
+          <input type="file" id="restore-file-input" accept=".json" style="font-size:13px;" onchange="previewBackup(this)" />
           <span id="backup-restore-status" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
+      </div>
+
+      <!-- DB table counts -->
+      <div id="backup-table-counts" style="margin-top:16px; display:none;">
+        <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Current Database</div>
+        <div id="backup-counts-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:6px; font-size:12px;"></div>
+      </div>
+    </div>
+
+    <!-- Restore preview modal (hidden by default) -->
+    <div id="restore-preview-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+      <div style="background:var(--bg-card); border-radius:8px; padding:24px; max-width:500px; width:90%; max-height:80vh; overflow-y:auto;">
+        <div style="font-size:16px; font-weight:600; margin-bottom:12px;">Restore Preview</div>
+        <div id="restore-preview-body" style="font-size:13px; margin-bottom:16px;"></div>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+          <button class="btn btn-secondary btn-sm" onclick="cancelRestore()">Cancel</button>
+          <button class="btn btn-primary btn-sm" onclick="confirmRestore()" style="background:#e74c3c; border-color:#e74c3c;">Replace All Data</button>
         </div>
       </div>
     </div>

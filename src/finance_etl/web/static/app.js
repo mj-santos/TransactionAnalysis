@@ -746,6 +746,8 @@ async function loadSettings() {
   } catch (err) {
     document.getElementById('settings-status').textContent = `Failed to load settings: ${err.message}`;
   }
+  // Load backup status in parallel (non-blocking)
+  loadBackupStatus();
 }
 
 async function saveSettings() {
@@ -790,15 +792,17 @@ async function maybeShowLogsOnError() {
   await refreshLogs();
 }
 
-// ── Backup & Restore ──────────────────────────────────────────
+// ── Backup & Restore (v2) ─────────────────────────────────────
+
+// Pending restore file — set by previewBackup(), consumed by confirmRestore()
+let _pendingRestoreFile = null;
 
 function downloadBackup() {
   const statusEl = document.getElementById('backup-export-status');
   if (statusEl) statusEl.textContent = 'Preparing export…';
-  // Trigger download via a temporary anchor pointing to the API endpoint
   const a = document.createElement('a');
   a.href = '/backup/export';
-  a.download = 'finance_backup.json';
+  a.download = '';  // server sets Content-Disposition filename
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -808,39 +812,124 @@ function downloadBackup() {
   }
 }
 
-async function uploadBackup(input) {
+/** Read the selected file and show a preview modal before restoring. */
+async function previewBackup(input) {
   const statusEl = document.getElementById('backup-restore-status');
   const file = input.files[0];
   if (!file) return;
-  if (statusEl) statusEl.textContent = 'Uploading…';
+  if (statusEl) statusEl.textContent = '';
 
-  if (!confirm(
-    'This will replace all existing merchant rules, category rules, and budget goals, ' +
-    'and upsert transactions from the backup.\n\nContinue?'
-  )) {
+  // Parse the file locally to show a preview
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    const ver = payload.backup_version || '?';
+    const data = payload.data || payload;  // v1 has flat keys, v2 has .data wrapper
+    const isV2 = ver >= 2;
+
+    let html = `<p><strong>Backup version:</strong> ${esc(String(ver))}</p>`;
+    if (payload.created_at) html += `<p><strong>Created:</strong> ${esc(payload.created_at)}</p>`;
+    if (payload.app_version) html += `<p><strong>App version:</strong> ${esc(payload.app_version)}</p>`;
+
+    html += '<table style="width:100%; font-size:12px; border-collapse:collapse; margin-top:8px;">';
+    html += '<tr style="border-bottom:1px solid var(--border);"><th style="text-align:left; padding:4px;">Table</th><th style="text-align:right; padding:4px;">Rows</th></tr>';
+
+    // Count rows in the backup for each table
+    const tables = isV2
+      ? ['runs','merchant_rules','merchant_category_map','category_rules','budget_goals','normalization_jobs','transactions_stage','transactions_norm']
+      : ['merchant_rules','merchant_categories','category_rules','budget_goals','transactions'];
+    for (const t of tables) {
+      const arr = (isV2 ? data[t] : payload[t]) || [];
+      html += `<tr><td style="padding:4px;">${esc(t)}</td><td style="text-align:right; padding:4px;">${Array.isArray(arr) ? arr.length : '?'}</td></tr>`;
+    }
+    html += '</table>';
+
+    // Wizard profiles count
+    const wp = payload.wizard_profiles;
+    if (wp && typeof wp === 'object') {
+      html += `<p style="margin-top:8px;"><strong>Wizard profiles:</strong> ${Object.keys(wp).length}</p>`;
+    }
+
+    html += '<p style="margin-top:12px; color:#e74c3c; font-weight:600;">This will replace ALL existing data. A snapshot will be saved automatically.</p>';
+
+    document.getElementById('restore-preview-body').innerHTML = html;
+    document.getElementById('restore-preview-modal').style.display = 'flex';
+    _pendingRestoreFile = file;
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Invalid backup file: ${err.message}`;
     input.value = '';
-    if (statusEl) statusEl.textContent = '';
-    return;
   }
+}
 
+function cancelRestore() {
+  document.getElementById('restore-preview-modal').style.display = 'none';
+  document.getElementById('restore-file-input').value = '';
+  _pendingRestoreFile = null;
+}
+
+/** Send the pending file to the restore endpoint after user confirmation. */
+async function confirmRestore() {
+  document.getElementById('restore-preview-modal').style.display = 'none';
+  const statusEl = document.getElementById('backup-restore-status');
+  if (!_pendingRestoreFile) return;
+
+  if (statusEl) statusEl.textContent = 'Restoring…';
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append('file', _pendingRestoreFile);
   try {
     const resp = await fetch('/backup/restore', { method: 'POST', body: formData });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || resp.statusText);
-    const msg = `Restored: ${data.merchant_rules_restored} merchant rules, ` +
-      `${data.category_rules_restored} category rules, ` +
-      `${data.merchant_categories_restored} merchant categories, ` +
-      `${data.budget_goals_restored} budget goals, ` +
-      `${data.transactions_inserted} transactions inserted (${data.transactions_skipped} skipped).`;
+    const parts = [];
+    if (data.merchant_rules_restored) parts.push(`${data.merchant_rules_restored} merchant rules`);
+    if (data.category_rules_restored) parts.push(`${data.category_rules_restored} category rules`);
+    if (data.budget_goals_restored) parts.push(`${data.budget_goals_restored} budget goals`);
+    if (data.transactions_norm_restored) parts.push(`${data.transactions_norm_restored} transactions`);
+    if (data.runs_restored) parts.push(`${data.runs_restored} runs`);
+    if (data.wizard_profiles_restored) parts.push(`${data.wizard_profiles_restored} wizard profiles`);
+    const msg = `Restored: ${parts.join(', ')}.`;
     if (statusEl) statusEl.textContent = msg;
     toast('Backup restored successfully.', 'success', 6000);
+    // Refresh backup status display
+    loadBackupStatus();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Error: ${err.message}`;
     toast(`Restore failed: ${err.message}`, 'error');
   } finally {
-    input.value = '';
+    document.getElementById('restore-file-input').value = '';
+    _pendingRestoreFile = null;
+  }
+}
+
+/** Fetch /backup/status and populate the info section on the Settings page. */
+async function loadBackupStatus() {
+  try {
+    const data = await api('GET', '/backup/status');
+
+    // Last export info
+    const infoEl = document.getElementById('backup-info');
+    const lastEl = document.getElementById('backup-last-export');
+    const autoEl = document.getElementById('backup-auto-count');
+    if (data.last_export_at) {
+      lastEl.textContent = `Last auto-backup: ${new Date(data.last_export_at).toLocaleString()}`;
+      infoEl.style.display = 'block';
+    }
+    if (data.auto_backups && data.auto_backups.length) {
+      autoEl.textContent = `(${data.auto_backups.length} auto-backup${data.auto_backups.length > 1 ? 's' : ''} saved)`;
+      infoEl.style.display = 'block';
+    }
+
+    // DB table counts grid
+    if (data.db_table_counts && Object.keys(data.db_table_counts).length) {
+      const grid = document.getElementById('backup-counts-grid');
+      grid.innerHTML = '';
+      for (const [table, count] of Object.entries(data.db_table_counts)) {
+        grid.innerHTML += `<div style="background:var(--bg); padding:4px 8px; border-radius:4px;">${esc(table)}: <strong>${count}</strong></div>`;
+      }
+      document.getElementById('backup-table-counts').style.display = 'block';
+    }
+  } catch (err) {
+    // Non-fatal — backup status is informational
   }
 }
 

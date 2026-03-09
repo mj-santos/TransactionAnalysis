@@ -563,6 +563,11 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "run_id": result.run_id,
                 "counts": result.counts,
             }
+            # Auto-backup after successful commit (non-fatal on failure)
+            try:
+                _write_auto_backup(_create_export_payload())
+            except Exception:
+                pass
         except Exception as exc:
             _async_runs[run_id] = {"status": "failed", "run_id": run_id, "error": str(exc)}
 
@@ -2530,70 +2535,129 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
-    # Backup & Restore
+    # Backup & Restore  (v2 — comprehensive full-state backup)
     # -----------------------------------------------------------------------
 
-    @app.get("/backup/export", tags=["backup"], summary="Export all user data as JSON")
+    # Tables exported/restored in dependency order (parents before children)
+    _BACKUP_TABLES = [
+        "runs",
+        "merchant_rules",
+        "merchant_category_map",
+        "category_rules",
+        "budget_goals",
+        "normalization_jobs",
+        "transactions_stage",
+        "transactions_norm",
+    ]
+
+    def _rows_to_dicts(cursor_result) -> list[dict]:
+        """Convert a DuckDB cursor result to a list of dicts."""
+        if cursor_result.description is None:
+            return []
+        cols = [d[0] for d in cursor_result.description]
+        return [dict(zip(cols, row)) for row in cursor_result.fetchall()]
+
+    def _get_schema_version(conn) -> int:
+        """Read the current DuckDB schema version (defaults to 1)."""
+        try:
+            row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+            return row[0] if row else 1
+        except Exception:
+            return 1
+
+    def _collect_wizard_profiles() -> dict[str, str]:
+        """Read all YAML wizard profiles into {relative_path: content}."""
+        profiles: dict[str, str] = {}
+        profiles_path = Path(wizard_profiles_dir)
+        if profiles_path.exists():
+            for f in sorted(profiles_path.rglob("*.yaml")):
+                rel = str(f.relative_to(profiles_path))
+                profiles[rel] = f.read_text(encoding="utf-8")
+            for f in sorted(profiles_path.rglob("*.yml")):
+                rel = str(f.relative_to(profiles_path))
+                if rel not in profiles:
+                    profiles[rel] = f.read_text(encoding="utf-8")
+        return profiles
+
+    def _write_auto_backup(payload_bytes: bytes) -> Path:
+        """
+        Write an auto-backup file and rotate to keep at most 5.
+        Returns the path of the newly created backup file.
+        """
+        import datetime as _dt
+        auto_dir = Path("data/auto_backups")
+        auto_dir.mkdir(parents=True, exist_ok=True)
+
+        ts = _dt.datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+        dest = auto_dir / f"auto_backup_{ts}.json"
+        dest.write_bytes(payload_bytes)
+
+        # Rotate: keep only the 5 most recent
+        existing = sorted(auto_dir.glob("auto_backup_*.json"), key=lambda p: p.name, reverse=True)
+        for old in existing[5:]:
+            old.unlink(missing_ok=True)
+
+        return dest
+
+    def _create_export_payload() -> bytes:
+        """Build a v2 backup payload and return it as UTF-8 JSON bytes."""
+        import datetime as _dt
+        from finance_etl.backup_migrations import CURRENT_BACKUP_VERSION
+        from finance_etl.db import get_connection as _gc
+
+        conn = _gc(db_path, read_only=True)
+        data: dict[str, Any] = {}
+        for table in _BACKUP_TABLES:
+            data[table] = _rows_to_dicts(conn.execute(f"SELECT * FROM {table}"))
+        schema_ver = _get_schema_version(conn)
+        conn.close()
+
+        payload = {
+            "backup_version": CURRENT_BACKUP_VERSION,
+            "app_version": "2.0.0",
+            "created_at": _dt.datetime.utcnow().isoformat() + "Z",
+            "duckdb_schema_version": schema_ver,
+            "data": data,
+            "wizard_profiles": _collect_wizard_profiles(),
+        }
+        return json.dumps(payload, indent=2, default=str).encode("utf-8")
+
+    @app.get("/backup/export", tags=["backup"], summary="Export all user data as JSON (v2)")
     def export_backup():
         """
-        Export all user-configurable data (rules, categories, budgets, transactions)
-        as a single JSON document suitable for restoring on a fresh installation.
+        Export the complete application state — all DuckDB tables and YAML
+        wizard profiles — as a single versioned JSON document.
         """
         from fastapi.responses import Response as FastAPIResponse
-        import datetime
+        import datetime as _dt
 
         try:
-            from finance_etl.db import get_connection as _gc
-            conn = _gc(db_path, read_only=True)
-
-            def rows_to_dicts(cursor_result):
-                cols = [d[0] for d in cursor_result.description]
-                return [dict(zip(cols, row)) for row in cursor_result.fetchall()]
-
-            merchant_rules = rows_to_dicts(conn.execute(
-                "SELECT * FROM merchant_rules ORDER BY priority DESC, id ASC"
-            ))
-            merchant_categories = rows_to_dicts(conn.execute(
-                "SELECT * FROM merchant_category_map ORDER BY merchant"
-            ))
-            category_rules = rows_to_dicts(conn.execute(
-                "SELECT * FROM category_rules ORDER BY parent, category"
-            ))
-            budget_goals = rows_to_dicts(conn.execute(
-                "SELECT * FROM budget_goals ORDER BY parent, category"
-            ))
-            transactions = rows_to_dicts(conn.execute(
-                "SELECT * FROM transactions_norm ORDER BY transaction_date, transaction_fingerprint"
-            ))
-            conn.close()
+            body = _create_export_payload()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
-        payload = {
-            "backup_version": 1,
-            "exported_at": datetime.datetime.utcnow().isoformat() + "Z",
-            "merchant_rules": merchant_rules,
-            "merchant_categories": merchant_categories,
-            "category_rules": category_rules,
-            "budget_goals": budget_goals,
-            "transactions": transactions,
-        }
-        body = json.dumps(payload, indent=2, default=str)
+        ts = _dt.datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+        filename = f"finance_etl_backup_{ts}.json"
         return FastAPIResponse(
             content=body,
             media_type="application/json",
-            headers={"Content-Disposition": 'attachment; filename="finance_backup.json"'},
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    @app.post("/backup/restore", tags=["backup"], summary="Restore user data from a JSON backup",
+    @app.post("/backup/restore", tags=["backup"],
+              summary="Restore user data from a JSON backup (v1 or v2)",
               status_code=200)
     async def restore_backup(file: UploadFile = File(...)):
         """
-        Restore all user data from a JSON backup file produced by GET /backup/export.
-        Existing rules, categories, and budgets are replaced.  Transactions are
-        upserted by fingerprint so duplicates are not created.
+        Restore the full application state from a JSON backup.
+
+        Accepts both v1 (legacy partial) and v2 (full) backups. A v1 payload
+        is automatically migrated to v2 before applying. An auto-snapshot of
+        the current state is saved to data/auto_backups/ before overwriting.
         """
-        import datetime
+        import datetime as _dt
+        from finance_etl.backup_migrations import CURRENT_BACKUP_VERSION, run_migrations
+        from finance_etl.db import get_connection as _gc
 
         raw = await file.read()
         try:
@@ -2601,19 +2665,53 @@ No cloud services, no external dependencies — all data stays on your machine.
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid JSON file.")
 
-        if payload.get("backup_version") != 1:
-            raise HTTPException(status_code=400, detail="Unsupported backup version.")
+        version = payload.get("backup_version")
+        if version is None or not isinstance(version, int):
+            raise HTTPException(status_code=400, detail="Missing or invalid backup_version.")
+        if version > CURRENT_BACKUP_VERSION:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Backup version {version} is newer than supported ({CURRENT_BACKUP_VERSION}). "
+                       "Please upgrade the application.",
+            )
+
+        # ── Migrate legacy payloads to current version ───────────────────
+        if version < CURRENT_BACKUP_VERSION:
+            payload = run_migrations(payload, version, CURRENT_BACKUP_VERSION)
+
+        data = payload.get("data", {})
+        now = _dt.datetime.utcnow().isoformat()
+
+        # ── Auto-snapshot current state before overwriting ────────────────
+        try:
+            snapshot = _create_export_payload()
+            _write_auto_backup(snapshot)
+        except Exception:
+            pass  # Non-fatal — don't block restore if snapshot fails
 
         try:
-            from finance_etl.db import get_connection as _gc
             conn = _gc(db_path)
-            now = datetime.datetime.utcnow().isoformat()
 
-            # ── Merchant rules ───────────────────────────────────────────────
-            # conditions (JSON array) and logic ('AND'/'OR') are needed to
-            # preserve compound rule configurations across backup/restore.
+            # ── Restore DuckDB tables (truncate + reinsert, dependency order) ──
+
+            # 1. runs
+            conn.execute("DELETE FROM runs")
+            for r in data.get("runs", []):
+                conn.execute(
+                    """INSERT INTO runs (run_id, started_at, finished_at, status,
+                       statement_type, run_label, files_count, rows_in, rows_staged,
+                       rows_normalized, rows_loaded, errors_count, notes)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    [r.get("run_id"), r.get("started_at"), r.get("finished_at"),
+                     r.get("status"), r.get("statement_type"), r.get("run_label"),
+                     r.get("files_count"), r.get("rows_in"), r.get("rows_staged"),
+                     r.get("rows_normalized"), r.get("rows_loaded"),
+                     r.get("errors_count"), r.get("notes")],
+                )
+
+            # 2. merchant_rules — includes conditions/logic for compound rules
             conn.execute("DELETE FROM merchant_rules")
-            for r in payload.get("merchant_rules", []):
+            for r in data.get("merchant_rules", []):
                 conn.execute(
                     """INSERT INTO merchant_rules
                        (pattern, match_type, merchant, priority, created_at, updated_at,
@@ -2624,9 +2722,9 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("conditions"), r.get("logic", "AND")],
                 )
 
-            # ── Merchant categories ──────────────────────────────────────────
+            # 3. merchant_category_map
             conn.execute("DELETE FROM merchant_category_map")
-            for r in payload.get("merchant_categories", []):
+            for r in data.get("merchant_category_map", data.get("merchant_categories", [])):
                 conn.execute(
                     """INSERT INTO merchant_category_map (merchant, category, source, updated_at)
                        VALUES (?,?,?,?)""",
@@ -2634,75 +2732,170 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("updated_at", now)],
                 )
 
-            # ── Category rules ───────────────────────────────────────────────
+            # 4. category_rules
             conn.execute("DELETE FROM category_rules")
-            for r in payload.get("category_rules", []):
+            for r in data.get("category_rules", []):
                 conn.execute(
-                    """INSERT INTO category_rules (raw_category, category, parent, created_at, updated_at)
+                    """INSERT INTO category_rules
+                       (raw_category, category, parent, created_at, updated_at)
                        VALUES (?,?,?,?,?)""",
                     [r["raw_category"], r["category"], r["parent"],
                      r.get("created_at", now), r.get("updated_at", now)],
                 )
 
-            # ── Budget goals ─────────────────────────────────────────────────
+            # 5. budget_goals
             conn.execute("DELETE FROM budget_goals")
-            for r in payload.get("budget_goals", []):
+            for r in data.get("budget_goals", []):
                 conn.execute(
-                    """INSERT INTO budget_goals (parent, category, monthly_amount, created_at, updated_at)
+                    """INSERT INTO budget_goals
+                       (parent, category, monthly_amount, created_at, updated_at)
                        VALUES (?,?,?,?,?)""",
                     [r["parent"], r.get("category"), r["monthly_amount"],
                      r.get("created_at", now), r.get("updated_at", now)],
                 )
 
-            # ── Transactions (upsert by fingerprint) ─────────────────────────
-            tx_inserted = 0
-            tx_skipped = 0
-            for r in payload.get("transactions", []):
-                fp = r.get("transaction_fingerprint")
-                if not fp:
-                    tx_skipped += 1
-                    continue
-                existing = conn.execute(
-                    "SELECT 1 FROM transactions_norm WHERE transaction_fingerprint = ?", [fp]
-                ).fetchone()
-                if existing:
-                    tx_skipped += 1
-                    continue
+            # 6. normalization_jobs
+            conn.execute("DELETE FROM normalization_jobs")
+            for r in data.get("normalization_jobs", []):
+                conn.execute(
+                    """INSERT INTO normalization_jobs
+                       (job_id, status, rows_total, rows_done, error,
+                        started_at, finished_at, created_at)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    [r["job_id"], r.get("status", "pending"), r.get("rows_total"),
+                     r.get("rows_done", 0), r.get("error"),
+                     r.get("started_at"), r.get("finished_at"),
+                     r.get("created_at", now)],
+                )
+
+            # 7. transactions_stage
+            conn.execute("DELETE FROM transactions_stage")
+            for r in data.get("transactions_stage", []):
+                conn.execute(
+                    """INSERT INTO transactions_stage
+                       (run_id, file_hash, source_file, source_row, bank_name,
+                        account_name, account_id, transaction_date_raw,
+                        posted_date_raw, description_raw, amount_raw, debit_raw,
+                        credit_raw, money_in_raw, money_out_raw, dc_flag_raw,
+                        currency_raw, extra_json, amount_debit_raw, amount_credit_raw)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    [r.get("run_id"), r.get("file_hash"), r.get("source_file"),
+                     r.get("source_row"), r.get("bank_name"), r.get("account_name"),
+                     r.get("account_id"), r.get("transaction_date_raw"),
+                     r.get("posted_date_raw"), r.get("description_raw"),
+                     r.get("amount_raw"), r.get("debit_raw"), r.get("credit_raw"),
+                     r.get("money_in_raw"), r.get("money_out_raw"),
+                     r.get("dc_flag_raw"), r.get("currency_raw"),
+                     r.get("extra_json"), r.get("amount_debit_raw"),
+                     r.get("amount_credit_raw")],
+                )
+
+            # 8. transactions_norm — full replace (not upsert) for v2
+            conn.execute("DELETE FROM transactions_norm")
+            tx_count = 0
+            for r in data.get("transactions_norm", []):
                 conn.execute(
                     """INSERT INTO transactions_norm (
-                         transaction_date, posted_date, description, merchant, category,
-                         amount, currency, bank_name, account_name, account_id,
-                         source_file, source_row, file_hash, transaction_fingerprint,
-                         ingested_at, statement_type, run_id, transaction_subtype,
-                         resolved_amount, category_normalized, category_parent,
-                         unreviewed
+                         transaction_date, posted_date, description, merchant,
+                         category, amount, currency, bank_name, account_name,
+                         account_id, source_file, source_row, file_hash,
+                         transaction_fingerprint, ingested_at, statement_type,
+                         run_id, transaction_subtype, resolved_amount,
+                         category_normalized, category_parent, unreviewed
                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [
-                        r.get("transaction_date"), r.get("posted_date"), r.get("description", ""),
-                        r.get("merchant"), r.get("category"), r.get("amount", 0),
-                        r.get("currency", "USD"), r.get("bank_name", ""), r.get("account_name", ""),
-                        r.get("account_id", ""), r.get("source_file", ""), r.get("source_row", 0),
-                        r.get("file_hash", ""), fp, r.get("ingested_at", now),
-                        r.get("statement_type"), r.get("run_id"), r.get("transaction_subtype"),
-                        r.get("resolved_amount"), r.get("category_normalized"), r.get("category_parent"),
-                        r.get("unreviewed", True),
+                        r.get("transaction_date"), r.get("posted_date"),
+                        r.get("description", ""), r.get("merchant"),
+                        r.get("category"), r.get("amount", 0),
+                        r.get("currency", "USD"), r.get("bank_name", ""),
+                        r.get("account_name", ""), r.get("account_id", ""),
+                        r.get("source_file", ""), r.get("source_row", 0),
+                        r.get("file_hash", ""), r.get("transaction_fingerprint", ""),
+                        r.get("ingested_at", now), r.get("statement_type"),
+                        r.get("run_id"), r.get("transaction_subtype"),
+                        r.get("resolved_amount"), r.get("category_normalized"),
+                        r.get("category_parent"), r.get("unreviewed", True),
                     ],
                 )
-                tx_inserted += 1
+                tx_count += 1
 
             conn.close()
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Restore failed: {exc}") from exc
 
+        # ── Restore YAML wizard profiles ─────────────────────────────────
+        profiles_restored = 0
+        wp = payload.get("wizard_profiles", {})
+        if wp:
+            profiles_path = Path(wizard_profiles_dir)
+            profiles_path.mkdir(parents=True, exist_ok=True)
+            for rel_path, content in wp.items():
+                dest = profiles_path / rel_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8")
+                profiles_restored += 1
+
         return {
             "status": "ok",
-            "merchant_rules_restored": len(payload.get("merchant_rules", [])),
-            "merchant_categories_restored": len(payload.get("merchant_categories", [])),
-            "category_rules_restored": len(payload.get("category_rules", [])),
-            "budget_goals_restored": len(payload.get("budget_goals", [])),
-            "transactions_inserted": tx_inserted,
-            "transactions_skipped": tx_skipped,
+            "backup_version_received": version,
+            "runs_restored": len(data.get("runs", [])),
+            "merchant_rules_restored": len(data.get("merchant_rules", [])),
+            "merchant_categories_restored": len(
+                data.get("merchant_category_map", data.get("merchant_categories", []))
+            ),
+            "category_rules_restored": len(data.get("category_rules", [])),
+            "budget_goals_restored": len(data.get("budget_goals", [])),
+            "normalization_jobs_restored": len(data.get("normalization_jobs", [])),
+            "transactions_stage_restored": len(data.get("transactions_stage", [])),
+            "transactions_norm_restored": tx_count,
+            "wizard_profiles_restored": profiles_restored,
         }
+
+    @app.get("/backup/status", tags=["backup"], summary="Backup system status")
+    def backup_status():
+        """
+        Return backup system metadata: last export timestamp, auto-backup
+        file list, and current row counts for all backed-up tables.
+        """
+        from finance_etl.db import get_connection as _gc
+
+        # Auto-backup files
+        auto_dir = Path("data/auto_backups")
+        auto_backups: list[dict[str, Any]] = []
+        if auto_dir.exists():
+            for f in sorted(auto_dir.glob("auto_backup_*.json"), key=lambda p: p.name, reverse=True):
+                auto_backups.append({
+                    "filename": f.name,
+                    "size_bytes": f.stat().st_size,
+                    "modified_at": _dt_from_stat(f),
+                })
+
+        # DB table counts
+        db_table_counts: dict[str, int] = {}
+        try:
+            conn = _gc(db_path, read_only=True)
+            for table in _BACKUP_TABLES:
+                row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                db_table_counts[table] = row[0] if row else 0
+            conn.close()
+        except Exception:
+            pass
+
+        # Last export: check most recent auto-backup timestamp
+        last_export_at = auto_backups[0]["modified_at"] if auto_backups else None
+
+        return {
+            "last_export_at": last_export_at,
+            "auto_backups": auto_backups,
+            "db_table_counts": db_table_counts,
+        }
+
+    def _dt_from_stat(path: Path) -> str:
+        """ISO timestamp from file mtime."""
+        import datetime as _dt
+        return _dt.datetime.utcfromtimestamp(path.stat().st_mtime).isoformat() + "Z"
 
     # -----------------------------------------------------------------------
     # Web UI — always registered last so all API routes take precedence

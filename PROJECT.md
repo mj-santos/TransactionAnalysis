@@ -82,6 +82,7 @@ TransactionAnalysis/
 │           └── chk_smoke001.yaml
 │
 ├── data/                       ← runtime data (gitignored in prod; present here with test data)
+│   ├── auto_backups/           ← auto-backup JSON files (max 5, rotated); created on every commit
 │   ├── db/finance.duckdb       ← THE database — all user data lives here
 │   ├── logs/                   ← per-run log files (UUID-named) + api.log
 │   ├── profiles/               ← per-file JSON profiling results (encoding, delimiter, headers)
@@ -105,6 +106,7 @@ TransactionAnalysis/
 │   ├── __init__.py
 │   ├── api.py                  ← FastAPI app factory (create_app); ALL endpoints defined here
 │   ├── analytics.py            ← Stage 9: SQL analytics queries → CSV reports
+│   ├── backup_migrations.py    ← Backup payload migration chain (v1→v2); CURRENT_BACKUP_VERSION
 │   ├── category_rules.py       ← Category normalization engine + BUILT_IN_CATEGORY_MAP
 │   ├── cli.py                  ← Click CLI: run, ingest, validate, parquet, analytics, api, wizard
 │   ├── db.py                   ← DuckDB connection factory + DDL + migrations
@@ -163,6 +165,7 @@ TransactionAnalysis/
     ├── test_mapping.py
     ├── test_models.py
     ├── test_money.py
+    ├── test_backup_restore.py  ← v2 backup migration, roundtrip, rotation tests
     ├── test_pipeline_api.py
     └── test_wizard_mapping.py
 ```
@@ -283,9 +286,18 @@ TransactionAnalysis/
 - Refresh logs button — `GET /logs`
 - Download log file link — `GET /logs/download`
 - Backend logs panel (pre-formatted, last 200 lines)
-- **Data Backup & Restore** card:
-  - Download Backup (JSON) button — `downloadBackup()` → `GET /backup/export`
-  - File picker for restore — `uploadBackup()` → `POST /backup/restore`
+- **Data Backup & Restore** card (v2):
+  - Version badge (v2) in card header
+  - Last auto-backup timestamp and count display — `loadBackupStatus()` → `GET /backup/status`
+  - Current database table row counts grid
+  - Download Full Backup (JSON) button — `downloadBackup()` → `GET /backup/export`
+    - Exports all 8 tables + wizard profile YAML files; timestamped filename
+  - File picker with preview modal — `previewBackup()` → client-side JSON parse
+    - Shows backup version, creation date, row counts per table before confirming
+    - `confirmRestore()` → `POST /backup/restore`; auto-snapshot saved before overwriting
+    - Supports v1 (legacy) and v2 backup files; v1 auto-migrated to v2 on restore
+  - Auto-backup on every successful import commit (max 5 rotated in `data/auto_backups/`)
+- API: `GET /backup/export`, `POST /backup/restore`, `GET /backup/status`
 
 ---
 
@@ -474,6 +486,16 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 
 ---
 
+### `schema_version` — DuckDB schema version tracking
+
+| Column | Type | Notes |
+|---|---|---|
+| `version` | INTEGER NOT NULL | Current schema version number |
+
+Single-row table seeded with `1` on first migration run. Used by the backup system to record which schema version produced the backup, enabling forward-compatible restore.
+
+---
+
 ### Python Config Models (`models.py`)
 
 | Model | Purpose |
@@ -505,6 +527,7 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 - ~~**`_CATEGORY_HINTS` naming mismatch**~~ — **FIXED.** Hint category names in `merchant_rules.py` now use subcategory names from `BUILT_IN_CATEGORY_MAP` (e.g. "Restaurants" not "Restaurants & Dining", "Gas & Fuel" not "Transportation & Gas"). The monolithic entries were split into more granular categories matching the taxonomy.
 - **`min_transactions = 3`** in `analyze_descriptions()` is hardcoded. No UI control.
 - ~~**Backup restore missing compound rule fields**~~ — **FIXED.** Restore INSERT for `merchant_rules` now includes `conditions` and `logic` columns, preserving compound rule configurations across backup/restore cycles.
+- ~~**Backup was partial (v1)**~~ — **FIXED.** Backup system upgraded to v2: exports all 8 DuckDB tables + wizard profile YAML files. Restore auto-migrates v1 backups to v2 format. Auto-snapshots saved before overwriting. Auto-backup on every successful import commit with rotation (max 5 files).
 
 ### Duplicate Logic
 
@@ -654,7 +677,8 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `POST` | `/budgets` | budgets | Create or update a budget goal |
 | `DELETE` | `/budgets/{id}` | budgets | Delete a budget goal |
 | `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions |
-| `GET` | `/backup/export` | backup | Export all data as JSON (file download) |
-| `POST` | `/backup/restore` | backup | Restore from a JSON backup file |
+| `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 8 tables + wizard profiles) |
+| `POST` | `/backup/restore` | backup | Restore from v1 or v2 JSON backup (auto-migrates, auto-snapshots) |
+| `GET` | `/backup/status` | backup | Backup system status: last export, auto-backups list, table counts |
 | `GET` | `/` | ui | Serve web UI (index.html) |
 | `GET` | `/docs` | (FastAPI auto) | Interactive API documentation |
