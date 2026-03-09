@@ -296,7 +296,7 @@ def batch_renormalize(db_path: str, job_id: str, batch_size: int = 500) -> None:
         log.exception("[RENorm] job=%s failed: %s", job_id, exc)
         try:
             conn.execute(
-                "UPDATE normalization_jobs SET status='fail', error=?, finished_at=? "
+                "UPDATE normalization_jobs SET status='failed', error=?, finished_at=? "
                 "WHERE job_id=?",
                 [str(exc), datetime.now(timezone.utc).isoformat(), job_id],
             )
@@ -461,8 +461,9 @@ def analyze_descriptions(
 # ---------------------------------------------------------------------------
 
 # (category_name, [keywords that imply membership])
+# Category names aligned with BUILT_IN_CATEGORY_MAP subcategories in category_rules.py
 _CATEGORY_HINTS: list[tuple[str, list[str]]] = [
-    ("Restaurants & Dining", [
+    ("Restaurants", [
         "restaurant", "cafe", "coffee", "pizza", "burger", "grill", "sushi",
         "mcdonald", "starbucks", "chipotle", "subway", "domino", "taco bell",
         "dunkin", "doordash", "grubhub", "uber eats", "panera", "shake shack",
@@ -476,49 +477,64 @@ _CATEGORY_HINTS: list[tuple[str, list[str]]] = [
         "harris teeter", "meijer", "giant", "sprouts", "food lion", "h-e-b",
         "market basket", "stop & shop", "walmart supercenter",
     ]),
-    ("Transportation & Gas", [
+    ("Gas & Fuel", [
         "shell", "bp", "chevron", "exxon", "mobil", "sunoco", "marathon",
         "valero", "phillips 66", "circle k", "wawa", "speedway", "casey",
-        "uber", "lyft", "taxi", "parking", "toll", "transit", "metro", "mta",
         "gas station", "fuel", "petroleum",
     ]),
-    ("Shopping & Retail", [
+    ("Rideshare & Taxis", [
+        "uber", "lyft", "taxi", "parking", "toll", "transit", "metro", "mta",
+    ]),
+    ("General Retail", [
         "amazon", "amzn", "ebay", "etsy", "target", "best buy", "home depot",
         "lowes", "ikea", "nordstrom", "macy", "gap", "h&m", "zara", "uniqlo",
         "tj maxx", "marshalls", "ross", "dollar tree", "dollar general",
         "five below", "bath & body", "victoria secret", "old navy", "banana republic",
         "autozone", "advance auto",
     ]),
-    ("Entertainment & Streaming", [
+    ("Streaming", [
         "netflix", "spotify", "hulu", "disney", "apple tv", "youtube",
         "hbo", "amazon prime", "peacock", "paramount", "crunchyroll",
+    ]),
+    ("Entertainment", [
         "steam", "playstation", "xbox", "nintendo", "twitch",
         "cinema", "theater", "amc", "regal", "ticketmaster", "stubhub",
     ]),
-    ("Health & Fitness", [
+    ("Pharmacy", [
         "pharmacy", "cvs", "walgreens", "rite aid",
+    ]),
+    ("Medical", [
         "hospital", "clinic", "doctor", "medical", "dental", "optometry",
-        "gym", "planet fitness", "la fitness", "24 hour fitness", "equinox",
         "health", "wellness", "urgent care",
     ]),
-    ("Travel & Lodging", [
+    ("Fitness", [
+        "gym", "planet fitness", "la fitness", "24 hour fitness", "equinox",
+    ]),
+    ("Hotels & Lodging", [
         "hotel", "marriott", "hilton", "hyatt", "airbnb", "vrbo", "motel",
-        "booking.com", "expedia", "delta", "united airlines", "american airlines",
+        "booking.com", "expedia",
+    ]),
+    ("Airlines", [
+        "delta", "united airlines", "american airlines",
         "southwest", "jetblue", "spirit", "frontier", "alaska air",
+    ]),
+    ("Rental Cars", [
         "hertz", "enterprise", "avis", "budget rent",
     ]),
-    ("Software & Subscriptions", [
+    ("Internet & Cable", [
         "adobe", "microsoft", "google", "dropbox", "zoom", "slack",
         "github", "notion", "figma", "canva", "cloudflare",
         "aws", "azure", "digitalocean", "openai", "anthropic",
     ]),
-    ("Utilities & Telecom", [
+    ("Utilities", [
         "electric", "water utility", "gas utility", "internet", "cable",
         "comcast", "spectrum", "at&t", "att", "verizon", "t-mobile",
-        "insurance", "geico", "progressive", "state farm", "allstate",
         "power company", "energy",
     ]),
-    ("Financial Services", [
+    ("Insurance", [
+        "insurance", "geico", "progressive", "state farm", "allstate",
+    ]),
+    ("Other Financial", [
         "paypal", "venmo", "cashapp", "zelle",
         "loan", "mortgage", "fidelity", "schwab", "robinhood",
         "coinbase", "crypto", "brokerage", "credit union",

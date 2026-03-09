@@ -246,7 +246,7 @@ def run_with_options(
     except Exception as e:
         log.exception("Pipeline failed: %s", e)
         try:
-            finalize_run(conn, run_id, "fail", counts, notes=str(e))
+            finalize_run(conn, run_id, "failed", counts, notes=str(e))
         except Exception:
             pass
         raise
@@ -296,13 +296,15 @@ def commit_run(run_id: str) -> RunResult:
             run_analytics(conn, Path(state["reports_dir"]), Path(state["master_dir"]))
 
         finalize_run(conn, run_id, "success", counts, notes="committed from preview")
+        # Purge staging rows now that they've been committed to the ledger
+        conn.execute("DELETE FROM transactions_stage WHERE run_id = ?", [run_id])
         log.info("Run %s committed successfully. rows_loaded=%d", run_id, counts["rows_loaded"])
         return RunResult(run_id=run_id, counts=counts)
 
     except Exception as e:
         log.exception("Commit failed for run %s: %s", run_id, e)
         try:
-            finalize_run(conn, run_id, "fail", counts, notes=str(e))
+            finalize_run(conn, run_id, "failed", counts, notes=str(e))
         except Exception:
             pass
         raise

@@ -2129,8 +2129,8 @@ No cloud services, no external dependencies — all data stays on your machine.
     from finance_etl.category_rules import (
         BUILT_IN_CATEGORY_MAP,
         apply_category_rules,
+        create_category_job,
         load_category_rules,
-        resolve_category,
     )
 
     @app.get("/category-rules", tags=["categories"], summary="List all category rules")
@@ -2282,15 +2282,11 @@ No cloud services, no external dependencies — all data stays on your machine.
         Runs asynchronously in a background thread.
         """
         import threading
-        job_id = "catnorm_" + __import__("uuid").uuid4().hex[:16]
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        # Use create_category_job() to pre-compute rows_total so the UI
+        # progress bar shows correct totals from the start
         conn = get_connection(db_path)
         try:
-            conn.execute(
-                "INSERT INTO normalization_jobs (job_id, status, rows_done, created_at) "
-                "VALUES (?, 'pending', 0, ?)",
-                [job_id, now],
-            )
+            job_id = create_category_job(conn)
         finally:
             conn.close()
 
@@ -2618,10 +2614,12 @@ No cloud services, no external dependencies — all data stays on your machine.
             for r in payload.get("merchant_rules", []):
                 conn.execute(
                     """INSERT INTO merchant_rules
-                       (pattern, match_type, merchant, priority, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?)""",
+                       (pattern, match_type, merchant, priority, created_at, updated_at,
+                        conditions, logic)
+                       VALUES (?,?,?,?,?,?,?,?)""",
                     [r["pattern"], r.get("match_type", "contains"), r["merchant"],
-                     r.get("priority", 0), r.get("created_at", now), r.get("updated_at", now)],
+                     r.get("priority", 0), r.get("created_at", now), r.get("updated_at", now),
+                     r.get("conditions"), r.get("logic", "AND")],
                 )
 
             # ── Merchant categories ──────────────────────────────────────────

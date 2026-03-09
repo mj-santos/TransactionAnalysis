@@ -230,7 +230,7 @@ function setRunStatus(status, runId, counts, label) {
   const card = document.getElementById('run-status');
   card.className = `run-status visible ${status}`;
 
-  const icons = { pending: '⏳', running: '⚙️', staged: '👁️', committing: '⚙️', success: '✅', failed: '❌', fail: '❌' };
+  const icons = { pending: '⏳', running: '⚙️', staged: '👁️', committing: '⚙️', success: '✅', failed: '❌' };
   document.getElementById('rs-icon').textContent = icons[status] || '⏳';
   document.getElementById('rs-label').textContent = label || status;
   document.getElementById('rs-id').textContent   = runId ? `#${runId}` : '';
@@ -2307,7 +2307,7 @@ function _pollRenorm() {
         clearInterval(_renormPollInterval);
         _renormJobId = null;
         loadHistory();
-      } else if (data.status === 'fail') {
+      } else if (data.status === 'failed') {
         statusEl.textContent = `Failed: ${data.error || 'unknown error'}`;
         clearInterval(_renormPollInterval);
         _renormJobId = null;
@@ -2556,13 +2556,14 @@ function _renderCategorySuggestions() {
         <span style="color:var(--text-muted); font-size:12px;">→</span>
         <span style="font-size:13px;">${esc(s.suggested_category)}</span>
         <span style="font-size:11px; font-weight:600; color:${confColor}; background:${confColor}18; border-radius:4px; padding:2px 6px;">${s.confidence}</span>
-        <button class="btn btn-primary btn-sm" onclick="acceptCatSuggestion(${realIdx})" title="Assign this category">✓</button>
-        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissCatSuggestion(${realIdx})" title="Dismiss">✗</button>
+        <button class="btn btn-primary btn-sm" onclick="acceptMerchantCatSuggestion(${realIdx})" title="Assign this category">✓</button>
+        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissMerchantCatSuggestion(${realIdx})" title="Dismiss">✗</button>
       </div>`;
   }).join('');
 }
 
-async function acceptCatSuggestion(idx) {
+// BUG-1 fix: renamed from acceptCatSuggestion to avoid collision with category-rules version
+async function acceptMerchantCatSuggestion(idx) {
   const s = _catSuggestions[idx];
   if (!s) return;
   try {
@@ -2576,7 +2577,8 @@ async function acceptCatSuggestion(idx) {
   }
 }
 
-function dismissCatSuggestion(idx) {
+// BUG-1 fix: renamed from dismissCatSuggestion to avoid collision with category-rules version
+function dismissMerchantCatSuggestion(idx) {
   if (_catSuggestions[idx]) _catSuggestions[idx]._dismissed = true;
   _renderCategorySuggestions();
 }
