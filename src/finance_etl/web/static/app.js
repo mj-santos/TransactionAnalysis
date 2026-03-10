@@ -6636,19 +6636,24 @@ function _renderUtilMerchants(merchants) {
     <thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
       <th style="padding:4px 6px;"><input type="checkbox" id="util-merch-select-all" onchange="_utilMerchToggleAll(this)" /></th>
       <th style="padding:4px 6px;">Merchant</th>
-      <th style="padding:4px 6px;">Raw Name</th>
       <th style="padding:4px 6px; text-align:right;">Count</th>
+      <th style="padding:4px 6px; text-align:right;">Total Spend</th>
       <th style="padding:4px 6px;">Category</th>
       <th style="padding:4px 6px;">Last Seen</th>
     </tr></thead><tbody>` +
-    merchants.map(m => `<tr style="border-bottom:1px solid var(--border);" data-merchant="${esc(m.normalized_name)}">
+    merchants.map(m => {
+      const catDisplay = m.assigned_category
+        ? esc(m.assigned_category)
+        : '<span style="color:var(--text-muted);">\u2014 No category \u2014</span>';
+      return `<tr style="border-bottom:1px solid var(--border);" data-merchant="${esc(m.normalized_name)}">
       <td style="padding:4px 6px;"><input type="checkbox" class="util-merch-check" data-merchant="${esc(m.normalized_name)}" onchange="_utilMerchUpdateBulkBar()" /></td>
       <td style="padding:4px 6px;">${esc(m.normalized_name)}</td>
-      <td style="padding:4px 6px; color:var(--text-muted);">${esc(m.raw_name)}</td>
       <td style="padding:4px 6px; text-align:right;" class="mono">${m.txn_count}</td>
-      <td style="padding:4px 6px; cursor:pointer;" onclick="_utilMerchCatClick(this, '${esc(m.normalized_name)}')" title="Click to edit" class="util-cat-cell">${esc(m.assigned_category || '—')}</td>
-      <td style="padding:4px 6px; color:var(--text-muted);">${m.last_seen || '—'}</td>
-    </tr>`).join('') +
+      <td style="padding:4px 6px; text-align:right; font-variant-numeric:tabular-nums;">${_fmt$(m.total_spend || 0)}</td>
+      <td style="padding:4px 6px; cursor:pointer;" onclick="_utilMerchCatClick(this, '${esc(m.normalized_name)}')" title="Click to edit" class="util-cat-cell">${catDisplay}</td>
+      <td style="padding:4px 6px; color:var(--text-muted);">${m.last_seen || '\u2014'}</td>
+    </tr>`;
+    }).join('') +
     '</tbody></table>';
   _utilMerchUpdateBulkBar();
 }
@@ -6658,25 +6663,31 @@ function _filterUtilMerchants() {
   if (!q) { _sortAndRenderMerchants(); return; }
   const filtered = _utilMerchData.filter(m =>
     (m.normalized_name || '').toLowerCase().includes(q) ||
-    (m.raw_name || '').toLowerCase().includes(q) ||
     (m.assigned_category || '').toLowerCase().includes(q)
   );
   _renderUtilMerchants(filtered);
 }
 
 function _utilMerchCatClick(td, merchant) {
-  const current = td.textContent.trim() === '—' ? '' : td.textContent.trim();
+  const current = td.textContent.trim();
+  const currentCat = (current === '—' || current === '— No category —') ? '' : current;
   openCategoryPicker(td, {
-    currentCategory: current,
+    currentCategory: currentCat,
     onSave: async (cat) => {
-      await api('POST', '/merchant-categories', { merchant, category: cat.subcategory });
+      // Write to merchant_category_map — re-normalization happens server-side
+      await api('POST', '/merchant-categories', {
+        merchant,
+        category: cat.subcategory,
+        parent: cat.parent,
+        source: 'user'
+      });
       td.textContent = cat.subcategory;
-      toast(`${merchant} → ${cat.subcategory}`, 'success');
+      toast(merchant + ' → ' + cat.subcategory + ' (all transactions updated)', 'success');
     },
     onRemove: async () => {
       await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
-      td.textContent = '—';
-      toast('Category removed from ' + merchant, 'info');
+      td.innerHTML = '<span style="color:var(--text-muted);">\u2014 No category \u2014</span>';
+      toast('Category removed — ' + merchant + ' transactions will be re-categorized by rules', 'info');
     },
   });
 }
@@ -6713,12 +6724,20 @@ function _utilMerchBulkAssignCat() {
     allowRemove: false,
     placeholder: 'Category for selected…',
     onSave: async (cat) => {
+      const total = _utilMerchSelected.size;
+      toast('Updating ' + total + ' merchants...', 'info', 3000);
       let count = 0;
+      // Sequential per merchant — DuckDB single-writer constraint
       for (const merchant of _utilMerchSelected) {
-        await api('POST', '/merchant-categories', { merchant, category: cat.subcategory });
+        await api('POST', '/merchant-categories', {
+          merchant,
+          category: cat.subcategory,
+          parent: cat.parent,
+          source: 'user'
+        });
         count++;
       }
-      toast(`Category updated for ${count} merchants`, 'success');
+      toast(count + ' merchants updated, all their transactions re-categorized', 'success');
       _utilMerchClearSelection();
       loadUtilMerchants();
     },
@@ -6726,15 +6745,18 @@ function _utilMerchBulkAssignCat() {
 }
 
 async function _utilMerchBulkRemoveCat() {
-  if (!confirm(`Remove category from ${_utilMerchSelected.size} merchants?`)) return;
+  if (!confirm('Remove category from ' + _utilMerchSelected.size + ' merchants? Their transactions will be re-categorized by rules.')) return;
+  const total = _utilMerchSelected.size;
+  toast('Updating ' + total + ' merchants...', 'info', 3000);
   let count = 0;
+  // Sequential per merchant — DuckDB single-writer constraint
   for (const merchant of _utilMerchSelected) {
     try {
       await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
       count++;
     } catch { /* skip errors */ }
   }
-  toast(`Category removed from ${count} merchants`, 'info');
+  toast('Category removed from ' + count + ' merchants, transactions re-categorized by rules', 'info');
   _utilMerchClearSelection();
   loadUtilMerchants();
 }
@@ -6864,9 +6886,29 @@ async function loadUtilHealth() {
           <span class="health-label">Pending duplicate candidates</span>
           <span class="health-value${h.pending_duplicates > 0 ? ' health-warn' : ''}">${h.pending_duplicates}</span>
         </a>
+        <div class="health-metric" style="cursor:default;">
+          <span class="health-label">Orphaned categories</span>
+          <span class="health-value${h.orphaned_categories > 0 ? ' health-warn' : ''}">${h.orphaned_categories}</span>
+          ${h.orphaned_categories > 0 ? '<button class="btn btn-sm btn-primary" style="margin-top:4px;" onclick="_fixOrphanedCategories()">Fix Now</button>' : ''}
+        </div>
       </div>`;
   } catch (err) {
     el.innerHTML = `<span style="color:var(--text-muted);">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+async function _fixOrphanedCategories() {
+  toast('Running full re-normalization...', 'info', 3000);
+  try {
+    const data = await api('POST', '/normalize/apply', {});
+    if (data.job_id) {
+      toast('Re-normalization job started — refresh Data Health when done', 'info', 4000);
+    } else {
+      toast('Re-normalization complete', 'success');
+    }
+    setTimeout(() => loadUtilHealth(), 2000);
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
   }
 }
 

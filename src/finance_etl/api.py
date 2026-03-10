@@ -220,6 +220,8 @@ try:
     class MerchantCategoryRequest(BaseModel):
         merchant:  str = Field(..., description="Merchant name (exact, case-sensitive)")
         category:  str = Field(..., description="Category to assign")
+        parent:    str | None = Field(None, description="Parent category group")
+        source:    str = Field("user", description="Assignment source: 'user' or 'learned'")
 
     class CategoryRuleRequest(BaseModel):
         raw_category: str = Field(..., description="Exact raw category string from bank (or label for grouped rules)")
@@ -2249,19 +2251,24 @@ No cloud services, no external dependencies — all data stays on your machine.
     @app.get("/utilities/merchants", tags=["utilities"],
              summary="Merchant summary list with counts and categories")
     def utilities_merchants():
-        """Return all merchants with their transaction counts, categories, and last seen date."""
+        """Return one row per normalized merchant with transaction count, total spend,
+        category from merchant_category_map, and last seen date."""
         conn = None
         try:
             conn = get_connection(db_path, read_only=True)
             rows = conn.execute(
-                """SELECT COALESCE(merchant, description) AS normalized_name,
-                          description AS raw_name,
-                          COUNT(*) AS txn_count,
-                          COALESCE(category_normalized, category, '') AS assigned_category,
-                          MAX(transaction_date) AS last_seen
-                   FROM transactions_norm
-                   WHERE COALESCE(is_split, FALSE) = FALSE
-                   GROUP BY normalized_name, raw_name, assigned_category
+                """SELECT
+                      tn.merchant AS normalized_name,
+                      COUNT(*) AS txn_count,
+                      SUM(tn.amount) AS total_spend,
+                      mcm.category AS assigned_category,
+                      MAX(tn.transaction_date) AS last_seen
+                   FROM transactions_norm tn
+                   LEFT JOIN merchant_category_map mcm
+                     ON LOWER(tn.merchant) = LOWER(mcm.merchant)
+                   WHERE COALESCE(tn.is_split, FALSE) = FALSE
+                     AND tn.merchant IS NOT NULL AND tn.merchant != ''
+                   GROUP BY tn.merchant, mcm.category
                    ORDER BY txn_count DESC"""
             ).fetchall()
         except Exception as exc:
@@ -2276,9 +2283,9 @@ No cloud services, no external dependencies — all data stays on your machine.
         for r in rows:
             merchants.append({
                 "normalized_name": r[0] or "",
-                "raw_name": r[1] or "",
-                "txn_count": r[2],
-                "assigned_category": r[3],
+                "txn_count": r[1],
+                "total_spend": float(r[2]) if r[2] is not None else 0.0,
+                "assigned_category": r[3] or "",
                 "last_seen": _isoformat(r[4]) if hasattr(r[4], "isoformat") else r[4],
             })
         return {"merchants": merchants, "count": len(merchants)}
@@ -2388,6 +2395,19 @@ No cloud services, no external dependencies — all data stays on your machine.
             pending_dups = conn.execute(
                 "SELECT COUNT(*) FROM duplicate_candidates WHERE status = 'pending'"
             ).fetchone()
+            # Orphaned categories: transactions whose category_normalized
+            # doesn't match their merchant's assigned category in merchant_category_map
+            orphaned = conn.execute("""
+                SELECT COUNT(*)
+                FROM transactions_norm tn
+                INNER JOIN merchant_category_map mcm
+                  ON LOWER(tn.merchant) = LOWER(mcm.merchant)
+                WHERE tn.merchant IS NOT NULL
+                  AND COALESCE(tn.is_split, FALSE) = FALSE
+                  AND COALESCE(tn.category_override, FALSE) = FALSE
+                  AND (tn.category_normalized IS NULL
+                       OR LOWER(tn.category_normalized) != LOWER(mcm.category))
+            """).fetchone()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         finally:
@@ -2402,6 +2422,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "merchants_without_category": merchants_no_cat[0] if merchants_no_cat else 0,
             "no_merchant_match": r[2] or 0,
             "pending_duplicates": pending_dups[0] if pending_dups else 0,
+            "orphaned_categories": orphaned[0] if orphaned else 0,
         }
 
     # -----------------------------------------------------------------------
@@ -2898,23 +2919,28 @@ No cloud services, no external dependencies — all data stays on your machine.
               status_code=201)
     def set_merchant_category(payload: MerchantCategoryRequest):
         """
-        Assign a category to a merchant (source='user').
-        Also backfills historical transactions_norm rows for this merchant.
+        Assign a category to a merchant in merchant_category_map (source='user'),
+        then re-normalize all transactions for that merchant.
         """
+        from finance_etl.merchant_rules import renormalize_merchant
         conn = get_connection(db_path)
         try:
-            assign_category(conn, payload.merchant, payload.category)
+            assign_category(conn, payload.merchant, payload.category,
+                            parent=payload.parent, source=payload.source)
+            updated = renormalize_merchant(conn, payload.merchant)
         finally:
             conn.close()
-        return {"status": "saved"}
+        return {"status": "saved", "transactions_updated": updated}
 
     @app.delete("/merchant-categories/{merchant}", tags=["merchant"],
                 summary="Remove a merchant→category mapping")
     def delete_merchant_category(merchant: str):
-        """Remove a merchant category entry (URL-encode the merchant name)."""
+        """Remove a merchant category entry and re-normalize transactions."""
+        from finance_etl.merchant_rules import renormalize_merchant
         conn = get_connection(db_path)
         try:
             conn.execute("DELETE FROM merchant_category_map WHERE merchant=?", [merchant])
+            renormalize_merchant(conn, merchant)
         finally:
             conn.close()
         return {"status": "deleted"}
@@ -2925,12 +2951,29 @@ No cloud services, no external dependencies — all data stays on your machine.
 
     @app.post("/normalize/apply", tags=["merchant"],
               summary="Start a batch re-normalization job", status_code=202)
-    async def start_renormalize(background_tasks: BackgroundTasks):
+    async def start_renormalize(background_tasks: BackgroundTasks,
+                                body: dict | None = None):
         """
-        Apply all current merchant rules to every row in transactions_norm.
-        Returns a job_id for polling via GET /normalize/{job_id}.
-        Runs asynchronously in a background thread.
+        Apply all current merchant rules to transactions_norm rows.
+
+        If body contains ``merchant_filter``, only re-normalizes that merchant's
+        transactions synchronously and returns immediately.
+        Otherwise runs a full async batch job and returns a job_id for polling.
         """
+        merchant_filter = None
+        if body and isinstance(body, dict):
+            merchant_filter = body.get("merchant_filter")
+
+        if merchant_filter:
+            from finance_etl.merchant_rules import renormalize_merchant
+            conn = get_connection(db_path)
+            try:
+                updated = renormalize_merchant(conn, merchant_filter)
+            finally:
+                conn.close()
+            return {"status": "success", "merchant": merchant_filter,
+                    "transactions_updated": updated}
+
         import threading
         conn = get_connection(db_path)
         try:
