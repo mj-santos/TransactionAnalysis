@@ -256,6 +256,7 @@ _ALL_DATA_DIRS = [
     "data/profiles",
     "data/validation",
     "data/logs",
+    "data/staged",
 ]
 
 
@@ -988,8 +989,9 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn.execute("DELETE FROM transactions_stage WHERE run_id = ?", [run_id])
             conn.execute("DELETE FROM runs WHERE run_id = ?", [run_id])
             _async_runs.pop(run_id, None)
-            from finance_etl.pipeline import _staged_runs
+            from finance_etl.pipeline import _staged_runs, _remove_staged
             _staged_runs.pop(run_id, None)
+            _remove_staged(run_id)
             return {"deleted": True, "run_id": run_id}
         finally:
             conn.close()

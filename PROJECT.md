@@ -700,6 +700,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 |---|---|---|
 | v2.1.0 | 2026-03-10 | Initial PROJECT.md audit of rebuilt repo — identified 5 critical bugs, 8 dead code candidates |
 | v2.1.1 | 2026-03-10 | Fix BUG-1: category normalization polling now calls correct `/normalize/` endpoint |
+| v2.1.2 | 2026-03-10 | Fix BUG-2: staged runs now persist to `data/staged/` and survive server restarts |
 
 ### Version Increment Rules
 
