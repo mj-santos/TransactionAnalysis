@@ -113,6 +113,130 @@ function _updateBadge(id, count) {
   el.style.display = count ? '' : 'none';
 }
 
+// ── Global Transaction Search ────────────────────────────────
+let _gsTimer = null;
+let _gsActiveIdx = -1;   // keyboard-navigated result index
+
+function _debounceGlobalSearch() {
+  clearTimeout(_gsTimer);
+  _gsTimer = setTimeout(_runGlobalSearch, 300);
+}
+
+async function _runGlobalSearch() {
+  const input = document.getElementById('global-search-input');
+  const panel = document.getElementById('global-search-results');
+  const q = (input ? input.value : '').trim();
+  if (q.length < 2) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+  panel.innerHTML = '<div class="gs-status">Searching…</div>';
+  _gsActiveIdx = -1;
+  try {
+    const data = await api('GET', `/transactions/search?q=${encodeURIComponent(q)}&limit=50`);
+    if (!data.rows.length) {
+      panel.innerHTML = '<div class="gs-status">No results</div>';
+      return;
+    }
+    const header = `<div class="gs-status">${data.total_count} result${data.total_count !== 1 ? 's' : ''} for "${esc(data.query)}"</div>`;
+    const rows = data.rows.map((r, i) => {
+      const isCC = r.statement_type === 'credit_card';
+      const badgeCls = isCC ? 'gs-badge-cc' : 'gs-badge-bank';
+      const badgeText = isCC ? 'CC' : 'Bank';
+      const desc = r.merchant || r.description || '';
+      return `<div class="gs-row" data-idx="${i}" data-fp="${esc(r.transaction_fingerprint)}" data-type="${esc(r.statement_type)}" data-date="${esc(r.transaction_date)}" onclick="_gsClickResult(this)">
+        <span class="gs-date">${esc(r.transaction_date)}</span>
+        <span class="gs-desc" title="${esc(r.description)}">${esc(desc)}</span>
+        <span class="gs-amt">${_fmt$(r.amount)}</span>
+        <span class="gs-cat">${esc(r.category_normalized || '')}</span>
+        <span class="gs-badge ${badgeCls}">${badgeText}</span>
+      </div>`;
+    }).join('');
+    panel.innerHTML = header + rows;
+  } catch (err) {
+    panel.innerHTML = `<div class="gs-status">Error: ${esc(err.message)}</div>`;
+  }
+}
+
+function _gsClickResult(el) {
+  const fp = el.dataset.fp;
+  const type = el.dataset.type;
+  const date = el.dataset.date;
+  _closeGlobalSearch();
+  // Navigate to the correct tab
+  const page = type === 'credit_card' ? 'credit-cards' : 'bank-transactions';
+  navigate(page);
+  // Pre-filter to the transaction's date range and highlight it
+  setTimeout(() => {
+    const tabType = type === 'credit_card' ? 'credit_card' : 'bank';
+    // Set date filters to the transaction's month
+    const d = new Date(date);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const firstDay = `${y}-${m}-01`;
+    const lastDay = new Date(y, d.getMonth() + 1, 0);
+    const lastDayStr = `${y}-${m}-${String(lastDay.getDate()).padStart(2, '0')}`;
+    const prefix = type === 'credit_card' ? 'cc' : 'bk';
+    const fromEl = document.getElementById(`${prefix}-date-from`);
+    const toEl   = document.getElementById(`${prefix}-date-to`);
+    if (fromEl) fromEl.value = firstDay;
+    if (toEl)   toEl.value   = lastDayStr;
+    // Reload tab, then highlight the fingerprint
+    loadTxnTab(tabType).then(() => {
+      const row = document.querySelector(`tr[data-fp="${fp}"]`);
+      if (row) {
+        row.style.background = 'rgba(59,130,246,.12)';
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setTimeout(() => { row.style.background = ''; }, 3000);
+      }
+    });
+  }, 100);
+}
+
+function _closeGlobalSearch() {
+  const panel = document.getElementById('global-search-results');
+  if (panel) panel.style.display = 'none';
+  _gsActiveIdx = -1;
+}
+
+function _globalSearchKeydown(e) {
+  const panel = document.getElementById('global-search-results');
+  if (!panel || panel.style.display === 'none') return;
+  const rows = panel.querySelectorAll('.gs-row');
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    _closeGlobalSearch();
+    document.getElementById('global-search-input').blur();
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _gsActiveIdx = Math.min(_gsActiveIdx + 1, rows.length - 1);
+    rows.forEach((r, i) => r.classList.toggle('gs-active', i === _gsActiveIdx));
+    if (rows[_gsActiveIdx]) rows[_gsActiveIdx].scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _gsActiveIdx = Math.max(_gsActiveIdx - 1, 0);
+    rows.forEach((r, i) => r.classList.toggle('gs-active', i === _gsActiveIdx));
+    if (rows[_gsActiveIdx]) rows[_gsActiveIdx].scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  if (e.key === 'Enter' && _gsActiveIdx >= 0 && rows[_gsActiveIdx]) {
+    e.preventDefault();
+    _gsClickResult(rows[_gsActiveIdx]);
+    return;
+  }
+}
+
+// Close search panel when clicking outside
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('global-search-wrap');
+  if (wrap && !wrap.contains(e.target)) _closeGlobalSearch();
+});
+
 // ── API helpers ─────────────────────────────────────────────
 async function api(method, path, body) {
   const opts = { method, headers: {} };
@@ -3219,13 +3343,14 @@ function _renderDashboard(data) {
   const topCat = data.top_categories[0];
   set('dash-top-cat', topCat ? esc(topCat.parent) : '—');
 
-  // Top categories bar chart
+  // Top categories bar chart (clickable for drill-down)
   const catList = document.getElementById('dash-cat-list');
   if (catList && data.top_categories.length) {
     const maxAmt = Math.max(...data.top_categories.map(c => c.amount), 1);
     catList.innerHTML = data.top_categories.map(c => {
       const pct = Math.round(c.amount / maxAmt * 100);
-      return `<div style="margin-bottom:4px;">
+      const jsonParent = JSON.stringify(c.parent).replace(/"/g, '&quot;');
+      return `<div style="margin-bottom:4px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:background .12s;" onclick="openCategoryDrilldown(${jsonParent})" onmouseenter="this.style.background='var(--bg,#f1f5f9)'" onmouseleave="this.style.background=''">
         <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;">
           <span>${esc(c.parent)}</span>
           <span style="font-weight:600;">${_fmt$(c.amount)}</span>
@@ -4379,6 +4504,89 @@ function openMonthlySummary() {
 function closeMonthlySummary() {
   document.getElementById('monthly-summary-modal').classList.add('hidden');
 }
+
+// ── Category Drill-Down from Dashboard ──────────────────────
+let _drillCategory = '';
+let _drillYear = 0;
+let _drillMonth = 0;
+
+async function openCategoryDrilldown(categoryParent) {
+  _drillCategory = categoryParent;
+  _drillYear = _dashYear;
+  _drillMonth = _dashMonth;
+  const monthNames = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const titleEl = document.getElementById('cat-drill-title');
+  titleEl.textContent = `${categoryParent} — ${monthNames[_drillMonth]} ${_drillYear}`;
+  document.getElementById('cat-drill-body').innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Loading…</div>';
+  document.getElementById('category-drilldown-modal').classList.remove('hidden');
+
+  const m = String(_drillMonth).padStart(2, '0');
+  const dateFrom = `${_drillYear}-${m}-01`;
+  const lastDay = new Date(_drillYear, _drillMonth, 0).getDate();
+  const dateTo = `${_drillYear}-${m}-${String(lastDay).padStart(2, '0')}`;
+
+  try {
+    const data = await api('GET',
+      `/transactions?category_parent=${encodeURIComponent(categoryParent)}&date_from=${dateFrom}&date_to=${dateTo}&limit=500&sort_by=amount&sort_dir=asc`
+    );
+    const rows = data.rows || [];
+    if (!rows.length) {
+      document.getElementById('cat-drill-body').innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">No transactions found.</div>';
+      return;
+    }
+    // Filter to rows whose category_parent or category matches
+    const subtotal = rows.reduce((s, r) => s + (r.amount || 0), 0);
+    let html = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
+      <thead><tr style="border-bottom:2px solid var(--border);">
+        <th style="text-align:left; padding:6px 8px;">Date</th>
+        <th style="text-align:left; padding:6px 8px;">Description</th>
+        <th style="text-align:left; padding:6px 8px;">Merchant</th>
+        <th style="text-align:right; padding:6px 8px;">Amount</th>
+        <th style="text-align:left; padding:6px 8px;">Account</th>
+      </tr></thead><tbody>`;
+    html += rows.map(r => `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:5px 8px; white-space:nowrap;">${esc(r.transaction_date)}</td>
+      <td style="padding:5px 8px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(r.description)}">${esc(r.description)}</td>
+      <td style="padding:5px 8px;">${esc(r.merchant || '')}</td>
+      <td style="padding:5px 8px; text-align:right; font-variant-numeric:tabular-nums;">${_fmt$(r.amount)}</td>
+      <td style="padding:5px 8px;">${esc(r.account_name || '')}</td>
+    </tr>`).join('');
+    html += `</tbody><tfoot><tr style="border-top:2px solid var(--border); font-weight:700;">
+      <td colspan="3" style="padding:6px 8px;">Subtotal (${rows.length} transactions)</td>
+      <td style="padding:6px 8px; text-align:right;">${_fmt$(subtotal)}</td>
+      <td></td>
+    </tr></tfoot></table>`;
+    document.getElementById('cat-drill-body').innerHTML = html;
+  } catch (err) {
+    document.getElementById('cat-drill-body').innerHTML = `<div style="text-align:center; padding:40px; color:var(--text-muted);">Error: ${esc(err.message)}</div>`;
+  }
+}
+
+function closeCategoryDrilldown() {
+  document.getElementById('category-drilldown-modal').classList.add('hidden');
+}
+
+function categoryDrilldownViewAll() {
+  closeCategoryDrilldown();
+  // Navigate to the bank transactions tab with category + month pre-filtered
+  // We use bank tab as default since it typically has category data; CC works too
+  navigate('bank-transactions');
+  setTimeout(() => {
+    const m = String(_drillMonth).padStart(2, '0');
+    const dateFrom = `${_drillYear}-${m}-01`;
+    const lastDay = new Date(_drillYear, _drillMonth, 0).getDate();
+    const dateTo = `${_drillYear}-${m}-${String(lastDay).padStart(2, '0')}`;
+    const fromEl = document.getElementById('bk-date-from');
+    const toEl   = document.getElementById('bk-date-to');
+    if (fromEl) fromEl.value = dateFrom;
+    if (toEl)   toEl.value   = dateTo;
+    // Set category filter if it exists
+    const catEl = document.getElementById('bk-category');
+    if (catEl) catEl.value = _drillCategory;
+    loadTxnTab('bank');
+  }, 100);
+}
+
 function summaryPrevMonth() {
   _summaryMonth--;
   if (_summaryMonth < 1) { _summaryMonth = 12; _summaryYear--; }
@@ -4735,7 +4943,12 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (e.key === '?') { showKeyboardHelp(); return; }
-  if (e.key === '/') { e.preventDefault(); _focusSearchField(); return; }
+  if (e.key === '/') {
+    e.preventDefault();
+    const gs = document.getElementById('global-search-input');
+    if (gs) { gs.focus(); gs.select(); } else { _focusSearchField(); }
+    return;
+  }
 
   // Tab numbers 1-9 for sidebar navigation
   if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {

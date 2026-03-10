@@ -1371,7 +1371,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
     def _build_txn_where(
         type, date_from, date_to, account, category, merchant, source, subtype=None,
-        unreviewed_only=False, tag=None,
+        unreviewed_only=False, tag=None, category_parent=None,
     ) -> tuple[list, list]:
         """Build shared WHERE clause + params for /transactions and /transactions/totals."""
         where, params = [], []
@@ -1385,7 +1385,10 @@ No cloud services, no external dependencies — all data stays on your machine.
             where.append("transaction_date <= ?"); params.append(date_to)
         if account:
             where.append("(account_name = ? OR account_id = ?)"); params.extend([account, account])
-        if category:
+        if category_parent:
+            where.append("LOWER(COALESCE(category_parent, category, '')) LIKE ?")
+            params.append(f"%{category_parent.lower()}%")
+        elif category:
             where.append("LOWER(COALESCE(category, '')) LIKE ?")
             params.append(f"%{category.lower()}%")
         if merchant:
@@ -1418,6 +1421,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         date_to:   Optional[str] = Query(None,           description="ISO date upper bound"),
         account:   Optional[str] = Query(None,           description="Account name or ID filter"),
         category:  Optional[str] = Query(None,           description="Category substring filter"),
+        category_parent: Optional[str] = Query(None,     description="Category parent group filter"),
         merchant:  Optional[str] = Query(None,           description="Merchant/description substring"),
         subtype:   Optional[str] = Query(None,           description="transaction_subtype filter: spending|payment|adjustment"),
         source:    Optional[str] = Query(None,           description="run_id to filter by import source; 'all' = no filter"),
@@ -1435,7 +1439,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Pass `source=<run_id>` to filter by a specific import; omit or pass `source=all`
         to show all rows for the given type.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, category_parent=category_parent)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         group_fields = [f.strip() for f in (group_by or "").split(",")
@@ -1483,6 +1487,90 @@ No cloud services, no external dependencies — all data stays on your machine.
             for r in rows_raw
         ]
         return {"columns": col_names, "rows": rows, "count": len(rows), "offset": offset}
+
+    @app.get(
+        "/transactions/search",
+        tags=["transactions"],
+        summary="Global full-text search across all transactions",
+    )
+    def search_transactions(
+        q:     str = Query(..., min_length=2, description="Search query — text or amount operator (>50, <200, 50-100)"),
+        limit: int = Query(50, le=100, description="Max results"),
+    ):
+        """
+        Search across description, merchant, amount, and category_normalized.
+
+        Amount operators:
+        - ``>50``  — amount greater than (absolute value)
+        - ``<200`` — amount less than (absolute value)
+        - ``50-100`` — amount in range (absolute value)
+        - Plain numbers match exactly (absolute value)
+        """
+        import re as _re
+
+        where: list[str] = []
+        params: list = []
+        q_stripped = q.strip()
+
+        # Detect amount operator patterns
+        range_match = _re.fullmatch(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", q_stripped)
+        gt_match = _re.fullmatch(r">\s*(\d+(?:\.\d+)?)", q_stripped)
+        lt_match = _re.fullmatch(r"<\s*(\d+(?:\.\d+)?)", q_stripped)
+        exact_num = _re.fullmatch(r"(\d+(?:\.\d{1,2})?)", q_stripped)
+
+        if range_match:
+            lo, hi = float(range_match.group(1)), float(range_match.group(2))
+            where.append("ABS(amount) BETWEEN ? AND ?")
+            params.extend([lo, hi])
+        elif gt_match:
+            where.append("ABS(amount) > ?")
+            params.append(float(gt_match.group(1)))
+        elif lt_match:
+            where.append("ABS(amount) < ?")
+            params.append(float(lt_match.group(1)))
+        elif exact_num:
+            where.append("ABS(amount) = ?")
+            params.append(float(exact_num.group(1)))
+        else:
+            # Text search: match across description, merchant, category_normalized
+            term = f"%{q_stripped.lower()}%"
+            where.append(
+                "(LOWER(COALESCE(description, '')) LIKE ?"
+                " OR LOWER(COALESCE(merchant, '')) LIKE ?"
+                " OR LOWER(COALESCE(category_normalized, '')) LIKE ?)"
+            )
+            params.extend([term, term, term])
+
+        where_sql = " WHERE " + " AND ".join(where) if where else ""
+        safe_limit = max(1, min(int(limit), 100))
+
+        col_names = [
+            "transaction_date", "description", "merchant", "amount",
+            "category_normalized", "account_name", "statement_type",
+            "transaction_fingerprint",
+        ]
+        try:
+            conn = get_connection(db_path)
+            # Total count (before LIMIT)
+            cnt_sql = f"SELECT COUNT(*) FROM transactions_norm{where_sql}"
+            total_count = conn.execute(cnt_sql, params).fetchone()[0]
+
+            sql = (
+                f"SELECT {', '.join(col_names)} FROM transactions_norm{where_sql}"
+                f" ORDER BY transaction_date DESC"
+                f" LIMIT {safe_limit}"
+            )
+            rows_raw = conn.execute(sql, params).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Search error: {exc}") from exc
+
+        rows = [
+            {col_names[i]: (_isoformat(r[i]) if hasattr(r[i], "isoformat") else r[i])
+             for i in range(len(col_names))}
+            for r in rows_raw
+        ]
+        return {"rows": rows, "count": len(rows), "total_count": total_count, "query": q_stripped}
 
     @app.get(
         "/transactions/totals",

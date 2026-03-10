@@ -68,8 +68,17 @@
 
   <div class="topbar">
     <h2 id="topbar-title">Dashboard</h2>
-    <div id="api-status" style="font-size:12px; color: var(--text-muted);">
-      <span class="status-dot"></span>API connected
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div id="global-search-wrap" style="position:relative;">
+        <input type="text" id="global-search-input" placeholder="Search transactions… ( / )"
+               autocomplete="off"
+               style="width:260px; padding:6px 12px; border-radius:6px; border:1px solid var(--border); font-size:13px; background:var(--card-bg); color:var(--text);"
+               oninput="_debounceGlobalSearch()" onkeydown="_globalSearchKeydown(event)" />
+        <div id="global-search-results" class="global-search-panel" style="display:none;"></div>
+      </div>
+      <div id="api-status" style="font-size:12px; color: var(--text-muted);">
+        <span class="status-dot"></span>API connected
+      </div>
     </div>
   </div>
 
@@ -1625,6 +1634,23 @@
         <input type="checkbox" id="ob-dismiss" /> Don't show again
       </label>
       <button class="btn btn-primary btn-sm" onclick="closeOnboarding()">Got it!</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ CATEGORY DRILL-DOWN MODAL ══════════════ -->
+<div id="category-drilldown-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeCategoryDrilldown()">
+  <div class="modal-dialog" style="max-width:720px; max-height:70vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
+      <span id="cat-drill-title" style="font-size:16px; font-weight:700;"></span>
+      <button class="wm-close" onclick="closeCategoryDrilldown()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted);">×</button>
+    </div>
+    <div id="cat-drill-body" style="overflow-y:auto; flex:1; padding-right:4px;">
+      <div style="text-align:center; padding:40px; color:var(--text-muted);">Loading…</div>
+    </div>
+    <div style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px; flex-shrink:0; display:flex; justify-content:space-between; align-items:center;">
+      <button id="cat-drill-view-all" class="btn btn-primary btn-sm" onclick="categoryDrilldownViewAll()">View All in Transactions</button>
+      <button class="btn btn-secondary btn-sm" onclick="closeCategoryDrilldown()">Close</button>
     </div>
   </div>
 </div>

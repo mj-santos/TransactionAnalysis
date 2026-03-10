@@ -194,12 +194,16 @@ TransactionAnalysis/
 | Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ Working |
 | Settings | `#page-settings` | `loadSettings()` | ✅ Working (BUG-3 fixed) |
 
+### Global Features (visible on all pages)
+
+- **Global Transaction Search**: persistent search bar in topbar; queries `GET /transactions/search?q=<query>&limit=50`; searches description, merchant, amount (supports `>50`, `<200`, `50-100` operators), category_normalized; floating results panel with date, merchant, amount, category, CC/Bank badge; keyboard navigation (↑↓ Enter Esc); `/` shortcut focuses search; click result navigates to correct tab with date pre-filtered and transaction highlighted (3s highlight fade); 300ms debounce, minimum 2 characters; click-outside-to-close
+
 ### Feature Details
 
 **Dashboard (`#page-dashboard`)**
 - MTD spend KPI card, transaction count card, unreviewed count KPI card
 - Month navigation (prev/next arrows) — `dashboardPrevMonth()`, `dashboardNextMonth()`
-- Top categories bar chart (horizontal, CSS-rendered)
+- Top categories bar chart (horizontal, CSS-rendered) — **clickable rows open category drill-down modal** showing all transactions for that category + month with subtotal; "View All in Transactions" navigates to Bank tab pre-filtered
 - Budget tracker with inline add/edit/delete form — `openBudgetForm()`, `saveBudget()`, `deleteBudget()`
 - Budget rebalance suggestions — `loadRebalanceSuggestions()`, `applyRebalance()`: analyses avg monthly spend vs budget, suggests adjustments for categories >=15% over/under, user selects and confirms before applying
 - **Spending Alerts & Thresholds**: in-app alert banners for categories at ≥80% (yellow warning) and ≥100% (red exceeded) of monthly budget; budget status overview card with green/yellow/red status chips per category; color-coded status dots on budget tracker bars; dismissible banners; alerts auto-reset each month
@@ -352,7 +356,7 @@ TransactionAnalysis/
 - API: `GET /backup/export`, `POST /backup/restore`, `GET /backup/status`, `GET/POST/PUT/DELETE /tags`, `POST/DELETE /transactions/tags`, `GET /transactions/{fingerprint}/tags`, `GET /tags/totals`
 
 **Power User Features (UI-only, no new API endpoints)**
-- **Keyboard Shortcuts**: global `keydown` listener — `j`/`k` navigate transaction rows, `r` mark reviewed, `c` inline category edit, `x` toggle select, `/` focus search, `?` show help modal, `1`-`9` switch tabs, `Esc` close modals; highlighted row indicator; keyboard help modal accessible from sidebar footer link
+- **Keyboard Shortcuts**: global `keydown` listener — `j`/`k` navigate transaction rows, `r` mark reviewed, `c` inline category edit, `x` toggle select, `/` focus global search bar, `?` show help modal, `1`-`9` switch tabs, `Esc` close modals/search panel; highlighted row indicator; keyboard help modal accessible from sidebar footer link
 - **Dark/Light Mode Toggle**: sidebar footer button toggles `[data-theme="dark"]` on `<body>`; preference saved in localStorage; `toggleTheme()` / `_updateThemeUI()`
 - **Colorblind Palette Toggle**: sidebar footer button toggles `[data-palette="colorblind"]` on `<body>`; deuteranopia/protanopia-safe colors; preference saved in localStorage; `toggleColorblind()`
 - **Onboarding Flow**: 3-step guided modal for first-time users (import → categories → budgets); shown automatically on first visit; dismissible; "Don't show again" saved in localStorage; `_checkOnboarding()` / `onboardingGo()` / `closeOnboarding()`
@@ -828,7 +832,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.14.0
+**Current Version:** v2.15.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -856,6 +860,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.13.1 | 2026-03-10 | Fix BUG-6/7/8: income classification — CC payments and refunds no longer counted as income; all income queries now require `amount > 0 AND statement_type = 'bank'`; applied to Monthly Summary, Annual Report, Cash Flow, transaction totals, tag totals, and analytics CSV reports; 3 regression tests added |
 | v2.13.2 | 2026-03-10 | Centralized income filter constant (`INCOME_FILTER` in `utils/query_helpers.py`); replaced all 10 inline income conditions with constant reference; added custom report builder regression test and tripwire test for constant integrity; 264 total tests |
 | v2.14.0 | 2026-03-10 | Collapsible panels + scroll containers on Merchants and Categories pages; each card panel gets expand/collapse toggle with item count badges; suggestion lists and rule tables capped with `max-height` + `overflow-y: auto`; collapse state persisted in localStorage; auto-expand on form open; responsive breakpoint for narrow viewports |
+| v2.15.0 | 2026-03-10 | Global transaction search + dashboard category drill-down; new `GET /transactions/search` endpoint with text and amount operators (>, <, range); persistent search bar in topbar visible on all pages; `/` shortcut focuses search; floating results panel with keyboard nav (↑↓ Enter Esc); click result navigates to CC/Bank tab with date pre-filtered and transaction highlighted; dashboard top-categories bar chart rows are now clickable — opens drill-down modal showing all transactions for that category + month with subtotal; "View All in Transactions" navigates to Bank tab with category pre-filtered; new `category_parent` filter on `GET /transactions` |
 
 ### Version Increment Rules
 
@@ -898,7 +903,8 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `POST` | `/runs/{run_id}/commit` | runs | Commit staged run to ledger | 🟢 Called |
 | `DELETE` | `/runs/{run_id}` | runs | Delete run (optionally preserve transactions) | 🟢 Called |
 | `GET` | `/transactions/sources` | transactions | List available import sources per statement type | 🟢 Called |
-| `GET` | `/transactions` | transactions | Query transactions with filters/grouping/sort/pagination | 🟢 Called |
+| `GET` | `/transactions` | transactions | Query transactions with filters/grouping/sort/pagination (includes `category_parent` filter) | 🟢 Called |
+| `GET` | `/transactions/search` | transactions | Global full-text search across description, merchant, amount, category; supports amount operators (`>`, `<`, range) | 🟢 Called |
 | `GET` | `/transactions/totals` | transactions | Aggregate totals for filtered transactions | 🟢 Called |
 | `GET` | `/transactions/unreviewed-count` | transactions | Count of all unreviewed transactions | 🟢 Called |
 | `POST` | `/transactions/mark-reviewed` | transactions | Mark specific transactions as reviewed (by fingerprint) | 🟢 Called |
