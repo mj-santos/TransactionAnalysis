@@ -445,10 +445,10 @@ def create_app(
     # -----------------------------------------------------------------------
 
     app = FastAPI(
-        title="finance_etl",
+        title="Spendly",
         version="2.0.0",
         description="""
-## finance_etl API
+## Spendly API
 
 A **fully local, deterministic** ETL pipeline for bank and credit-card transaction CSVs.
 No cloud services, no external dependencies — all data stays on your machine.
@@ -482,7 +482,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 | `failed` | Pipeline or commit error — check the `error` field |
 """,
         contact={
-            "name": "finance_etl on GitHub",
+            "name": "Spendly on GitHub",
             "url": "https://github.com/mj-santos/TransactionAnalysis",
         },
         license_info={
@@ -1217,6 +1217,15 @@ No cloud services, no external dependencies — all data stays on your machine.
     # Settings + Logs
     # -----------------------------------------------------------------------
 
+    @app.get("/version", tags=["ui"], summary="Get application version")
+    def get_version():
+        try:
+            from importlib.metadata import version as _pkg_version
+            ver = _pkg_version("finance_etl")
+        except Exception:
+            ver = "unknown"
+        return {"version": ver}
+
     @app.get(
         "/settings",
         tags=["ui"],
@@ -1813,7 +1822,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             )
             html = (
                 "<!doctype html><html><head><meta charset=utf-8>"
-                f"<title>Metric not found — finance_etl</title>{_DOCS_STYLE}</head>"
+                f"<title>Metric not found — Spendly{_DOCS_STYLE}</head>"
                 f"<body><div class='wrap'>"
                 f"<a class='back' href='javascript:history.back()'>← Back</a>"
                 f"<h1>Unknown metric: <code>{topic}</code></h1>"
@@ -2751,7 +2760,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=500, detail=f"Export failed: {exc}") from exc
 
         ts = _dt.datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
-        filename = f"finance_etl_backup_{ts}.json"
+        filename = f"spendly_backup_{ts}.json"
         return FastAPIResponse(
             content=body,
             media_type="application/json",
@@ -3037,6 +3046,6 @@ No cloud services, no external dependencies — all data stays on your machine.
         index = web_dir / "index.html"
         if index.exists():
             return HTMLResponse(content=index.read_text(encoding="utf-8"))
-        return HTMLResponse(content="<h1>finance_etl API</h1><p>UI not installed.</p>")
+        return HTMLResponse(content="<h1>Spendly API</h1><p>UI not installed.</p>")
 
     return app

@@ -1,4 +1,4 @@
-# PROJECT.md — finance_etl
+# PROJECT.md — Spendly (package: finance_etl)
 > Persistent memory and source of truth for all development sessions.
 > **Update this file whenever features, schema, or file structure change.**
 
@@ -6,7 +6,7 @@
 
 ## 1. APP OVERVIEW
 
-**finance_etl** is a fully local, deterministic ETL pipeline and web dashboard for importing, normalizing, categorizing, and analyzing personal bank and credit-card transaction CSVs. It runs entirely on the user's machine — no cloud, no sync, no external services. All data lives in a single DuckDB file on disk.
+**Spendly** (Python package: `finance_etl`) is a fully local, deterministic ETL pipeline and web dashboard for importing, normalizing, categorizing, and analyzing personal bank and credit-card transaction CSVs. It runs entirely on the user's machine — no cloud, no sync, no external services. All data lives in a single DuckDB file on disk.
 
 **Who it's for:** Individual users who export CSVs from their bank(s) and want a structured, queryable ledger with analytics, merchant normalization, and category tracking.
 
@@ -67,9 +67,6 @@ TransactionAnalysis/
 │   └── docker-publish.yml      ← publishes Docker image to registry on push
 │
 ├── config/
-│   ├── canonical_schema.yaml   ← ⚠️ reference-only; NOT read by any active code path
-│   ├── categories/
-│   │   └── rules.yaml          ← ⚠️ UNUSED — superseded by DB table + BUILT_IN_CATEGORY_MAP
 │   └── mappings/               ← YAML bank column mapping files (used by CLI; wizard generates these)
 │       ├── example_debit_credit.yaml
 │       └── example_signed_amount.yaml
@@ -168,8 +165,6 @@ TransactionAnalysis/
 
 **Potentially unused / orphaned files:**
 - `setup_wizard.py` (repo root) — standalone script that duplicates `src/finance_etl/wizard/setup_wizard.py`; the web wizard has superseded both.
-- `config/categories/rules.yaml` — YAML category rules are NOT read by any active code path; the DB `category_rules` table + hardcoded `BUILT_IN_CATEGORY_MAP` are the active sources.
-- `config/canonical_schema.yaml` — reference documentation only; NOT imported by any Python code.
 - `src/finance_etl/wizard/` — the subpackage is only invoked via `cli.py`'s `finance_etl wizard` command. No web API endpoint references the `wizard/` subpackage directly. If the CLI wizard command is removed, the entire `wizard/` subpackage becomes dead code.
 - `pytest.ini` — duplicates the `[tool.pytest.ini_options]` block in `pyproject.toml` with identical settings. pytest picks up `pytest.ini` first; the `pyproject.toml` section is redundant.
 - `config/wizard_profiles/` — referenced in PROJECT.md v1 tree but the directory does not exist in the repository (created at runtime by the wizard).
@@ -189,9 +184,9 @@ TransactionAnalysis/
 | Bank Transactions | `#page-bank-transactions` | `loadTxnTab('bank')` | ✅ Working |
 | Reports | `#page-reports` | `loadReports()` | ✅ Working |
 | Merchants | `#page-merchant-rules` | `loadMerchantRules()`, `loadUncategorized()` | ✅ Working |
-| Categories | `#page-category-rules` | `loadCategoryRules()` | ⚠️ Partial — Apply Normalization button broken (see BUG-1) |
+| Categories | `#page-category-rules` | `loadCategoryRules()` | ✅ Working (BUG-1 fixed) |
 | Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ Working |
-| Settings | `#page-settings` | `loadSettings()` | ⚠️ Partial — settings reset on server restart (see BUG-4) |
+| Settings | `#page-settings` | `loadSettings()` | ✅ Working (BUG-3 fixed) |
 
 ### Feature Details
 
@@ -275,7 +270,7 @@ TransactionAnalysis/
   - Maps raw bank category → normalized category + parent group
   - Inline editor form with parent group dropdown (fixed list of 12 parents)
 - Apply Normalization button: `startCategoryNormalize()` → `POST /category-rules/apply` (background job)
-  - **❌ BROKEN**: polling calls `GET /category-normalize/{jobId}` which does NOT exist; correct endpoint is `GET /normalize/{job_id}` (see BUG-1)
+  - ~~**❌ BROKEN**: polling fixed in v2.1.1 (BUG-1)~~
 - API: Full CRUD on `/category-rules`, `/category-rules/apply`, `/category-rules/suggestions`, `/merchant-categories/suggestions`
 
 **Recurring Transactions (`#page-recurring-transactions`)**
@@ -310,7 +305,7 @@ TransactionAnalysis/
     - `confirmRestore()` → `POST /backup/restore`; auto-snapshot saved before overwriting
     - Supports v1 (legacy) and v2 backup files; v1 auto-migrated to v2 on restore
   - Auto-backup on every successful import commit (max 5 rotated in `data/auto_backups/`)
-- **⚠️ Settings are in-memory only** — `app.state.ui_settings` resets to defaults on server restart
+- ~~**⚠️ Settings were in-memory only** — fixed in v2.1.3 (BUG-3); now persisted to `data/ui_settings.json`~~
 - API: `GET /backup/export`, `POST /backup/restore`, `GET /backup/status`
 
 ---
@@ -406,7 +401,7 @@ Rows exist only during preview phase; deleted after commit or discard.
 | `rows_loaded` | BIGINT | Base DDL | |
 | `errors_count` | INTEGER | Base DDL | |
 | `notes` | TEXT | Base DDL | |
-| `imported_file` | TEXT | Migration only | Filename of uploaded file — **NOT in base DDL** |
+| `imported_file` | TEXT | Base DDL | Filename of uploaded file |
 
 ---
 
@@ -641,7 +636,7 @@ Single-row table seeded with `1` on first migration run.
 - **Preview-then-commit workflow**: Every import run goes through a `staged` state where the user reviews rows before they hit the ledger. The "Commit" step is a separate API call.
 - **Deterministic fingerprinting**: Each transaction row gets a `transaction_fingerprint` built from hash(date + description + amount + account). This is the dedup key.
 - **Background threads (not async workers)**: Normalization and category-apply jobs run in Python threads via `BackgroundTasks`. No Celery, Redis, or worker queue. The UI polls `/normalize/{job_id}` every 1500ms.
-- **`_staged_runs` is process-local**: Staged run state is stored in `pipeline._staged_runs: dict[str, dict]`. A server restart loses it.
+- **`_staged_runs` is persisted**: Staged run state is stored in `pipeline._staged_runs: dict[str, dict]` in memory and persisted to `data/staged/` as JSON sidecar files (BUG-2 fix).
 - **YAML wizard profiles** persist column mappings per institution/account. On re-upload, the wizard auto-matches headers.
 - **`source='user'` vs `source='learned'`** in `merchant_category_map`: User-assigned categories are never overwritten by the learn mechanism.
 
@@ -684,7 +679,8 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.1.0
+**Current Version:** v2.3.0
+**App Name:** Spendly
 **Project Codename:** Ledger
 
 ### Changelog
@@ -696,6 +692,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.1.2 | 2026-03-10 | Fix BUG-2: staged runs now persist to `data/staged/` and survive server restarts |
 | v2.1.3 | 2026-03-10 | Fix BUG-3: ui_settings now persist to `data/ui_settings.json` across restarts |
 | v2.2.0 | 2026-03-10 | Quick wins: fix BUG-4 (backup restore now includes `imported_file`), fix BUG-5 (delete run deletes transactions_norm by `run_id` directly), add `imported_file` to base DDL, remove dead code (`resolve_category`, `get_unmapped_categories`, `get_category_suggestions`), remove unused config files (`rules.yaml`, `canonical_schema.yaml`) |
+| v2.3.0 | 2026-03-10 | Renamed app to Spendly; sidebar version display now dynamic via `GET /version` endpoint |
 
 ### Version Increment Rules
 
@@ -709,6 +706,13 @@ Increment rules:
 Claude Code must add a row to the changelog on every commit that touches `src/`, `web/`, or `tests/`. Format:
 
 | v2.1.1 | YYYY-MM-DD | \<one line description of what changed\> |
+
+### Commit Message Rules
+
+- Never append session URLs or session IDs to commit messages (e.g. do NOT add: `https://claude.ai/code/session_011...`)
+- Commit messages must be clean, descriptive, and human-readable only
+- Format: `<type>: <short description>`
+- Types: `fix`, `feat`, `refactor`, `docs`, `test`, `chore`
 
 ---
 
@@ -740,6 +744,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/reports/{name}` | reports | Download a report CSV | 🟢 Called |
 | `POST` | `/reports/query` | reports | Run a custom parameterized report query | 🟢 Called |
 | `GET` | `/charts/{name}` | reports | Get report as JSON for charting | 🟢 Called |
+| `GET` | `/version` | ui | Get app version from pyproject.toml | 🟢 Called |
 | `GET` | `/settings` | ui | Get current settings | 🟢 Called |
 | `PATCH` | `/settings` | ui | Update settings | 🟢 Called |
 | `GET` | `/logs` | ui | Get last N lines of latest log file | 🟢 Called |

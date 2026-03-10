@@ -39,7 +39,7 @@ def test_run_with_options_honors_supplied_run_id(monkeypatch, tmp_path: Path):
 
     supplied_run_id = "fixed-run-id"
 
-    def fake_create_run(_conn, run_id, _files_count, statement_type=None, run_label=None):
+    def fake_create_run(_conn, run_id, _files_count, statement_type=None, run_label=None, imported_file=None):
         assert run_id == supplied_run_id
         raise RuntimeError("stop-after-assert")
 

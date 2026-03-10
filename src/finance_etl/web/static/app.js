@@ -1,5 +1,5 @@
 /* =========================================================
-   finance_etl  —  Web UI  app.js
+   Spendly  —  Web UI  app.js
    ========================================================= */
 
 'use strict';
@@ -1039,6 +1039,13 @@ function esc(str) {
 }
 
 // ── Boot ───────────────────────────────────────────────────────
+(async function loadVersion() {
+  try {
+    const r = await api('GET', '/version');
+    const el = document.getElementById('sidebar-version');
+    if (el && r.version) el.textContent = 'v' + r.version;
+  } catch (_) { /* ignore */ }
+})();
 loadSettings();
 loadDashboard();
 refreshUnreviewedBadge();
