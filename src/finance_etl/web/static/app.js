@@ -1141,12 +1141,14 @@ async function previewBackup(input) {
     const data = payload.data || payload;  // v1 has flat keys, v2 has .data wrapper
     const isV2 = ver >= 2;
 
-    let html = `<p><strong>Backup version:</strong> ${esc(String(ver))}</p>`;
-    if (payload.created_at) html += `<p><strong>Created:</strong> ${esc(payload.created_at)}</p>`;
-    if (payload.app_version) html += `<p><strong>App version:</strong> ${esc(payload.app_version)}</p>`;
+    let html = '<div class="restore-modal-meta">';
+    html += `<p><span style="color:var(--text-muted);">Backup version</span> <strong>${esc(String(ver))}</strong></p>`;
+    if (payload.created_at) html += `<p><span style="color:var(--text-muted);">Created</span> <strong>${esc(payload.created_at)}</strong></p>`;
+    if (payload.app_version) html += `<p><span style="color:var(--text-muted);">App version</span> <strong>${esc(payload.app_version)}</strong></p>`;
+    html += '</div>';
 
-    html += '<table style="width:100%; font-size:12px; border-collapse:collapse; margin-top:8px;">';
-    html += '<tr style="border-bottom:1px solid var(--border);"><th style="text-align:left; padding:4px;">Table</th><th style="text-align:right; padding:4px;">Rows</th></tr>';
+    html += '<table>';
+    html += '<tr><th style="text-align:left;">Table</th><th style="text-align:right;">Rows</th></tr>';
 
     // Count rows in the backup for each table
     const tables = isV2
@@ -1154,17 +1156,19 @@ async function previewBackup(input) {
       : ['merchant_rules','merchant_categories','category_rules','budget_goals','transactions'];
     for (const t of tables) {
       const arr = (isV2 ? data[t] : payload[t]) || [];
-      html += `<tr><td style="padding:4px;">${esc(t)}</td><td style="text-align:right; padding:4px;">${Array.isArray(arr) ? arr.length : '?'}</td></tr>`;
+      const cnt = Array.isArray(arr) ? arr.length : '?';
+      const cls = cnt === 0 ? ' class="zero-row"' : '';
+      html += `<tr${cls}><td>${esc(t)}</td><td style="text-align:right;">${cnt}</td></tr>`;
     }
     html += '</table>';
 
     // Wizard profiles count
     const wp = payload.wizard_profiles;
     if (wp && typeof wp === 'object') {
-      html += `<p style="margin-top:8px;"><strong>Wizard profiles:</strong> ${Object.keys(wp).length}</p>`;
+      html += `<p style="margin-top:10px; font-size:13px;"><span style="color:var(--text-muted);">Wizard profiles</span> <strong>${Object.keys(wp).length}</strong></p>`;
     }
 
-    html += '<p style="margin-top:12px; color:#e74c3c; font-weight:600;">This will replace ALL existing data. A snapshot will be saved automatically.</p>';
+    html += '<div class="restore-warning-box">This will replace ALL existing data. A snapshot will be saved automatically.</div>';
 
     document.getElementById('restore-preview-body').innerHTML = html;
     document.getElementById('restore-preview-modal').style.display = 'flex';
@@ -2342,6 +2346,8 @@ function _txnFilters(type) {
     subtype:         document.getElementById(`${p}-subtype`)?.value   || '',  // CC only
     group_by:        document.getElementById(`${p}-group-by`)?.value  || '',
     unreviewed_only: document.getElementById(`${p}-unreviewed-only`)?.checked || false,
+    no_merchant:     document.getElementById(`${p}-no-merchant`)?.checked || false,
+    no_category:     document.getElementById(`${p}-no-category`)?.checked || false,
     tag:             document.getElementById(`${p}-tag`)?.value       || '',
   };
 }
@@ -2375,6 +2381,8 @@ async function loadTxnTab(type, reset = true) {
   if (f.group_by)  qs.set('group_by',  f.group_by);
   if (f.source && f.source !== 'all') qs.set('source', f.source);
   if (f.unreviewed_only) qs.set('unreviewed_only', 'true');
+  if (f.no_merchant)     qs.set('no_merchant', 'true');
+  if (f.no_category)     qs.set('no_category', 'true');
   if (f.tag)       qs.set('tag', f.tag);
 
   // Totals endpoint uses the same filter params (no pagination or sort)
@@ -2387,6 +2395,8 @@ async function loadTxnTab(type, reset = true) {
   if (f.subtype)   tqs.set('subtype',   f.subtype);
   if (f.source && f.source !== 'all') tqs.set('source', f.source);
   if (f.unreviewed_only) tqs.set('unreviewed_only', 'true');
+  if (f.no_merchant)     tqs.set('no_merchant', 'true');
+  if (f.no_category)     tqs.set('no_category', 'true');
   if (f.tag)       tqs.set('tag', f.tag);
 
   if (reset) {
@@ -2470,6 +2480,10 @@ function clearTxnFilters(type) {
   if (grp) grp.value = '';
   const unrev = document.getElementById(`${p}-unreviewed-only`);
   if (unrev) unrev.checked = false;
+  const noMerch = document.getElementById(`${p}-no-merchant`);
+  if (noMerch) noMerch.checked = false;
+  const noCat = document.getElementById(`${p}-no-category`);
+  if (noCat) noCat.checked = false;
   _txnState[type].sortBy  = 'transaction_date';
   _txnState[type].sortDir = 'desc';
   loadTxnTab(type);
