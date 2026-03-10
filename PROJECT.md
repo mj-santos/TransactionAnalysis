@@ -867,6 +867,16 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 9 tables + wizard profiles) | 🟢 Called |
 | `POST` | `/backup/restore` | backup | Restore from v1 or v2 JSON backup (auto-migrates, auto-snapshots) | 🟢 Called |
 | `GET` | `/backup/status` | backup | Backup system status: last export, auto-backups list, table counts | 🟢 Called |
+| `GET` | `/savings-goals` | savings | List all savings goals | 🟢 Called |
+| `POST` | `/savings-goals` | savings | Create a savings goal | 🟢 Called |
+| `PUT` | `/savings-goals/{id}` | savings | Update a savings goal | 🟢 Called |
+| `DELETE` | `/savings-goals/{id}` | savings | Delete a savings goal | 🟢 Called |
+| `POST` | `/savings-goals/{id}/update-progress` | savings | Add/set manual progress on a goal | 🟢 Called |
+| `GET` | `/savings-goals/suggestions` | savings | Suggest monthly savings from avg net cash flow | 🟢 Called |
+| `POST` | `/monthly-summaries/generate` | summaries | Generate or regenerate a monthly summary | 🟢 Called |
+| `GET` | `/monthly-summaries` | summaries | List all stored monthly summaries | 🟢 Called |
+| `GET` | `/monthly-summaries/{year}/{month}` | summaries | Get stored summary or generate on-the-fly | 🟢 Called |
+| `DELETE` | `/monthly-summaries/{year}/{month}` | summaries | Delete a stored monthly summary | 🟢 Called |
 | `GET` | `/` | ui | Serve web UI (index.html) | 🟢 Entry point |
 | `GET` | `/docs` | (FastAPI auto) | Interactive API documentation | 🟢 Auto-generated |
 
