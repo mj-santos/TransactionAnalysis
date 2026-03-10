@@ -308,7 +308,7 @@ TransactionAnalysis/
   - Last auto-backup timestamp and count display — `loadBackupStatus()` → `GET /backup/status`
   - Current database table row counts grid
   - Download Full Backup (JSON) button — `downloadBackup()` → `GET /backup/export`
-    - Exports all 8 tables + wizard profile YAML files; timestamped filename
+    - Exports all 9 tables + wizard profile YAML files; timestamped filename
   - File picker with preview modal — `previewBackup()` → client-side JSON parse
     - Shows backup version, creation date, row counts per table before confirming
     - `confirmRestore()` → `POST /backup/restore`; auto-snapshot saved before overwriting
@@ -558,7 +558,7 @@ Single-row table seeded with `1` on first migration run. Used by the backup syst
 - ~~**`_CATEGORY_HINTS` naming mismatch**~~ — **FIXED.** Hint category names in `merchant_rules.py` now use subcategory names from `BUILT_IN_CATEGORY_MAP` (e.g. "Restaurants" not "Restaurants & Dining", "Gas & Fuel" not "Transportation & Gas"). The monolithic entries were split into more granular categories matching the taxonomy.
 - **`min_transactions = 3`** in `analyze_descriptions()` is hardcoded. No UI control.
 - ~~**Backup restore missing compound rule fields**~~ — **FIXED.** Restore INSERT for `merchant_rules` now includes `conditions` and `logic` columns, preserving compound rule configurations across backup/restore cycles.
-- ~~**Backup was partial (v1)**~~ — **FIXED.** Backup system upgraded to v2: exports all 8 DuckDB tables + wizard profile YAML files. Restore auto-migrates v1 backups to v2 format. Auto-snapshots saved before overwriting. Auto-backup on every successful import commit with rotation (max 5 files).
+- ~~**Backup was partial (v1)**~~ — **FIXED.** Backup system upgraded to v2: exports all 9 DuckDB tables + wizard profile YAML files. Restore auto-migrates v1 backups to v2 format. Auto-snapshots saved before overwriting. Auto-backup on every successful import commit with rotation (max 5 files).
 
 ### Duplicate Logic
 

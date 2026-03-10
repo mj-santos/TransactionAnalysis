@@ -865,7 +865,10 @@ function _renderRecurringList(patterns, container) {
   container.innerHTML = html;
 }
 
-/** Mark a merchant as recurring (or not) via the override API. */
+/** Mark a merchant as recurring (or not) via the override API.
+ *  Setting is_recurring=false creates a "force-unmark" override that
+ *  suppresses auto-detection for that merchant; it does NOT delete the
+ *  override row (use DELETE /recurring/override/{merchant} for that). */
 async function toggleRecurring(merchant, isRecurring) {
   try {
     await api('POST', '/recurring/override', { merchant, is_recurring: isRecurring });

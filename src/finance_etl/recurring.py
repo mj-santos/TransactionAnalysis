@@ -115,6 +115,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
         if len(txns) < MIN_OCCURRENCES:
             continue
 
+        # Deduplicate dates (same merchant + same day = one occurrence)
+        # so that e.g. two Amazon charges on the same day don't inflate count
         dates = sorted(set(t[0] for t in txns))
         if len(dates) < MIN_OCCURRENCES:
             continue
@@ -151,7 +153,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
             continue
 
         freq = _classify_frequency(avg_interval)
-        # Confidence: higher with more occurrences and lower CV
+        # Confidence score: scales linearly with occurrences (saturates at 6)
+        # and penalises interval jitter.  A 6+ hit pattern with CV=0 → 1.0.
         confidence = min(1.0, (len(dates) / 6.0)) * (1.0 - cv)
 
         last_date = dates[-1]
@@ -182,10 +185,12 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
 
     results: list[dict[str, Any]] = []
 
-    # Auto-detected entries (apply override removals)
+    # Auto-detected entries — skip any the user has explicitly unmarked.
+    # Note: `is False` (not `not`) is intentional — we only skip when the
+    # user has set is_recurring=False, not when the key is simply absent.
     for merchant, pat in auto_results.items():
         if overrides.get(merchant) is False:
-            continue  # user explicitly unmarked
+            continue
         results.append(_pattern_to_dict(pat))
 
     # User-marked entries not in auto-detection
