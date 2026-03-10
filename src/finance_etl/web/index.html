@@ -107,7 +107,10 @@
       <div class="card">
         <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
           <span>Budget Tracker</span>
-          <button class="btn btn-secondary btn-sm" onclick="openBudgetForm()">+ Set Budget</button>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-secondary btn-sm" onclick="loadRebalanceSuggestions()">Rebalance</button>
+            <button class="btn btn-secondary btn-sm" onclick="openBudgetForm()">+ Set Budget</button>
+          </div>
         </div>
         <div id="dash-budget-list" style="display:flex; flex-direction:column; gap:8px; margin-top:4px;"></div>
         <!-- Budget form (inline) -->
@@ -131,6 +134,24 @@
             <button class="btn btn-secondary btn-sm" onclick="closeBudgetForm()">Cancel</button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- Budget Rebalance Suggestions -->
+    <div id="rebalance-panel" class="card" style="display:none; margin-bottom:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Budget Rebalance Suggestions</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="rebalance-status" style="font-size:12px; color:var(--text-muted);"></span>
+          <button class="btn btn-secondary btn-sm" onclick="hideRebalancePanel()">Dismiss</button>
+        </div>
+      </div>
+      <p id="rebalance-intro" style="font-size:13px; color:var(--text-muted); margin-bottom:12px;"></p>
+      <div id="rebalance-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+      <div id="rebalance-actions" style="display:flex; gap:8px; margin-top:12px;">
+        <button class="btn btn-primary btn-sm" onclick="applyRebalance()">Apply Selected</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectAllRebalance(true)">Select All</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectAllRebalance(false)">Deselect All</button>
       </div>
     </div>
 

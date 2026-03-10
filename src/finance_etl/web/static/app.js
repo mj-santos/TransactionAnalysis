@@ -2961,6 +2961,130 @@ async function deleteBudget(id) {
   }
 }
 
+// ── Budget Rebalancing ────────────────────────────────────────
+
+let _rebalanceSuggestions = [];
+
+async function loadRebalanceSuggestions() {
+  const panel = document.getElementById('rebalance-panel');
+  const list = document.getElementById('rebalance-list');
+  const status = document.getElementById('rebalance-status');
+  const intro = document.getElementById('rebalance-intro');
+  if (!panel || !list) return;
+
+  panel.style.display = '';
+  status.textContent = 'Analysing…';
+  list.innerHTML = '';
+
+  try {
+    const data = await api('GET', '/budgets/rebalance');
+    if (data.message) {
+      intro.textContent = data.message;
+      status.textContent = '';
+      list.innerHTML = '';
+      document.getElementById('rebalance-actions').style.display = 'none';
+      _rebalanceSuggestions = [];
+      return;
+    }
+
+    _rebalanceSuggestions = data.suggestions || [];
+    if (!_rebalanceSuggestions.length) {
+      intro.textContent = 'All budgets are well-balanced — no adjustments needed.';
+      status.textContent = '';
+      document.getElementById('rebalance-actions').style.display = 'none';
+      return;
+    }
+
+    intro.textContent = `Based on ${data.months_analysed} months of data (${data.data_span_days} days). Select suggestions to apply.`;
+    status.textContent = `${_rebalanceSuggestions.length} suggestion${_rebalanceSuggestions.length !== 1 ? 's' : ''}`;
+    document.getElementById('rebalance-actions').style.display = '';
+
+    _renderRebalanceSuggestions();
+  } catch (err) {
+    status.textContent = `Error: ${err.message}`;
+    _rebalanceSuggestions = [];
+  }
+}
+
+function _renderRebalanceSuggestions() {
+  const list = document.getElementById('rebalance-list');
+  if (!list) return;
+
+  list.innerHTML = _rebalanceSuggestions.map((s, i) => {
+    const label = s.category ? `${s.parent} → ${s.category}` : s.parent;
+    const isOver = s.direction === 'over';
+    const dirColor = isOver ? '#ef4444' : '#22c55e';
+    const arrow = isOver ? '▲' : '▼';
+    const diffSign = isOver ? '+' : '-';
+
+    return `<div style="display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--bg-alt,#f8faff); border-radius:8px; border:1px solid var(--border);">
+      <input type="checkbox" id="rb-chk-${i}" checked style="flex-shrink:0;" />
+      <div style="flex:1; min-width:0;">
+        <div style="font-size:13px; font-weight:600;">${esc(label)}</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+          Avg actual: ${_fmt$(s.avg_monthly_actual)}/mo
+          <span style="color:${dirColor}; font-weight:600; margin-left:6px;">
+            ${arrow} ${diffSign}${_fmt$(Math.abs(s.diff))} (${Math.abs(s.diff_pct)}% ${s.direction})
+          </span>
+        </div>
+      </div>
+      <div style="text-align:right; flex-shrink:0;">
+        <div style="font-size:12px; color:var(--text-muted);">Current</div>
+        <div style="font-size:14px; font-weight:600;">${_fmt$(s.current_budget)}</div>
+      </div>
+      <div style="font-size:16px; color:var(--text-muted);">→</div>
+      <div style="text-align:right; flex-shrink:0;">
+        <div style="font-size:12px; color:var(--text-muted);">Suggested</div>
+        <input type="number" id="rb-amt-${i}" value="${s.suggested_budget}" min="1" step="5"
+               style="width:90px; font-size:14px; font-weight:600; padding:4px 8px; border:1px solid var(--border); border-radius:6px; text-align:right;" />
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectAllRebalance(checked) {
+  _rebalanceSuggestions.forEach((_, i) => {
+    const chk = document.getElementById(`rb-chk-${i}`);
+    if (chk) chk.checked = checked;
+  });
+}
+
+function hideRebalancePanel() {
+  const panel = document.getElementById('rebalance-panel');
+  if (panel) panel.style.display = 'none';
+  _rebalanceSuggestions = [];
+}
+
+async function applyRebalance() {
+  const adjustments = [];
+  _rebalanceSuggestions.forEach((s, i) => {
+    const chk = document.getElementById(`rb-chk-${i}`);
+    const amt = document.getElementById(`rb-amt-${i}`);
+    if (chk && chk.checked && amt) {
+      const newAmt = parseFloat(amt.value);
+      if (newAmt > 0) {
+        adjustments.push({ budget_id: s.budget_id, new_amount: newAmt });
+      }
+    }
+  });
+
+  if (!adjustments.length) {
+    toast('No suggestions selected.', 'error');
+    return;
+  }
+
+  if (!confirm(`Apply ${adjustments.length} budget adjustment${adjustments.length !== 1 ? 's' : ''}?`)) return;
+
+  try {
+    const result = await api('POST', '/budgets/rebalance/apply', { adjustments });
+    toast(`${result.updated} budget${result.updated !== 1 ? 's' : ''} updated.`, 'success');
+    hideRebalancePanel();
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
 // ── Category Rules ────────────────────────────────────────────
 
 let _editingCatRuleId = null;
