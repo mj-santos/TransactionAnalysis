@@ -602,8 +602,14 @@ No cloud services, no external dependencies — all data stays on your machine.
         Returns the **server-side `path`** — pass this value as an item in `inputs`
         when calling `POST /runs`.
 
-        Supported formats: any CSV dialect (comma, semicolon, tab-separated).
-        Encoding is auto-detected (UTF-8, Latin-1, Windows-1252, etc.).
+        Validation & normalisation applied on upload:
+        - Extension must be `.csv` (case-insensitive)
+        - Excel files disguised as `.csv` are rejected (magic-byte check)
+        - Encoding auto-detected (UTF-8, Latin-1, UTF-16, Windows-1252, etc.)
+        - BOM stripped (UTF-8-BOM, UTF-16 LE/BE)
+        - Line endings normalised to `\\n`
+        - File rewritten as clean UTF-8 for consistent downstream processing
+        - Delimiter auto-detected (comma, semicolon, tab, pipe)
         """
         try:
             dest_dir = Path(upload_dir)
@@ -615,6 +621,17 @@ No cloud services, no external dependencies — all data stays on your machine.
             if not content:
                 raise HTTPException(status_code=400, detail="Uploaded file is empty.")
             dest.write_bytes(content)
+
+            # --- Validate file type (extension + magic bytes) ---
+            from finance_etl.utils.csv_sniff import validate_uploaded_file, sanitize_csv_encoding
+            try:
+                validate_uploaded_file(dest, safe_original)
+            except ValueError as val_err:
+                dest.unlink(missing_ok=True)
+                raise HTTPException(status_code=400, detail=str(val_err))
+
+            # --- Normalise encoding, BOM, line endings → clean UTF-8 ---
+            sanitize_csv_encoding(dest)
 
             # --- Smart CSV pre-processing (Pattern 1 + Pattern 2) ---
             preprocess_result: dict = {"patterns_applied": [], "metadata": {}, "banner": None}

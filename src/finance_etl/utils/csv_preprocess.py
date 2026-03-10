@@ -22,7 +22,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from finance_etl.utils.csv_sniff import detect_encoding
+from finance_etl.utils.csv_sniff import detect_encoding, _strip_bom, _sniff_delimiter
 from finance_etl.utils.log import get_logger
 
 log = get_logger(__name__)
@@ -215,7 +215,11 @@ def preprocess_csv(path: str | Path) -> dict[str, Any]:
     enc = detect_encoding(path)
 
     with open(path, encoding=enc, errors="replace", newline="") as fh:
-        raw_lines = fh.readlines()
+        raw_text = fh.read()
+
+    # Strip BOM so header detection works on the first column name
+    raw_text = _strip_bom(raw_text)
+    raw_lines = raw_text.splitlines(keepends=True)
 
     if not raw_lines:
         return {"patterns_applied": [], "metadata": {}, "banner": None}
@@ -225,11 +229,7 @@ def preprocess_csv(path: str | Path) -> dict[str, Any]:
 
     # ── Sniff delimiter from the first non-empty lines ──────────────────────
     sample = "".join(raw_lines[:20])
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=",\t|;")
-        delimiter = dialect.delimiter
-    except csv.Error:
-        delimiter = ","
+    delimiter = _sniff_delimiter(sample)
 
     # ── Pattern 2: discard metadata rows above the real header ─────────────
     header_row_idx, statement_meta = _find_header_row(raw_lines, delimiter)
@@ -240,11 +240,7 @@ def preprocess_csv(path: str | Path) -> dict[str, Any]:
         )
         # Re-sniff delimiter after trimming metadata
         sample = "".join(raw_lines[:20])
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=",\t|;")
-            delimiter = dialect.delimiter
-        except csv.Error:
-            pass
+        delimiter = _sniff_delimiter(sample)
 
     # ── Parse cleaned lines into rows ───────────────────────────────────────
     reader = csv.reader(io.StringIO("".join(raw_lines)), delimiter=delimiter)
