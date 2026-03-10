@@ -125,6 +125,7 @@ TransactionAnalysis/
 │   │   ├── hashing.py          ← File content SHA-256 hashing
 │   │   ├── log.py              ← Logger factory (per-run file handlers)
 │   │   ├── money.py            ← Amount string parsing → Decimal (signed, debit/credit, in/out, flag)
+│   │   ├── query_helpers.py    ← INCOME_FILTER constant — canonical income SQL condition
 │   │   └── text.py             ← Text normalization utilities
 │   │
 │   ├── wizard/                 ← PARTIALLY SUPERSEDED by wizard_mapping.py + web wizard
@@ -792,6 +793,7 @@ Single-row table seeded with `1` on first migration run.
 - API calls from the frontend use the `api(method, path, body)` helper which wraps fetch and throws on non-2xx.
 - Background jobs write to `normalization_jobs` for progress tracking.
 - `esc(str)` is used throughout `app.js` to HTML-encode user data before inserting into innerHTML.
+- **`INCOME_FILTER`** constant in `utils/query_helpers.py` defines the canonical income SQL condition: `amount > 0 AND statement_type = 'bank'`. All income queries must import and use this constant (or reference it in a comment when table aliases prevent direct use). CC positive amounts (payments, refunds) are never income. See BUG-6/7/8 history. A tripwire test (`test_income_filter_constant_unchanged`) guards against accidental changes.
 
 ---
 
@@ -823,7 +825,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.13.1
+**Current Version:** v2.13.2
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -849,6 +851,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.12.0 | 2026-03-10 | Sprint 11 — Annual Year-in-Review Report: generate annual financial reports with total income/spent/net saved, top 5 categories and merchants, biggest and lightest months, month-by-month chart, recurring costs total; modal viewer with year navigation, save/regenerate, print/PDF export via browser print dialog; stored report history with browse/compare/delete; new `annual_reports` table; new `POST /annual-reports/generate`, `GET /annual-reports`, `GET /annual-reports/{year}`, `DELETE /annual-reports/{year}` endpoints; backup/restore support |
 | v2.13.0 | 2026-03-10 | Sprint 12 — Power User & Polish: keyboard shortcuts (j/k navigate, r review, c category edit, x select, / search, ? help, 1-9 tabs); inline category editing via double-click on transaction rows; bulk actions with multi-select checkboxes (mark reviewed, assign category, assign tag); colorblind-accessible palette (deuteranopia/protanopia safe); dark/light mode toggle with localStorage persistence; onboarding flow for first-time users (3-step guided import → categories → budgets); no new API endpoints — all features are UI-only |
 | v2.13.1 | 2026-03-10 | Fix BUG-6/7/8: income classification — CC payments and refunds no longer counted as income; all income queries now require `amount > 0 AND statement_type = 'bank'`; applied to Monthly Summary, Annual Report, Cash Flow, transaction totals, tag totals, and analytics CSV reports; 3 regression tests added |
+| v2.13.2 | 2026-03-10 | Centralized income filter constant (`INCOME_FILTER` in `utils/query_helpers.py`); replaced all 10 inline income conditions with constant reference; added custom report builder regression test and tripwire test for constant integrity; 264 total tests |
 
 ### Version Increment Rules
 

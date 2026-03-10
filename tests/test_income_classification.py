@@ -156,3 +156,76 @@ def test_summary_and_cashflow_income_match(tmp_path: Path):
         f"Summary ({summary_income}) and Cash Flow ({cashflow_income}) "
         f"must both equal $3000 (bank deposit only)"
     )
+
+
+def test_custom_report_income_filter(tmp_path: Path):
+    """POST /reports/query with group_by must only count bank deposits as income.
+    CC positive amounts (payments, refunds) must be excluded from total_income."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "report_income.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    _seed(conn, [
+        # Bank deposits (should be income)
+        ("2025-06-01", "Payroll", 3000.00, "MyBank", "Checking", "chk01",
+         1, "fp_pay1", "bank", None, None),
+        ("2025-06-15", "Freelance", 500.00, "MyBank", "Checking", "chk01",
+         2, "fp_pay2", "bank", None, None),
+        # Bank expenses (should NOT be income)
+        ("2025-06-05", "Rent", -1200.00, "MyBank", "Checking", "chk01",
+         3, "fp_rent", "bank", None, None),
+        ("2025-06-10", "Groceries", -80.00, "MyBank", "Checking", "chk01",
+         4, "fp_groc", "bank", None, None),
+        # CC payment (positive, should NOT be income)
+        ("2025-06-20", "Payment Thank You", 600.00, "Visa", "CC", "cc01",
+         5, "fp_ccpay", "credit_card", "payment", 600.00),
+        # CC refund (positive, should NOT be income)
+        ("2025-06-22", "Refund", 50.00, "Visa", "CC", "cc01",
+         6, "fp_ccref", "credit_card", "adjustment", 50.00),
+        # CC spending (negative, should NOT be income)
+        ("2025-06-25", "Store", -75.00, "Visa", "CC", "cc01",
+         7, "fp_ccstore", "credit_card", "spending", 75.00),
+    ])
+    conn.close()
+
+    # Grouped query on statement_type to get totals per type
+    resp = client.post("/reports/query", json={
+        "group_by": ["statement_type"],
+        "filters": [
+            {"field": "transaction_date", "op": ">=", "value": "2025-06-01"},
+            {"field": "transaction_date", "op": "<=", "value": "2025-06-30"},
+        ],
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    rows = data["rows"]
+
+    # Sum total_income across all groups
+    total_income = sum(float(r["total_income"]) for r in rows)
+    assert total_income == 3500.0, (
+        f"Custom report total_income should be $3500 (bank deposits only), got {total_income}"
+    )
+
+    # Bank row should have income = 3500
+    bank_row = [r for r in rows if r["statement_type"] == "bank"]
+    assert len(bank_row) == 1
+    assert float(bank_row[0]["total_income"]) == 3500.0
+
+    # CC row should have income = 0
+    cc_row = [r for r in rows if r["statement_type"] == "credit_card"]
+    assert len(cc_row) == 1
+    assert float(cc_row[0]["total_income"]) == 0.0, (
+        f"CC total_income should be $0, got {cc_row[0]['total_income']}"
+    )
+
+
+def test_income_filter_constant_unchanged():
+    """Tripwire test — if INCOME_FILTER changes, this test fails immediately.
+    Any change to the income classification rule must be a conscious decision."""
+    from finance_etl.utils.query_helpers import INCOME_FILTER
+
+    assert INCOME_FILTER == "amount > 0 AND statement_type = 'bank'"
