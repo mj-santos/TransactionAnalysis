@@ -202,9 +202,10 @@ TransactionAnalysis/
 - **Savings Goals** widget: progress bars for each goal, inline create/edit/delete, manual progress updates (set or add mode), auto-calculated monthly savings needed to hit target by deadline, suggested monthly amount from avg net cash flow
 - **Monthly Summary** button: opens modal with plain-language narrative, KPI grid (spent/income/net/txns), top categories with delta bars, top merchants chips, biggest purchase card; month navigation ←/→; save/regenerate summaries; "Browse History" opens stored summaries list
 - **Net Worth** widget: assets/liabilities/net KPI row with trend vs last snapshot; account list with type badges and inline edit/delete; add account form (name, type dropdown, balance); save snapshot button captures point-in-time balances; collapsible history panel with mini bar chart and snapshot list
+- **Year in Review** button: opens modal with annual report — total income/spent/net saved KPIs, biggest/lightest months, recurring costs estimate, month-by-month bar chart, top 5 categories with progress bars, top 5 merchants ranked list; year navigation ←/→; save/regenerate reports; print/PDF export via browser print dialog; "Browse Past Reports" opens stored reports history with view/delete per year
 - Recent transactions table (last 10) with unreviewed dot indicators
 - Unreviewed count badge on sidebar Dashboard nav link
-- API: `GET /dashboard/summary?year=&month=`, `GET /budgets/rebalance`, `POST /budgets/rebalance/apply`, `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions`, `POST /monthly-summaries/generate?year=&month=`, `GET /monthly-summaries`, `GET /monthly-summaries/{year}/{month}`, `DELETE /monthly-summaries/{year}/{month}`, `GET/POST/PUT/DELETE /net-worth/accounts`, `GET /net-worth/summary`, `GET/POST/DELETE /net-worth/snapshots`
+- API: `GET /dashboard/summary?year=&month=`, `GET /budgets/rebalance`, `POST /budgets/rebalance/apply`, `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions`, `POST /monthly-summaries/generate?year=&month=`, `GET /monthly-summaries`, `GET /monthly-summaries/{year}/{month}`, `DELETE /monthly-summaries/{year}/{month}`, `GET/POST/PUT/DELETE /net-worth/accounts`, `GET /net-worth/summary`, `GET/POST/DELETE /net-worth/snapshots`, `POST /annual-reports/generate?year=`, `GET /annual-reports`, `GET /annual-reports/{year}`, `DELETE /annual-reports/{year}`
 
 **Import (`#page-import`)**
 - Drag-and-drop CSV upload zone; multi-file supported
@@ -627,6 +628,19 @@ UNIQUE constraint on `(year, month)`.
 
 ---
 
+### `annual_reports` — stored annual year-in-review reports
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-seq |
+| `year` | INTEGER NOT NULL UNIQUE | Report year |
+| `report_json` | TEXT NOT NULL | JSON blob with all metrics (income, spent, net, categories, merchants, monthly, biggest/lightest month, recurring) |
+| `narrative` | TEXT NOT NULL | Plain-language summary paragraph |
+| `created_at` | TEXT | ISO timestamp |
+| `updated_at` | TEXT | ISO timestamp |
+
+---
+
 ### `schema_version` — DuckDB schema version tracking
 
 | Column | Type | Notes |
@@ -795,7 +809,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.11.0
+**Current Version:** v2.12.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -818,6 +832,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.9.0 | 2026-03-10 | Sprint 8 — Merchant Intelligence: per-merchant analytics with total spend, monthly avg, transaction frequency, months active, last transaction date; 3-month trend indicator (increasing/decreasing/flat) with MoM %; accelerating spend flag (>20% MoM); mini sparkline bars; sort by total spend/frequency/recent/trend; search filter; KPI summary (total merchants, accelerating count); new `GET /merchant-analytics` endpoint |
 | v2.10.0 | 2026-03-10 | Sprint 9 — Spending Alerts & Thresholds: per-category spending alerts derived from existing budget goals; alert banners at top of dashboard for categories at 80% (warning) and 100% (exceeded) of monthly budget; budget status overview card with green/yellow/red chips per category; color-coded status dots on budget tracker progress bars; dismissible alert banners; alerts auto-reset each month (spending is month-scoped); enhanced `GET /dashboard/summary` response with `spending_alerts` array |
 | v2.11.0 | 2026-03-10 | Sprint 10 — Net Worth Snapshot: manual net worth tracker with account management (checking/savings/investment/credit card/loan/other); assets vs liabilities breakdown; point-in-time snapshots with history chart; dashboard widget showing current net worth with trend vs last snapshot; new `nw_accounts` and `nw_snapshots` tables; new `GET/POST/PUT/DELETE /net-worth/accounts`, `GET /net-worth/summary`, `GET/POST/DELETE /net-worth/snapshots` endpoints; backup/restore support |
+| v2.12.0 | 2026-03-10 | Sprint 11 — Annual Year-in-Review Report: generate annual financial reports with total income/spent/net saved, top 5 categories and merchants, biggest and lightest months, month-by-month chart, recurring costs total; modal viewer with year navigation, save/regenerate, print/PDF export via browser print dialog; stored report history with browse/compare/delete; new `annual_reports` table; new `POST /annual-reports/generate`, `GET /annual-reports`, `GET /annual-reports/{year}`, `DELETE /annual-reports/{year}` endpoints; backup/restore support |
 
 ### Version Increment Rules
 
@@ -919,6 +934,10 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/monthly-summaries` | summaries | List all stored monthly summaries | 🟢 Called |
 | `GET` | `/monthly-summaries/{year}/{month}` | summaries | Get stored summary or generate on-the-fly | 🟢 Called |
 | `DELETE` | `/monthly-summaries/{year}/{month}` | summaries | Delete a stored monthly summary | 🟢 Called |
+| `POST` | `/annual-reports/generate` | annual-reports | Generate or regenerate an annual year-in-review report | 🟢 Called |
+| `GET` | `/annual-reports` | annual-reports | List all stored annual reports | 🟢 Called |
+| `GET` | `/annual-reports/{year}` | annual-reports | Get annual report (stored or on-the-fly) | 🟢 Called |
+| `DELETE` | `/annual-reports/{year}` | annual-reports | Delete a stored annual report | 🟢 Called |
 | `GET` | `/net-worth/accounts` | net-worth | List all net worth accounts | 🟢 Called |
 | `POST` | `/net-worth/accounts` | net-worth | Create a net worth account | 🟢 Called |
 | `PUT` | `/net-worth/accounts/{id}` | net-worth | Update a net worth account | 🟢 Called |

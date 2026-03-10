@@ -329,6 +329,19 @@ CREATE TABLE IF NOT EXISTS nw_snapshots (
   created_at    TEXT    NOT NULL
 )
 """,
+
+    # ── Annual Reports ─────────────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_annual_reports_id",
+    """
+CREATE TABLE IF NOT EXISTS annual_reports (
+  id           BIGINT DEFAULT nextval('seq_annual_reports_id') PRIMARY KEY,
+  year         INTEGER NOT NULL UNIQUE,
+  report_json  TEXT    NOT NULL,
+  narrative    TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  updated_at   TEXT    NOT NULL
+)
+""",
 ]
 # ---------------------------------------------------------------------------
 

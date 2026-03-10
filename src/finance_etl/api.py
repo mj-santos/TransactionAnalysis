@@ -3832,6 +3832,274 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
+    # Year-in-Review Reports
+    # -----------------------------------------------------------------------
+
+    def _generate_annual_report(conn, year: int) -> dict:
+        """Build an annual year-in-review report with metrics and narrative."""
+        import datetime as _dt, calendar as _cal
+
+        def _fmt(v):
+            return f"${abs(v):,.2f}"
+
+        # Total spending
+        spend_row = conn.execute(
+            """SELECT COALESCE(SUM(resolved_amount), 0), COUNT(*)
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ?""",
+            [year],
+        ).fetchone()
+        total_spent = float(spend_row[0])
+        txn_count = int(spend_row[1])
+
+        # Total income
+        income_row = conn.execute(
+            """SELECT COALESCE(SUM(amount), 0)
+               FROM transactions_norm
+               WHERE amount > 0
+                 AND YEAR(transaction_date) = ?""",
+            [year],
+        ).fetchone()
+        total_income = float(income_row[0])
+        net_saved = total_income - total_spent
+
+        # Top 5 categories by spend
+        top_cats = conn.execute(
+            """SELECT COALESCE(category_parent, category) AS grp,
+                      SUM(resolved_amount) AS amt
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ?
+                 AND COALESCE(category_parent, category) IS NOT NULL
+               GROUP BY grp ORDER BY amt DESC LIMIT 5""",
+            [year],
+        ).fetchall()
+        top_categories = [{"name": r[0], "amount": float(r[1])} for r in top_cats]
+
+        # Top 5 merchants by spend
+        top_merchs = conn.execute(
+            """SELECT merchant, SUM(resolved_amount) AS amt
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ?
+                 AND merchant IS NOT NULL
+               GROUP BY merchant ORDER BY amt DESC LIMIT 5""",
+            [year],
+        ).fetchall()
+        top_merchants = [{"name": r[0], "amount": float(r[1])} for r in top_merchs]
+
+        # Month-by-month breakdown
+        monthly_rows = conn.execute(
+            """SELECT MONTH(transaction_date) AS m,
+                      COALESCE(SUM(CASE WHEN transaction_subtype='spending'
+                                        THEN resolved_amount ELSE 0 END), 0) AS spent,
+                      COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS inc
+               FROM transactions_norm
+               WHERE YEAR(transaction_date) = ?
+               GROUP BY m ORDER BY m""",
+            [year],
+        ).fetchall()
+        monthly = []
+        biggest_month = {"month": None, "spent": 0}
+        lightest_month = {"month": None, "spent": float("inf")}
+        for r in monthly_rows:
+            m = int(r[0])
+            spent = float(r[1])
+            inc = float(r[2])
+            name = _cal.month_abbr[m]
+            monthly.append({
+                "month": m, "month_name": name,
+                "spent": spent, "income": inc, "net": inc - spent,
+            })
+            if spent > biggest_month["spent"]:
+                biggest_month = {"month": m, "month_name": name, "spent": spent}
+            if spent < lightest_month["spent"]:
+                lightest_month = {"month": m, "month_name": name, "spent": spent}
+
+        if lightest_month["month"] is None:
+            lightest_month = {"month": None, "month_name": None, "spent": 0}
+
+        # Recurring costs estimate
+        recurring_total = 0.0
+        try:
+            from finance_etl.recurring import detect_recurring, compute_monthly_recurring_total
+            patterns = detect_recurring(conn)
+            recurring_total = compute_monthly_recurring_total(patterns)
+        except Exception:
+            pass
+        annual_recurring = round(recurring_total * 12, 2)
+
+        # Build narrative
+        lines = [f"Your {year} Year in Review:"]
+        lines.append(
+            f"You earned {_fmt(total_income)} and spent {_fmt(total_spent)} "
+            f"across {txn_count} transactions."
+        )
+        if net_saved >= 0:
+            lines.append(f"You saved {_fmt(net_saved)} over the year.")
+        else:
+            lines.append(f"You spent {_fmt(abs(net_saved))} more than you earned.")
+
+        if top_categories:
+            cat_parts = [f"{c['name']} ({_fmt(c['amount'])})" for c in top_categories[:3]]
+            lines.append("Top spending categories: " + ", ".join(cat_parts) + ".")
+
+        if top_merchants:
+            merch_parts = [f"{m['name']} ({_fmt(m['amount'])})" for m in top_merchants[:3]]
+            lines.append("Top merchants: " + ", ".join(merch_parts) + ".")
+
+        if biggest_month["month"]:
+            lines.append(
+                f"Your biggest spending month was {biggest_month['month_name']} "
+                f"at {_fmt(biggest_month['spent'])}."
+            )
+        if lightest_month["month"]:
+            lines.append(
+                f"Your lightest month was {lightest_month['month_name']} "
+                f"at {_fmt(lightest_month['spent'])}."
+            )
+
+        if annual_recurring > 0:
+            lines.append(
+                f"Estimated recurring costs: {_fmt(recurring_total)}/month "
+                f"({_fmt(annual_recurring)}/year)."
+            )
+
+        narrative = " ".join(lines)
+
+        report = {
+            "year": year,
+            "total_income": total_income,
+            "total_spent": total_spent,
+            "net_saved": net_saved,
+            "txn_count": txn_count,
+            "top_categories": top_categories,
+            "top_merchants": top_merchants,
+            "monthly": monthly,
+            "biggest_month": biggest_month,
+            "lightest_month": lightest_month,
+            "recurring_monthly": recurring_total,
+            "recurring_annual": annual_recurring,
+        }
+        return {"report": report, "narrative": narrative}
+
+    @app.post("/annual-reports/generate", tags=["annual-reports"],
+              summary="Generate or regenerate an annual year-in-review report")
+    def generate_annual_report(
+        year: int = Query(..., description="Year to generate report for"),
+    ):
+        """Generate an annual report and store it. Overwrites if exists."""
+        now = __import__("datetime").datetime.utcnow().isoformat()
+        conn = get_connection(db_path)
+        try:
+            result = _generate_annual_report(conn, year)
+            report_json = json.dumps(result["report"])
+            narrative = result["narrative"]
+
+            existing = conn.execute(
+                "SELECT id FROM annual_reports WHERE year=?", [year],
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE annual_reports SET report_json=?, narrative=?, "
+                    "updated_at=? WHERE id=?",
+                    [report_json, narrative, now, existing[0]],
+                )
+                row_id = existing[0]
+            else:
+                conn.execute(
+                    "INSERT INTO annual_reports (year, report_json, narrative, "
+                    "created_at, updated_at) VALUES (?,?,?,?,?)",
+                    [year, report_json, narrative, now, now],
+                )
+                row = conn.execute(
+                    "SELECT id FROM annual_reports WHERE year=?", [year],
+                ).fetchone()
+                row_id = row[0] if row else None
+        finally:
+            conn.close()
+
+        return {
+            "id": row_id,
+            "year": year,
+            "report": result["report"],
+            "narrative": narrative,
+            "created_at": now,
+        }
+
+    @app.get("/annual-reports", tags=["annual-reports"],
+             summary="List all stored annual reports")
+    def list_annual_reports():
+        """Return all stored annual reports, newest first."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, year, report_json, narrative, created_at, updated_at "
+                "FROM annual_reports ORDER BY year DESC"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"reports": []}
+        result = []
+        for r in rows:
+            try:
+                report = json.loads(r[2])
+            except Exception:
+                report = {}
+            result.append({
+                "id": r[0], "year": r[1],
+                "report": report, "narrative": r[3],
+                "created_at": r[4], "updated_at": r[5],
+            })
+        return {"reports": result}
+
+    @app.get("/annual-reports/{year}", tags=["annual-reports"],
+             summary="Get annual report for a specific year")
+    def get_annual_report(year: int):
+        """Return stored report or generate on-the-fly if not stored."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            row = conn.execute(
+                "SELECT id, report_json, narrative, created_at, updated_at "
+                "FROM annual_reports WHERE year=?", [year],
+            ).fetchone()
+        except Exception:
+            row = None
+            conn = get_connection(db_path, read_only=True)
+
+        if row:
+            try:
+                report = json.loads(row[1])
+            except Exception:
+                report = {}
+            conn.close()
+            return {
+                "id": row[0], "year": year, "report": report,
+                "narrative": row[2], "created_at": row[3], "stored": True,
+            }
+
+        # Generate on-the-fly
+        result = _generate_annual_report(conn, year)
+        conn.close()
+        return {
+            "id": None, "year": year, "report": result["report"],
+            "narrative": result["narrative"], "created_at": None, "stored": False,
+        }
+
+    @app.delete("/annual-reports/{year}", tags=["annual-reports"],
+                summary="Delete a stored annual report")
+    def delete_annual_report(year: int):
+        try:
+            conn = get_connection(db_path)
+            conn.execute("DELETE FROM annual_reports WHERE year=?", [year])
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Delete failed: {exc}") from exc
+        return {"status": "deleted", "year": year}
+
+    # -----------------------------------------------------------------------
     # Net Worth Tracker
     # -----------------------------------------------------------------------
 
@@ -4129,6 +4397,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         "monthly_summaries",
         "nw_accounts",
         "nw_snapshots",
+        "annual_reports",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
@@ -4481,6 +4750,18 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("detail_json", "[]"), r.get("created_at", now)],
                 )
 
+            # 16. annual_reports
+            conn.execute("DELETE FROM annual_reports")
+            for r in data.get("annual_reports", []):
+                conn.execute(
+                    """INSERT INTO annual_reports
+                       (year, report_json, narrative, created_at, updated_at)
+                       VALUES (?,?,?,?,?)""",
+                    [r["year"], r.get("report_json", "{}"),
+                     r.get("narrative", ""),
+                     r.get("created_at", now), r.get("updated_at", now)],
+                )
+
             conn.close()
         except HTTPException:
             raise
@@ -4519,6 +4800,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "monthly_summaries_restored": len(data.get("monthly_summaries", [])),
             "nw_accounts_restored": len(data.get("nw_accounts", [])),
             "nw_snapshots_restored": len(data.get("nw_snapshots", [])),
+            "annual_reports_restored": len(data.get("annual_reports", [])),
             "wizard_profiles_restored": profiles_restored,
         }
 
