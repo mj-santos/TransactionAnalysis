@@ -6,7 +6,7 @@
 
 ## 1. APP OVERVIEW
 
-**finance_etl** is a fully local, deterministic ETL pipeline and web dashboard for importing, normalizing, categorizing, and analyzing personal bank and credit-card transaction CSVs. It runs entirely on the user's machine — no cloud, no sync, no external services. All data lives in a single DuckDB file on disk..
+**finance_etl** is a fully local, deterministic ETL pipeline and web dashboard for importing, normalizing, categorizing, and analyzing personal bank and credit-card transaction CSVs. It runs entirely on the user's machine — no cloud, no sync, no external services. All data lives in a single DuckDB file on disk.
 
 **Who it's for:** Individual users who export CSVs from their bank(s) and want a structured, queryable ledger with analytics, merchant normalization, and category tracking.
 
@@ -44,7 +44,7 @@
 - Primary blue: `#3b82f6`, hover `#2563eb`
 - Success: `#22c55e`, Danger: `#ef4444`, Warning: `#f59e0b`, Staged: `#8b5cf6`
 - Font: system-ui stack (`-apple-system`, `BlinkMacSystemFont`, `Segoe UI`, `Roboto`)
-- Border radius: `8px`, Shadow: `0 1px 3px rgba(0,0,0,.08)`
+- Border radius: `8px`, Shadow: `0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06)`
 
 ---
 
@@ -60,31 +60,25 @@ TransactionAnalysis/
 ├── run_dev.py                  ← dev convenience: starts uvicorn directly
 ├── setup_wizard.py             ← standalone CLI wizard (legacy; duplicated by web wizard)
 ├── conftest.py                 ← pytest path fix: inserts src/ into sys.path so tests can find finance_etl without pip install
-├── pytest.ini                  ← pytest config
+├── pytest.ini                  ← pytest config (duplicates pyproject.toml [tool.pytest.ini_options])
 ├── install.sh                  ← bash installer for non-Docker usage
 ├── .env / .env.example         ← API host/port overrides
 ├── .github/workflows/
 │   └── docker-publish.yml      ← publishes Docker image to registry on push
 │
 ├── config/
-│   ├── canonical_schema.yaml   ← defines canonical field names for the mapping wizard
+│   ├── canonical_schema.yaml   ← ⚠️ reference-only; NOT read by any active code path
 │   ├── categories/
-│   │   └── rules.yaml          ← YAML category rules file (LEGACY — superseded by DB table)
-│   ├── mappings/               ← YAML bank column mapping files (used by CLI; wizard generates these)
-│   │   ├── example_debit_credit.yaml
-│   │   └── example_signed_amount.yaml
-│   └── wizard_profiles/        ← per-institution/account YAML profiles saved by the web wizard
-│       ├── testbank/
-│       │   ├── amtdc01.yaml
-│       │   ├── cc1234.yaml
-│       │   └── chk1234.yaml
-│       └── testbank_smoke/
-│           └── chk_smoke001.yaml
+│   │   └── rules.yaml          ← ⚠️ UNUSED — superseded by DB table + BUILT_IN_CATEGORY_MAP
+│   └── mappings/               ← YAML bank column mapping files (used by CLI; wizard generates these)
+│       ├── example_debit_credit.yaml
+│       └── example_signed_amount.yaml
 │
-├── data/                       ← runtime data (gitignored in prod; present here with test data)
+├── data/                       ← runtime data (gitignored in prod)
 │   ├── auto_backups/           ← auto-backup JSON files (max 5, rotated); created on every commit
 │   ├── db/finance.duckdb       ← THE database — all user data lives here
 │   ├── logs/                   ← per-run log files (UUID-named) + api.log
+│   ├── master/                 ← Parquet snapshot exports (Hive-partitioned by year/month)
 │   ├── profiles/               ← per-file JSON profiling results (encoding, delimiter, headers)
 │   ├── raw/                    ← copies of uploaded CSVs stored by run timestamp
 │   ├── reports/                ← CSV analytics exports (regenerated after each run)
@@ -104,10 +98,10 @@ TransactionAnalysis/
 │
 ├── src/finance_etl/            ← main Python package
 │   ├── __init__.py
-│   ├── api.py                  ← FastAPI app factory (create_app); ALL endpoints defined here
+│   ├── api.py                  ← FastAPI app factory (create_app); ALL endpoints defined here (~3022 lines)
 │   ├── analytics.py            ← Stage 9: SQL analytics queries → CSV reports
 │   ├── backup_migrations.py    ← Backup payload migration chain (v1→v2); CURRENT_BACKUP_VERSION
-│   ├── category_rules.py       ← Category normalization engine + BUILT_IN_CATEGORY_MAP
+│   ├── category_rules.py       ← Category normalization engine + BUILT_IN_CATEGORY_MAP (~97 entries)
 │   ├── cli.py                  ← Click CLI: run, ingest, validate, parquet, analytics, api, wizard
 │   ├── db.py                   ← DuckDB connection factory + DDL + migrations
 │   ├── ingest.py               ← Stage 1-2: file registration, run creation, raw copy
@@ -125,13 +119,13 @@ TransactionAnalysis/
 │   │
 │   ├── utils/
 │   │   ├── __init__.py
-│   │   ├── csv_preprocess.py   ← CSV cleaning before parsing (BOM removal, encoding fixes)
+│   │   ├── csv_preprocess.py   ← CSV cleaning before parsing (BOM removal, encoding fixes, header/metadata strip)
 │   │   ├── csv_sniff.py        ← Delimiter and quoting auto-detection
 │   │   ├── dates.py            ← Date parsing with format hint support
-│   │   ├── fingerprint.py      ← Deterministic transaction_fingerprint generation
+│   │   ├── fingerprint.py      ← Deterministic transaction_fingerprint generation (SHA-256)
 │   │   ├── hashing.py          ← File content SHA-256 hashing
 │   │   ├── log.py              ← Logger factory (per-run file handlers)
-│   │   ├── money.py            ← Amount string parsing → Decimal
+│   │   ├── money.py            ← Amount string parsing → Decimal (signed, debit/credit, in/out, flag)
 │   │   └── text.py             ← Text normalization utilities
 │   │
 │   ├── wizard/                 ← PARTIALLY SUPERSEDED by wizard_mapping.py + web wizard
@@ -142,11 +136,11 @@ TransactionAnalysis/
 │   │   └── setup_wizard.py         ← CLI interactive wizard (called by `finance_etl wizard`)
 │   │
 │   └── web/
-│       ├── index.html          ← Single-page UI (1,061 lines); all pages embedded as hidden sections
+│       ├── index.html          ← Single-page UI (1,146 lines); all pages embedded as hidden sections
 │       └── static/
-│           ├── app.js          ← All UI logic (2,968 lines); no bundler/framework
-│           ├── style.css       ← All styles (696 lines)
-│           └── table_controls.js ← Two reusable widgets (370 lines):
+│           ├── app.js          ← All UI logic (~3,248 lines); no bundler/framework
+│           ├── style.css       ← All styles (~728 lines)
+│           └── table_controls.js ← Two reusable widgets (~279 lines):
 │                                   makeSourceDropdown() — Import Source radio-dropdown
 │                                   renderTxnTotals()   — pinned tfoot totals row (CC + bank)
 │
@@ -159,6 +153,7 @@ TransactionAnalysis/
     │   ├── nonstandard_headers.csv
     │   └── standard_headers.csv
     ├── smoke_test_wizard.py    ← smoke test for wizard profile matching
+    ├── test_backup_restore.py  ← v2 backup migration, roundtrip, rotation tests
     ├── test_dates.py
     ├── test_fingerprint.py
     ├── test_golden_pipeline.py
@@ -166,17 +161,18 @@ TransactionAnalysis/
     ├── test_mapping.py
     ├── test_models.py
     ├── test_money.py
-    ├── test_backup_restore.py  ← v2 backup migration, roundtrip, rotation tests
-    ├── test_recurring.py       ← recurring detection engine tests (22 tests)
     ├── test_pipeline_api.py
+    ├── test_recurring.py       ← recurring detection engine tests
     └── test_wizard_mapping.py
 ```
 
 **Potentially unused / orphaned files:**
-- `setup_wizard.py` (repo root) — standalone script that appears to duplicate `src/finance_etl/wizard/setup_wizard.py`; the web wizard has superseded both
-- `config/categories/rules.yaml` — YAML category rules are no longer read by the active code path; the DB `category_rules` table is the active source
-- `src/finance_etl/wizard/` — the subpackage is only invoked via `cli.py`'s `finance_etl wizard` command (line 245), which calls `wizard/setup_wizard.py`. That module in turn calls `header_inference.py`, `mapping_rules.py`, and `category_suggestion.py`. No web API endpoint references the `wizard/` subpackage directly. If the CLI wizard command is removed, the entire `wizard/` subpackage becomes dead code.
-- `pytest.ini` — duplicates the `[tool.pytest.ini_options]` block in `pyproject.toml` with identical settings (`testpaths = tests`, `pythonpath = src`, `addopts = -v`). pytest picks up `pytest.ini` first; the `pyproject.toml` section is redundant.
+- `setup_wizard.py` (repo root) — standalone script that duplicates `src/finance_etl/wizard/setup_wizard.py`; the web wizard has superseded both.
+- `config/categories/rules.yaml` — YAML category rules are NOT read by any active code path; the DB `category_rules` table + hardcoded `BUILT_IN_CATEGORY_MAP` are the active sources.
+- `config/canonical_schema.yaml` — reference documentation only; NOT imported by any Python code.
+- `src/finance_etl/wizard/` — the subpackage is only invoked via `cli.py`'s `finance_etl wizard` command. No web API endpoint references the `wizard/` subpackage directly. If the CLI wizard command is removed, the entire `wizard/` subpackage becomes dead code.
+- `pytest.ini` — duplicates the `[tool.pytest.ini_options]` block in `pyproject.toml` with identical settings. pytest picks up `pytest.ini` first; the `pyproject.toml` section is redundant.
+- `config/wizard_profiles/` — referenced in PROJECT.md v1 tree but the directory does not exist in the repository (created at runtime by the wizard).
 
 ---
 
@@ -186,16 +182,16 @@ TransactionAnalysis/
 
 | Tab | Page ID | Loads on navigate | Status |
 |---|---|---|---|
-| 🏠 Dashboard | `#page-dashboard` | `loadDashboard()` on boot | ✅ Working |
-| 📥 Import | `#page-import` | (upload is event-driven) | ✅ Working |
-| 📋 History | `#page-history` | `loadHistory()` | ✅ Working |
-| 💳 Credit Cards | `#page-credit-cards` | `loadTxnTab('credit_card')` | ✅ Working |
-| 🏦 Bank Transactions | `#page-bank-transactions` | `loadTxnTab('bank')` | ✅ Working |
-| 📊 Reports | `#page-reports` | `loadReports()` | ✅ Working |
-| 🏪 Merchants | `#page-merchant-rules` | `loadMerchantRules()`, `loadUncategorized()` | ✅ Working |
-| 🏷️ Categories | `#page-category-rules` | `loadCategoryRules()` | ✅ Working |
-| 🔄 Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ Working |
-| ⚙️ Settings | `#page-settings` | `loadSettings()` | ✅ Working |
+| Dashboard | `#page-dashboard` | `loadDashboard()` on boot | ✅ Working |
+| Import | `#page-import` | (upload is event-driven) | ✅ Working |
+| History | `#page-history` | `loadHistory()` | ✅ Working |
+| Credit Cards | `#page-credit-cards` | `loadTxnTab('credit_card')` | ✅ Working |
+| Bank Transactions | `#page-bank-transactions` | `loadTxnTab('bank')` | ✅ Working |
+| Reports | `#page-reports` | `loadReports()` | ✅ Working |
+| Merchants | `#page-merchant-rules` | `loadMerchantRules()`, `loadUncategorized()` | ✅ Working |
+| Categories | `#page-category-rules` | `loadCategoryRules()` | ⚠️ Partial — Apply Normalization button broken (see BUG-1) |
+| Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ Working |
+| Settings | `#page-settings` | `loadSettings()` | ⚠️ Partial — settings reset on server restart (see BUG-4) |
 
 ### Feature Details
 
@@ -243,7 +239,7 @@ TransactionAnalysis/
 - Totals footer row
 - Per-transaction "Mark as Reviewed" button with unreviewed dot indicator
 - "Mark All Reviewed" bulk action (respects current filters)
-- API: `GET /transactions`, `GET /transaction-totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`
+- API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`
 
 **Reports (`#page-reports`)**
 - Static report cards: spend_by_month_category, cashflow_by_month, spend_by_merchant, totals_by_account, top_merchants
@@ -252,7 +248,7 @@ TransactionAnalysis/
 - Custom Report Builder: add/remove filters, group-by, bucket (day/week/month/year), order-by, limit
 - Quick date presets in custom report
 - Results rendered as table with download-to-CSV button
-- API: `GET /reports`, `GET /reports/{name}/download`, `GET /charts/{name}`, `POST /custom-report`, `GET /metric-docs/{topic}`
+- API: `GET /reports`, `GET /reports/{name}`, `GET /charts/{name}`, `POST /reports/query`, `GET /metric-docs/{topic}`
 
 **Merchants (`#page-merchant-rules`)**
 - Recommended Normalization Rules panel: `loadRuleSuggestions()` → `GET /merchant-rules/suggestions`
@@ -272,14 +268,14 @@ TransactionAnalysis/
 - Suggested Category Mappings panel: `loadCatSuggestions()` → `GET /category-rules/suggestions`
   - Scans raw bank category strings; matches against built-in taxonomy
   - Accept (creates rule), Edit (opens form), Dismiss per suggestion; Accept All
-  - ⚠️ Was broken until recent fix (duplicate element IDs)
 - Suggested Merchant Categories panel: `loadCategorySuggestions()` → `GET /merchant-categories/suggestions`
   - Keyword-heuristic matching of merchant names to categories
-  - Accept assigns category to merchant via `/merchant-categories` — uses `acceptMerchantCatSuggestion()` / `dismissMerchantCatSuggestion()`
+  - Accept assigns category to merchant via `/merchant-categories`
 - Category Normalization Rules CRUD table: `loadCategoryRules()` → `GET /category-rules`
   - Maps raw bank category → normalized category + parent group
   - Inline editor form with parent group dropdown (fixed list of 12 parents)
-- Apply Normalization button: `startCategoryNormalize()` → `POST /category-rules/apply` (background job, polled)
+- Apply Normalization button: `startCategoryNormalize()` → `POST /category-rules/apply` (background job)
+  - **❌ BROKEN**: polling calls `GET /category-normalize/{jobId}` which does NOT exist; correct endpoint is `GET /normalize/{job_id}` (see BUG-1)
 - API: Full CRUD on `/category-rules`, `/category-rules/apply`, `/category-rules/suggestions`, `/merchant-categories/suggestions`
 
 **Recurring Transactions (`#page-recurring-transactions`)**
@@ -314,6 +310,7 @@ TransactionAnalysis/
     - `confirmRestore()` → `POST /backup/restore`; auto-snapshot saved before overwriting
     - Supports v1 (legacy) and v2 backup files; v1 auto-migrated to v2 on restore
   - Auto-backup on every successful import commit (max 5 rotated in `data/auto_backups/`)
+- **⚠️ Settings are in-memory only** — `app.state.ui_settings` resets to defaults on server restart
 - API: `GET /backup/export`, `POST /backup/restore`, `GET /backup/status`
 
 ---
@@ -339,15 +336,15 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 | `source_file` | TEXT NOT NULL | Original filename |
 | `source_row` | INTEGER NOT NULL | Row number in source CSV |
 | `file_hash` | TEXT NOT NULL | SHA-256 of source file content |
-| `transaction_fingerprint` | TEXT NOT NULL UNIQUE | Deterministic dedup key |
+| `transaction_fingerprint` | TEXT NOT NULL | Deterministic dedup key |
 | `ingested_at` | TIMESTAMP DEFAULT NOW | When the row was loaded |
-| `statement_type` | TEXT | `'credit_card'` or `'bank'` |
-| `run_id` | TEXT | FK to `runs.run_id` |
-| `transaction_subtype` | TEXT | `'spending'`, `'payment'`, `'adjustment'`, or NULL (bank) |
-| `resolved_amount` | DECIMAL(18,2) | Always ≥ 0; direction encoded in `transaction_subtype` |
+| `statement_type` | TEXT | `'credit_card'` or `'bank'` (added by migration) |
+| `run_id` | TEXT | FK to `runs.run_id` (added by migration) |
+| `transaction_subtype` | TEXT | `'spending'`, `'payment'`, `'adjustment'`, or NULL (bank) (added by migration) |
+| `resolved_amount` | DECIMAL(18,2) | Always ≥ 0; direction encoded in `transaction_subtype` (added by migration) |
 | `category_normalized` | TEXT | Normalized category from category rules (added by migration) |
-| `category_parent` | TEXT | Parent group (e.g. "Food & Dining") from category rules |
-| `unreviewed` | BOOLEAN DEFAULT TRUE | Review tracking flag; TRUE on import, set to FALSE when user marks reviewed |
+| `category_parent` | TEXT | Parent group (e.g. "Food & Dining") from category rules (added by migration) |
+| `unreviewed` | BOOLEAN DEFAULT TRUE | Review tracking flag (added by migration) |
 
 **Index:** `UNIQUE INDEX idx_tx_fingerprint ON transactions_norm(transaction_fingerprint)`
 
@@ -356,6 +353,10 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 - `run_id` → `runs.run_id`
 - `merchant` → `merchant_category_map.merchant` (soft, not enforced)
 - `category` → `category_rules.raw_category` (soft, not enforced)
+
+**⚠️ Schema notes:**
+- 7 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`
+- No explicit UNIQUE constraint on `transaction_fingerprint` in DDL — dedup relies on the separate CREATE UNIQUE INDEX statement
 
 ---
 
@@ -381,31 +382,31 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 | `dc_flag_raw` | TEXT | Debit/Credit flag column value |
 | `currency_raw` | TEXT | |
 | `extra_json` | TEXT | Unmapped columns as JSON |
-| `amount_debit_raw` | TEXT | Added by migration |
-| `amount_credit_raw` | TEXT | Added by migration |
+| `amount_debit_raw` | TEXT | In base DDL |
+| `amount_credit_raw` | TEXT | In base DDL |
 
-Rows exist only during preview phase; deleted after commit or discard. Rows may also be orphaned if the process crashes after staging but before commit/discard.
+Rows exist only during preview phase; deleted after commit or discard.
 
 ---
 
 ### `runs` — import run ledger
 
-| Column | Type | Notes |
-|---|---|---|
-| `run_id` | TEXT PK | UUID |
-| `started_at` | TIMESTAMP | |
-| `finished_at` | TIMESTAMP | |
-| `status` | TEXT | `pending`, `running`, `staged`, `committing`, `success`, `failed` |
-| `statement_type` | TEXT | `'credit_card'` or `'bank'` (added by migration) |
-| `run_label` | TEXT | Human-readable label (added by migration) |
-| `files_count` | INTEGER | |
-| `rows_in` | BIGINT | |
-| `rows_staged` | BIGINT | |
-| `rows_normalized` | BIGINT | |
-| `rows_loaded` | BIGINT | |
-| `errors_count` | INTEGER | |
-| `notes` | TEXT | |
-| `imported_file` | TEXT | Added by migration; filename of uploaded file |
+| Column | Type | Source | Notes |
+|---|---|---|---|
+| `run_id` | TEXT PK | Base DDL | UUID |
+| `started_at` | TIMESTAMP | Base DDL | |
+| `finished_at` | TIMESTAMP | Base DDL | |
+| `status` | TEXT | Base DDL | `pending`, `running`, `staged`, `committing`, `success`, `failed` |
+| `statement_type` | TEXT | Base DDL + migration | `'credit_card'` or `'bank'` |
+| `run_label` | TEXT | Base DDL + migration | Human-readable label |
+| `files_count` | INTEGER | Base DDL | |
+| `rows_in` | BIGINT | Base DDL | |
+| `rows_staged` | BIGINT | Base DDL | |
+| `rows_normalized` | BIGINT | Base DDL | |
+| `rows_loaded` | BIGINT | Base DDL | |
+| `errors_count` | INTEGER | Base DDL | |
+| `notes` | TEXT | Base DDL | |
+| `imported_file` | TEXT | Migration only | Filename of uploaded file — **NOT in base DDL** |
 
 ---
 
@@ -436,8 +437,8 @@ Rows exist only during preview phase; deleted after commit or discard. Rows may 
 | `priority` | INTEGER DEFAULT 0 | Higher = applied first |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
-| `conditions` | TEXT | JSON array of `{pattern, match_type, negate}` for compound rules |
-| `logic` | TEXT DEFAULT 'AND' | `'AND'` or `'OR'` for combining conditions |
+| `conditions` | TEXT | JSON array of `{pattern, match_type, negate}` for compound rules (added by migration) |
+| `logic` | TEXT DEFAULT 'AND' | `'AND'` or `'OR'` for combining conditions (added by migration) |
 
 Applied in order: `priority DESC, id ASC`. First matching rule wins.
 
@@ -490,7 +491,7 @@ Lookup priority: user rules (DB) > built-in `BUILT_IN_CATEGORY_MAP` in `category
 
 | Column | Type | Notes |
 |---|---|---|
-| `job_id` | TEXT PK | UUID or `norm_` prefixed UUID hex |
+| `job_id` | TEXT PK | UUID or prefixed UUID hex |
 | `status` | TEXT DEFAULT 'pending' | `'pending'`, `'running'`, `'success'`, `'failed'` |
 | `rows_total` | BIGINT | |
 | `rows_done` | BIGINT DEFAULT 0 | |
@@ -499,7 +500,7 @@ Lookup priority: user rules (DB) > built-in `BUILT_IN_CATEGORY_MAP` in `category
 | `finished_at` | TEXT | ISO timestamp |
 | `created_at` | TEXT NOT NULL | ISO timestamp |
 
-Used by both merchant renormalization (`batch_renormalize`) and category normalization (`apply_category_rules`). Status values are now standardized to `'failed'` for errors. Job IDs are prefixed differently: merchant jobs use `"norm_"` prefix; category jobs use `"catnorm_"` prefix (generated by `create_category_job()`). Both are polled via `GET /normalize/{job_id}`.
+Used by both merchant renormalization (`batch_renormalize`) and category normalization (`apply_category_rules`). Job IDs are prefixed differently: merchant jobs use `"norm_"` prefix; category jobs use `"catnorm_"` prefix. Both are polled via `GET /normalize/{job_id}`.
 
 ---
 
@@ -508,12 +509,10 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 | Column | Type | Notes |
 |---|---|---|
 | `id` | BIGINT PK | Auto-seq |
-| `merchant_key` | TEXT NOT NULL UNIQUE | Normalized merchant name (matches `transactions_norm.merchant`) |
+| `merchant_key` | TEXT NOT NULL UNIQUE | Normalized merchant name |
 | `is_recurring` | BOOLEAN NOT NULL | `TRUE` = force-mark, `FALSE` = force-unmark |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
-
-User overrides take precedence over auto-detection. Setting `is_recurring = FALSE` hides an auto-detected pattern; setting `TRUE` adds a merchant even if it doesn't meet the auto-detection threshold.
 
 ---
 
@@ -523,7 +522,7 @@ User overrides take precedence over auto-detection. Setting `is_recurring = FALS
 |---|---|---|
 | `version` | INTEGER NOT NULL | Current schema version number |
 
-Single-row table seeded with `1` on first migration run. Used by the backup system to record which schema version produced the backup, enabling forward-compatible restore.
+Single-row table seeded with `1` on first migration run.
 
 ---
 
@@ -542,49 +541,86 @@ Single-row table seeded with `1` on first migration run. Used by the backup syst
 
 ### Critical Bugs
 
-**BUG-1: ~~Duplicate function names in `app.js`~~ — FIXED**
-- Merchant-category functions renamed to `acceptMerchantCatSuggestion()` / `dismissMerchantCatSuggestion()` with matching onclick handlers in `_renderCategorySuggestions()`.
-- Category-rules versions (`acceptCatSuggestion()` / `dismissCatSuggestion()`) remain unchanged — they now correctly operate on `_catSuggestionsData` and POST to `/category-rules`.
+**BUG-1: Category normalization polling calls non-existent endpoint**
+- File: `app.js`, Line: 3174
+- Description: `_pollCatNorm()` polls `GET /category-normalize/${jobId}` but no such endpoint exists in `api.py`. The correct endpoint is `GET /normalize/{job_id}` (which is what merchant renormalization correctly uses at line 2485).
+- Impact: After clicking "Apply Normalization" on the Categories page, the job starts successfully but the polling silently fails. The status text never updates — user sees "Job started…" forever. The job runs correctly in the background but the UI never reports completion.
+- Fix: Change line 3174 from `/category-normalize/${_catNormJobId}` to `/normalize/${_catNormJobId}`.
 
-**BUG-2: ~~`normalization_jobs` status inconsistency~~ — FIXED**
-- Standardized to `'failed'` everywhere: `merchant_rules.py` `batch_renormalize()`, `pipeline.py` `finalize_run()` calls, `category_rules.py` `apply_category_rules()`.
-- UI polling in `app.js` updated: merchant normalization poller now checks `'failed'` (was `'fail'`).
-- Removed legacy `fail` key from status icon map.
+**BUG-2: `_staged_runs` dict is in-memory only — staged runs lost on server restart**
+- File: `pipeline.py`, Line: 33
+- Description: The `_staged_runs: dict[str, dict]` that holds staged pipeline results lives only in the uvicorn process memory. If the server restarts between a user staging a preview and clicking "Commit", the staged data is gone.
+- Impact: `GET /runs/{id}` still returns status `'staged'` from the DB, but `POST /runs/{id}/commit` will return 409 Conflict because the dict is empty. The user has no way to recover — they must re-import the file.
+- Fix: Persist staged state to disk (e.g. a JSON sidecar file in `data/`) or to a DB table, and restore it on startup.
+
+**BUG-3: `ui_settings` are in-memory only — resets on server restart**
+- File: `api.py`, Line: 508
+- Description: `app.state.ui_settings` (verbose_logs, show_logs) is initialized to `{verbose_logs: False, show_logs: False}` on every server start. User preferences are lost.
+- Impact: Low severity — user must re-enable verbose logs after every restart. Not data-losing, but annoying.
+- Fix: Persist settings to a `user_settings` DB table or a JSON file in `data/`.
+
+**BUG-4: Backup restore omits `imported_file` column for runs**
+- File: `api.py`, Line: 2793
+- Description: The restore INSERT for the `runs` table does not include the `imported_file` column (13 columns vs 14 in the schema). Backups that contain `imported_file` data will silently lose it on restore.
+- Impact: After restoring a backup, the History page will show blank imported file names for all runs.
+- Fix: Add `imported_file` to the restore INSERT statement.
+
+**BUG-5: Delete run uses `file_hash` from `transactions_stage` which may be empty**
+- File: `api.py`, Line: 976-987
+- Description: `DELETE /runs/{run_id}` finds `file_hash` values from `transactions_stage` to delete from `transactions_norm`. But if the staging rows were already purged (e.g. after a previous successful commit), no file_hashes are found, so no transactions are deleted — even though the user explicitly chose `keep_transactions=false`.
+- Impact: When deleting a committed run with `keep_transactions=false`, the transactions remain in the ledger because the stage rows no longer exist to provide the join key.
+- Fix: Also query `transactions_norm` directly with `WHERE run_id = ?` when `keep_transactions=false`.
+
+### Previously Fixed Bugs
+
+**BUG (FIXED): Duplicate function names in `app.js`**
+- Merchant-category functions renamed to `acceptMerchantCatSuggestion()` / `dismissMerchantCatSuggestion()`. Category-rules versions (`acceptCatSuggestion()` / `dismissCatSuggestion()`) remain separate.
+
+**BUG (FIXED): `normalization_jobs` status inconsistency**
+- Standardized to `'failed'` everywhere. UI polling updated to check `'failed'` (was `'fail'`).
+
+**BUG (FIXED): Backup restore missing compound rule fields**
+- Restore INSERT for `merchant_rules` now includes `conditions` and `logic` columns.
+
+**BUG (FIXED): `start_category_normalize` missing `rows_total`**
+- The `/category-rules/apply` endpoint now calls `create_category_job()` which pre-computes `rows_total`.
+
+**BUG (FIXED): `transactions_stage` never purged after commit**
+- `commit_run()` now deletes staging rows after successful commit.
 
 ### Hardcoded Values & Workarounds
 
-- **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">` in the category rule editor) with exactly 12 options: Food & Dining, Shopping, Travel, Transportation, Entertainment, Health & Wellness, Bills & Utilities, Financial, Education, Home, Gifts & Charity, Other. These currently match `BUILT_IN_CATEGORY_MAP`'s parent groups exactly, but are not dynamically derived — adding a new taxonomy parent requires editing both `category_rules.py` and `index.html` manually.
-- **Budget form** (`bf-parent`) uses a free-text `<input>`, NOT a select. No sync risk, but also no validation against the taxonomy. User can type any string.
-- ~~**`_CATEGORY_HINTS` naming mismatch**~~ — **FIXED.** Hint category names in `merchant_rules.py` now use subcategory names from `BUILT_IN_CATEGORY_MAP` (e.g. "Restaurants" not "Restaurants & Dining", "Gas & Fuel" not "Transportation & Gas"). The monolithic entries were split into more granular categories matching the taxonomy.
+- **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">`) with exactly 12 options. These match `BUILT_IN_CATEGORY_MAP`'s parent groups exactly but are not dynamically derived — adding a new taxonomy parent requires editing both `category_rules.py` and `index.html`.
+- **Budget form** (`bf-parent`) uses a free-text `<input>`, NOT a select. No validation against the taxonomy.
 - **`min_transactions = 3`** in `analyze_descriptions()` is hardcoded. No UI control.
-- ~~**Backup restore missing compound rule fields**~~ — **FIXED.** Restore INSERT for `merchant_rules` now includes `conditions` and `logic` columns, preserving compound rule configurations across backup/restore cycles.
-- ~~**Backup was partial (v1)**~~ — **FIXED.** Backup system upgraded to v2: exports all 9 DuckDB tables + wizard profile YAML files. Restore auto-migrates v1 backups to v2 format. Auto-snapshots saved before overwriting. Auto-backup on every successful import commit with rotation (max 5 files).
+- **`LARGE_TRANSACTION_THRESHOLD = Decimal("10000.00")`** in `validate.py` is hardcoded.
+- **Encoding sample sizes differ**: `csv_sniff.py` reads 65,536 bytes; `csv_preprocess.py` reads 32,768 bytes. Should be standardized.
 
 ### Duplicate Logic
 
-- **Two wizard implementations:** `src/finance_etl/wizard/` subpackage (CLI) and `wizard_mapping.py` (web API) both handle header inference and profile management. They are not unified. The web wizard is the primary path; the CLI wizard is rarely used.
-- **`config/categories/rules.yaml`** is an unused YAML-based category rules file. The active system is the `category_rules` DB table. This file is likely leftover from an earlier phase.
+- **Two wizard implementations:** `src/finance_etl/wizard/` subpackage (CLI) and `wizard_mapping.py` (web API) both handle header inference and profile management. They are not unified.
+- **`config/categories/rules.yaml`** is an unused YAML-based category rules file. The active system is the `category_rules` DB table + `BUILT_IN_CATEGORY_MAP`.
 - **`setup_wizard.py` at repo root** duplicates `src/finance_etl/wizard/setup_wizard.py`. Neither is referenced by the web UI.
 - **`data/profiles/*.json`** and **`data/validation/*.json`** accumulate indefinitely. There is no cleanup mechanism.
-- **Two category suggestion data stores in `app.js`**: `_catSuggestions` (merchant→category, from `/merchant-categories/suggestions`) and `_catSuggestionsData` (raw_category→normalized, from `/category-rules/suggestions`). Variable names are confusingly similar, but functions are now disambiguated (`acceptMerchantCatSuggestion` vs `acceptCatSuggestion`).
+- **Two category suggestion data stores in `app.js`**: `_catSuggestions` (merchant→category, from `/merchant-categories/suggestions`) and `_catSuggestionsData` (raw_category→normalized, from `/category-rules/suggestions`). Variable names are confusingly similar.
+- **`get_unmapped_categories()` and `get_category_suggestions()`** in `category_rules.py` are defined as module-level functions but the API endpoints in `api.py` implement equivalent logic inline rather than calling these helpers.
 
 ### Schema Inconsistencies
 
-- **`imported_file` column** exists in `runs` table (added by migration) but is not in the base DDL. It's populated during import runs but not consistently shown in the history UI.
-- ~~**`transactions_stage` never purged after commit**~~ — **FIXED.** `commit_run()` in `pipeline.py` now deletes staging rows (`DELETE FROM transactions_stage WHERE run_id = ?`) after successful commit to the ledger.
-- **`category` vs `category_normalized`**: `transactions_norm.category` holds the raw bank category string; `category_normalized` holds the applied rule result. The raw `category` column is what drives the category rules system. If a transaction was imported without a bank category, `category_normalized` and `category_parent` will be NULL even after running Apply Normalization.
-- **`runs.status` value `'committing'`** exists in the UI state machine (the client-side `pollRun` displays this label) but is never written to the `runs` DB table — the DB shows `'running'` and then goes to `'success'` or `'failed'`. The UI manufactures `'committing'` purely as a display label after the user clicks "Commit".
-- **`_staged_runs` dict is in-memory only** — if the uvicorn process restarts between a staged preview and the user clicking "Commit", the staged run is lost. `GET /runs/{id}` will still return the DB row (which says `'staged'`), but `POST /runs/{id}/commit` will raise a `KeyError` because the dict is gone. No persistence or recovery mechanism exists.
-- ~~**`start_category_normalize` missing `rows_total`**~~ — **FIXED.** The `/category-rules/apply` endpoint now calls `create_category_job()` from `category_rules.py`, which pre-computes `rows_total` so the UI progress bar shows correct totals from the start.
+- **`imported_file` column** exists in `runs` table (added by migration) but is NOT in the base DDL. Backup restore silently drops it.
+- **`category` vs `category_normalized`**: `transactions_norm.category` holds the raw bank category string; `category_normalized` holds the applied rule result. If a transaction was imported without a bank category, `category_normalized` and `category_parent` will be NULL even after running Apply Normalization.
+- **`runs.status` value `'committing'`** exists in the UI state machine but is never persisted to the DB — it lives only in the `_async_runs` in-memory dict.
 
 ### Dead / Unreferenced Code
 
-- `src/finance_etl/wizard/category_suggestion.py` — called by `wizard/setup_wizard.py` (CLI path only). No web API endpoint touches it.
-- `src/finance_etl/wizard/mapping_rules.py` — same; CLI only.
+- `resolve_category()` in `category_rules.py` — backward-compat alias for `normalize_category()`. Not imported or called anywhere.
+- `get_unmapped_categories()` in `category_rules.py` — defined but api.py implements equivalent logic inline at line 2220.
+- `get_category_suggestions()` in `category_rules.py` — defined but api.py implements equivalent logic inline at line 2249.
+- `src/finance_etl/wizard/category_suggestion.py` — called by `wizard/setup_wizard.py` (CLI path only).
+- `src/finance_etl/wizard/mapping_rules.py` — CLI only.
 - `src/finance_etl/wizard/header_inference.py` — CLI only; web wizard uses `wizard_mapping.py`.
-- `config/categories/rules.yaml` — not read by any active code path (superseded by DB table).
-- `resolve_category()` in `category_rules.py` — a backward-compat alias for `normalize_category()`. ~~Imported in `api.py` but never called~~ — dead import removed. The function itself still exists in `category_rules.py` for potential CLI usage.
-- `get_unmapped_categories()` and `get_category_suggestions()` in `category_rules.py` — defined but the API endpoints implement equivalent logic inline (at lines 2128 and 2162) rather than calling these module-level helpers.
+- `config/categories/rules.yaml` — not read by any active code path.
+- `config/canonical_schema.yaml` — not read by any active code path.
 
 ---
 
@@ -607,22 +643,22 @@ Single-row table seeded with `1` on first migration run. Used by the backup syst
 
 ### Architectural Decisions
 
-- **Single HTML file for the entire UI**: No build step, no framework, no module bundler. All 10 pages are `<section class="page">` elements toggled with CSS `.active`. This was chosen for simplicity and portability (the file is served directly by FastAPI).
-- **DuckDB over SQLite**: DuckDB handles OLAP queries (GROUP BY, date_trunc, window functions) natively, which SQLite cannot do without extensions. It also supports Parquet read/write natively.
-- **Preview-then-commit workflow**: Every import run goes through a `staged` state where the user reviews rows before they hit the ledger. This prevents bad data from being permanently loaded. The "Commit" step is a separate API call.
-- **Deterministic fingerprinting**: Each transaction row gets a `transaction_fingerprint` built from hash(date + description + amount + account). This is the dedup key — re-importing the same CSV is safe.
-- **Background threads (not async workers)**: Normalization and category-apply jobs run in Python threads via `BackgroundTasks`. There is no Celery, Redis, or worker queue. The UI polls `/normalize/{job_id}` every 1500ms.
-- **`_staged_runs` is process-local**: Staged run state (pending commit) is stored in `pipeline._staged_runs: dict[str, dict]` which lives only in the uvicorn process memory. A server restart between staging and commit loses the staged data — the DB shows `'staged'` but commit will fail with `KeyError`.
-- **YAML wizard profiles** persist column mappings per institution/account. On re-upload, the wizard auto-matches headers against existing profiles and pre-fills the field selectors.
-- **`source='user'` vs `source='learned'`** in `merchant_category_map`: User-assigned categories are never overwritten by the learn mechanism. Learned associations (from transaction data) are lower priority.
+- **Single HTML file for the entire UI**: No build step, no framework, no module bundler. All 10 pages are `<section class="page">` elements toggled with CSS `.active`.
+- **DuckDB over SQLite**: DuckDB handles OLAP queries (GROUP BY, date_trunc, window functions) natively. Also supports Parquet read/write natively.
+- **Preview-then-commit workflow**: Every import run goes through a `staged` state where the user reviews rows before they hit the ledger. The "Commit" step is a separate API call.
+- **Deterministic fingerprinting**: Each transaction row gets a `transaction_fingerprint` built from hash(date + description + amount + account). This is the dedup key.
+- **Background threads (not async workers)**: Normalization and category-apply jobs run in Python threads via `BackgroundTasks`. No Celery, Redis, or worker queue. The UI polls `/normalize/{job_id}` every 1500ms.
+- **`_staged_runs` is process-local**: Staged run state is stored in `pipeline._staged_runs: dict[str, dict]`. A server restart loses it.
+- **YAML wizard profiles** persist column mappings per institution/account. On re-upload, the wizard auto-matches headers.
+- **`source='user'` vs `source='learned'`** in `merchant_category_map`: User-assigned categories are never overwritten by the learn mechanism.
 
 ### Consistent Patterns
 
-- All DB access goes through `get_connection(db_path)` from `db.py`. The `db_path` is threaded through `create_app()` as a closure variable.
+- All DB access goes through `get_connection(db_path)` from `db.py`.
 - Every page section has a corresponding `load<PageName>()` function in `app.js` called from `navigate()`.
 - Toast notifications use `toast(msg, type, duration)` — types: `'success'`, `'error'`, `'info'`.
 - API calls from the frontend use the `api(method, path, body)` helper which wraps fetch and throws on non-2xx.
-- Background jobs always write to `normalization_jobs` for progress tracking.
+- Background jobs write to `normalization_jobs` for progress tracking.
 - `esc(str)` is used throughout `app.js` to HTML-encode user data before inserting into innerHTML.
 
 ---
@@ -631,19 +667,21 @@ Single-row table seeded with `1` on first migration run. Used by the backup syst
 
 ### Python (from `pyproject.toml`)
 
-| Package | Version | Why it's used |
-|---|---|---|
-| `duckdb` | ≥0.10.0 | Primary database engine — embedded OLAP SQL, Parquet I/O |
-| `pyarrow` | ≥14.0 | Required by DuckDB for Parquet read/write |
-| `pyyaml` | ≥6.0 | Parsing YAML mapping configs and wizard profiles |
-| `click` | ≥8.1 | CLI framework for `finance_etl` command group |
-| `chardet` | ≥5.0 | Auto-detecting CSV file encoding (UTF-8, Latin-1, etc.) |
-| `fastapi` | ≥0.115 | Web framework — API endpoints + static file serving |
-| `uvicorn` | ≥0.30 | ASGI server that runs FastAPI |
-| `python-multipart` | ≥0.0.9 | Required by FastAPI for `UploadFile` (CSV uploads) |
-| `scikit-learn` | ≥1.3 (optional) | K-Means + TF-IDF for category clustering in wizard. Install with `pip install -e ".[wizard]"` |
+| Package | Version | Why it's used | Status |
+|---|---|---|---|
+| `duckdb` | ≥0.10.0 | Primary database engine — embedded OLAP SQL, Parquet I/O | ✅ Used |
+| `pyarrow` | ≥14.0 | Required by DuckDB for Parquet read/write | ✅ Used |
+| `pyyaml` | ≥6.0 | Parsing YAML mapping configs and wizard profiles | ✅ Used |
+| `click` | ≥8.1 | CLI framework for `finance_etl` command group | ✅ Used |
+| `chardet` | ≥5.0 | Auto-detecting CSV file encoding (UTF-8, Latin-1, etc.) | ✅ Used |
+| `fastapi` | ≥0.115 | Web framework — API endpoints + static file serving | ✅ Used |
+| `uvicorn` | ≥0.30 | ASGI server that runs FastAPI | ✅ Used |
+| `python-multipart` | ≥0.0.9 | Required by FastAPI for `UploadFile` (CSV uploads) | ✅ Used |
+| `scikit-learn` | ≥1.3 (optional) | K-Means + TF-IDF for category clustering in CLI wizard | ⚠️ CLI-only |
 
-**Potentially removable:** `scikit-learn` is the only optional dependency. If the CLI wizard is deprecated, this can be removed from `pyproject.toml` entirely.
+**Note:** `pydantic` is not listed in `pyproject.toml` but is used extensively in `api.py` for request/response models. It is a transitive dependency of FastAPI and is always available when FastAPI is installed. The code gracefully degrades (`_PYDANTIC_OK = False`) if it's somehow missing.
+
+**Potentially removable:** `scikit-learn` is the only optional dependency. If the CLI wizard is deprecated, it can be removed from `pyproject.toml`.
 
 ### Frontend
 
@@ -651,68 +689,99 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ---
 
+## 9. VERSION TRACKING
+
+**Current Version:** v2.1.0
+**Project Codename:** Ledger
+
+### Changelog
+
+| Version | Date | Description |
+|---|---|---|
+| v2.1.0 | 2026-03-10 | Initial PROJECT.md audit of rebuilt repo — identified 5 critical bugs, 8 dead code candidates |
+
+### Version Increment Rules
+
+Every commit that changes functionality MUST update this table.
+
+Increment rules:
+- Patch (v2.1.0 → v2.1.1): bug fix, style change, doc update
+- Minor (v2.1.0 → v2.2.0): new feature, new endpoint, new UI section
+- Major (v2.1.0 → v3.0.0): breaking schema change, full rebuild, architecture overhaul
+
+Claude Code must add a row to the changelog on every commit that touches `src/`, `web/`, or `tests/`. Format:
+
+| v2.1.1 | YYYY-MM-DD | \<one line description of what changed\> |
+
+---
+
 ## API ENDPOINT REFERENCE
 
 All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Interactive docs available at `http://localhost:8000/docs`.
 
-| Method | Path | Tag | Description |
+| Method | Path | Tag | Description | Frontend Status |
+|---|---|---|---|---|
+| `POST` | `/upload` | files | Upload a CSV file; returns path + detected headers | 🟢 Called |
+| `GET` | `/mappings` | mappings | List available YAML mapping configs | 🟡 Exists but unused by frontend |
+| `POST` | `/wizard/detect` | wizard | Detect CSV headers and match against saved profiles | 🟢 Called |
+| `POST` | `/wizard/validate` | wizard | Validate canonical field mapping | 🟢 Called |
+| `POST` | `/wizard/save-and-run` | wizard | Save profile, start pipeline run | 🟢 Called |
+| `GET` | `/wizard/profiles` | wizard | List all saved wizard profiles | 🟢 Called |
+| `GET` | `/runs` | runs | List all import runs | 🟢 Called |
+| `POST` | `/runs` | runs | Start a new pipeline run | 🟡 Exists but unused by frontend (wizard path used instead) |
+| `GET` | `/runs/{run_id}` | runs | Get run status and counts | 🟢 Called |
+| `GET` | `/runs/{run_id}/preview` | runs | Get staged rows for preview | 🟢 Called |
+| `POST` | `/runs/{run_id}/commit` | runs | Commit staged run to ledger | 🟢 Called |
+| `DELETE` | `/runs/{run_id}` | runs | Delete run (optionally preserve transactions) | 🟢 Called |
+| `GET` | `/transactions/sources` | transactions | List available import sources per statement type | 🟢 Called |
+| `GET` | `/transactions` | transactions | Query transactions with filters/grouping/sort/pagination | 🟢 Called |
+| `GET` | `/transactions/totals` | transactions | Aggregate totals for filtered transactions | 🟢 Called |
+| `GET` | `/transactions/unreviewed-count` | transactions | Count of all unreviewed transactions | 🟢 Called |
+| `POST` | `/transactions/mark-reviewed` | transactions | Mark specific transactions as reviewed (by fingerprint) | 🟢 Called |
+| `POST` | `/transactions/mark-all-reviewed` | transactions | Mark all filtered transactions as reviewed | 🟢 Called |
+| `GET` | `/reports` | reports | List available analytics CSV reports | 🟢 Called |
+| `GET` | `/reports/{name}` | reports | Download a report CSV | 🟢 Called |
+| `POST` | `/reports/query` | reports | Run a custom parameterized report query | 🟢 Called |
+| `GET` | `/charts/{name}` | reports | Get report as JSON for charting | 🟢 Called |
+| `GET` | `/settings` | ui | Get current settings | 🟢 Called |
+| `PATCH` | `/settings` | ui | Update settings | 🟢 Called |
+| `GET` | `/logs` | ui | Get last N lines of latest log file | 🟢 Called |
+| `GET` | `/logs/download` | ui | Download current log file | 🟢 Called |
+| `GET` | `/metric-docs/{topic}` | ui | Inline metric documentation | 🟢 Called (opens in new tab) |
+| `GET` | `/merchant-rules` | merchant | List all merchant normalization rules | 🟢 Called |
+| `POST` | `/merchant-rules` | merchant | Create a merchant rule | 🟢 Called |
+| `PUT` | `/merchant-rules/{id}` | merchant | Update a merchant rule | 🟢 Called |
+| `DELETE` | `/merchant-rules/{id}` | merchant | Delete a merchant rule | 🟢 Called |
+| `POST` | `/merchant-rules/test` | merchant | Test a rule against live descriptions | 🟢 Called |
+| `GET` | `/merchant-rules/suggestions` | merchant | Suggest rules from unmatched descriptions | 🟢 Called |
+| `GET` | `/merchant-categories` | merchant | List all merchant→category mappings | 🟡 Exists but unused by frontend |
+| `GET` | `/merchant-categories/uncategorized` | merchant | List merchants without a category | 🟢 Called |
+| `GET` | `/merchant-categories/suggestions` | merchant | Keyword-heuristic category suggestions for merchants | 🟢 Called |
+| `POST` | `/merchant-categories` | merchant | Assign category to merchant | 🟢 Called |
+| `DELETE` | `/merchant-categories/{merchant}` | merchant | Remove merchant category mapping | 🟡 Exists but unused by frontend |
+| `POST` | `/normalize/apply` | merchant | Start batch merchant re-normalization job | 🟢 Called |
+| `GET` | `/normalize/{job_id}` | merchant | Poll normalization job status | 🟢 Called (merchant); 🔴 Category uses wrong path |
+| `GET` | `/category-rules` | categories | List all category rules | 🟢 Called |
+| `POST` | `/category-rules` | categories | Create or update a category rule | 🟢 Called |
+| `PUT` | `/category-rules/{id}` | categories | Update a category rule | 🟢 Called |
+| `DELETE` | `/category-rules/{id}` | categories | Delete a category rule | 🟢 Called |
+| `GET` | `/category-rules/unmapped` | categories | List unmapped raw categories with counts | 🟡 Exists but unused by frontend |
+| `GET` | `/category-rules/suggestions` | categories | Suggest mappings using built-in taxonomy | 🟢 Called |
+| `POST` | `/category-rules/apply` | categories | Start category normalization background job | 🟢 Called |
+| `GET` | `/budgets` | budgets | List all budget goals | 🟢 Called |
+| `POST` | `/budgets` | budgets | Create or update a budget goal | 🟢 Called |
+| `DELETE` | `/budgets/{id}` | budgets | Delete a budget goal | 🟢 Called |
+| `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions | 🟢 Called |
+| `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
+| `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) | 🟢 Called |
+| `DELETE` | `/recurring/override/{merchant}` | recurring | Remove a recurring override | 🟢 Called |
+| `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 9 tables + wizard profiles) | 🟢 Called |
+| `POST` | `/backup/restore` | backup | Restore from v1 or v2 JSON backup (auto-migrates, auto-snapshots) | 🟢 Called |
+| `GET` | `/backup/status` | backup | Backup system status: last export, auto-backups list, table counts | 🟢 Called |
+| `GET` | `/` | ui | Serve web UI (index.html) | 🟢 Entry point |
+| `GET` | `/docs` | (FastAPI auto) | Interactive API documentation | 🟢 Auto-generated |
+
+**Frontend calls with no backend endpoint:**
+| Method | Path | Called from | Issue |
 |---|---|---|---|
-| `POST` | `/upload` | files | Upload a CSV file; returns path + detected headers |
-| `GET` | `/mappings` | mappings | List available YAML mapping configs |
-| `POST` | `/wizard/detect` | wizard | Detect CSV headers and match against saved profiles |
-| `POST` | `/wizard/validate` | wizard | Validate canonical field mapping |
-| `POST` | `/wizard/save-and-run` | wizard | Save profile, start pipeline run |
-| `GET` | `/wizard/profiles` | wizard | List all saved wizard profiles |
-| `GET` | `/runs` | runs | List all import runs |
-| `POST` | `/runs` | runs | Start a new pipeline run |
-| `GET` | `/runs/{run_id}` | runs | Get run status and counts |
-| `GET` | `/runs/{run_id}/preview` | runs | Get staged rows for preview |
-| `POST` | `/runs/{run_id}/commit` | runs | Commit staged run to ledger |
-| `DELETE` | `/runs/{run_id}` | runs | Delete run (optionally preserve transactions) |
-| `GET` | `/transactions/sources` | transactions | List available import sources per statement type |
-| `GET` | `/transactions` | transactions | Query transactions with filters/grouping/sort/pagination |
-| `GET` | `/transaction-totals` | transactions | Aggregate totals for filtered transactions |
-| `GET` | `/transactions/unreviewed-count` | transactions | Count of all unreviewed transactions |
-| `POST` | `/transactions/mark-reviewed` | transactions | Mark specific transactions as reviewed (by fingerprint) |
-| `POST` | `/transactions/mark-all-reviewed` | transactions | Mark all filtered transactions as reviewed |
-| `GET` | `/reports` | reports | List available analytics CSV reports |
-| `GET` | `/reports/{name}/download` | reports | Download a report CSV |
-| `POST` | `/custom-report` | reports | Run a custom SQL report query |
-| `GET` | `/charts/{name}` | reports | Get report as JSON for charting |
-| `GET` | `/settings` | settings | Get current settings |
-| `PATCH` | `/settings` | settings | Update settings |
-| `GET` | `/logs` | settings | Get last N lines of latest log file |
-| `GET` | `/logs/download` | settings | Download current log file |
-| `GET` | `/metric-docs/{topic}` | ui | Inline metric documentation |
-| `GET` | `/merchant-rules` | merchant | List all merchant normalization rules |
-| `POST` | `/merchant-rules` | merchant | Create a merchant rule |
-| `PUT` | `/merchant-rules/{id}` | merchant | Update a merchant rule |
-| `DELETE` | `/merchant-rules/{id}` | merchant | Delete a merchant rule |
-| `POST` | `/merchant-rules/test` | merchant | Test a rule against live descriptions |
-| `GET` | `/merchant-rules/suggestions` | merchant | Suggest rules from unmatched descriptions |
-| `GET` | `/merchant-categories` | merchant | List all merchant→category mappings |
-| `GET` | `/merchant-categories/uncategorized` | merchant | List merchants without a category |
-| `GET` | `/merchant-categories/suggestions` | merchant | Keyword-heuristic category suggestions for merchants |
-| `POST` | `/merchant-categories` | merchant | Assign category to merchant |
-| `DELETE` | `/merchant-categories/{merchant}` | merchant | Remove merchant category mapping |
-| `POST` | `/normalize/apply` | merchant | Start batch merchant re-normalization job |
-| `GET` | `/normalize/{job_id}` | merchant | Poll normalization job status |
-| `GET` | `/category-rules` | categories | List all category rules |
-| `POST` | `/category-rules` | categories | Create or update a category rule |
-| `PUT` | `/category-rules/{id}` | categories | Update a category rule |
-| `DELETE` | `/category-rules/{id}` | categories | Delete a category rule |
-| `GET` | `/category-rules/unmapped` | categories | List unmapped raw categories with counts |
-| `GET` | `/category-rules/suggestions` | categories | Suggest mappings using built-in taxonomy |
-| `POST` | `/category-rules/apply` | categories | Start category normalization background job |
-| `GET` | `/budgets` | budgets | List all budget goals |
-| `POST` | `/budgets` | budgets | Create or update a budget goal |
-| `DELETE` | `/budgets/{id}` | budgets | Delete a budget goal |
-| `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions |
-| `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total |
-| `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) |
-| `DELETE` | `/recurring/override/{merchant}` | recurring | Remove a recurring override (revert to auto-detection) |
-| `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 9 tables + wizard profiles) |
-| `POST` | `/backup/restore` | backup | Restore from v1 or v2 JSON backup (auto-migrates, auto-snapshots) |
-| `GET` | `/backup/status` | backup | Backup system status: last export, auto-backups list, table counts |
-| `GET` | `/` | ui | Serve web UI (index.html) |
-| `GET` | `/docs` | (FastAPI auto) | Interactive API documentation |
+| `GET` | `/category-normalize/{jobId}` | `app.js:3174` (`_pollCatNorm`) | 🔴 Endpoint does not exist — should be `/normalize/{jobId}` |
