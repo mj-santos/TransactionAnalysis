@@ -1,0 +1,42 @@
+# Example mapping: Separate Debit / Credit columns (common in UK/EU bank exports)
+# amount_format_family: debit_credit
+# statement_type: bank
+# Rule: amount = credit - debit (outflow negative, inflow positive)
+#
+# Canonical field names (as of this release):
+#   bank_debit   → debit_col  (money leaving the bank account)
+#   bank_credit  → credit_col (money entering the bank account)
+
+bank_key: example_debit_credit
+bank_name: "Example Bank (Debit/Credit)"
+account_name: "Current Account"
+account_id: "CA-XXXX-5678"
+
+amount_format_family: debit_credit
+
+column_map:
+  "Transaction Date": transaction_date
+  "Narrative": description
+
+drop_columns:
+  - "Balance"     # running balance is not needed in normalized form
+
+date:
+  transaction_date: "Transaction Date"
+  # No posted_date available in this format
+  date_format: "%d/%m/%Y"   # EU date format (Day/Month/Year)
+
+amount:
+  debit_col: "Debit Amount"    # bank_debit canonical field → debit_col pipeline key
+  credit_col: "Credit Amount"  # bank_credit canonical field → credit_col pipeline key
+
+currency_default: "GBP"
+
+locale:
+  decimal_separator: "."
+  thousands_separator: ","
+  parentheses_negative: false
+  date_locale: "EU"
+
+# --- Expected CSV headers (for reference / documentation) ---
+# Transaction Date, Narrative, Debit Amount, Credit Amount, Balance

@@ -1,0 +1,22 @@
+[
+  {
+    "transaction_date": "2024-03-15",
+    "posted_date": "2024-03-16",
+    "description": "Coffee, \"Large\"",
+    "amount": "-4.75",
+    "currency": "USD",
+    "bank_name": "Example Bank (Signed)",
+    "account_name": "Personal Checking",
+    "account_id": "CHK-XXXX-1234"
+  },
+  {
+    "transaction_date": "2024-03-17",
+    "posted_date": "2024-03-18",
+    "description": "Refund",
+    "amount": "10.00",
+    "currency": "USD",
+    "bank_name": "Example Bank (Signed)",
+    "account_name": "Personal Checking",
+    "account_id": "CHK-XXXX-1234"
+  }
+]

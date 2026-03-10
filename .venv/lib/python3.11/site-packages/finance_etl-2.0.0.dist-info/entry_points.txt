@@ -1,0 +1,2 @@
+[console_scripts]
+finance_etl = finance_etl.cli:main

@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>finance_etl</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- ══════════════ SIDEBAR ══════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <h1>finance_etl</h1>
+    <p>Transaction Pipeline v2.1</p>
+  </div>
+  <nav>
+    <a href="#" class="active" data-page="dashboard">
+      <span class="icon">🏠</span> Dashboard
+      <span id="nav-unreviewed-badge" class="nav-badge"></span>
+    </a>
+    <a href="#" data-page="import">
+      <span class="icon">📥</span> Import
+    </a>
+    <a href="#" data-page="history">
+      <span class="icon">📋</span> History
+    </a>
+    <a href="#" data-page="credit-cards">
+      <span class="icon">💳</span> Credit Cards
+    </a>
+    <a href="#" data-page="bank-transactions">
+      <span class="icon">🏦</span> Bank Transactions
+    </a>
+    <a href="#" data-page="reports">
+      <span class="icon">📊</span> Reports
+    </a>
+    <a href="#" data-page="merchant-rules">
+      <span class="icon">🏪</span> Merchants
+    </a>
+    <a href="#" data-page="category-rules">
+      <span class="icon">🏷️</span> Categories
+    </a>
+    <a href="#" data-page="recurring-transactions">
+      <span class="icon">🔄</span> Recurring
+    </a>
+    <a href="#" data-page="settings">
+      <span class="icon">⚙️</span> Settings
+    </a>
+  </nav>
+  <div class="sidebar-footer">
+    <a href="/docs" target="_blank">API docs ↗</a>
+  </div>
+</aside>
+
+<!-- ══════════════ CONTENT ══════════════ -->
+<div class="content">
+
+  <div class="topbar">
+    <h2 id="topbar-title">Dashboard</h2>
+    <div id="api-status" style="font-size:12px; color: var(--text-muted);">
+      <span class="status-dot"></span>API connected
+    </div>
+  </div>
+
+  <!-- ─── DASHBOARD PAGE ─── -->
+  <section id="page-dashboard" class="page active">
+    <!-- Month navigation -->
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+      <button class="btn btn-secondary btn-sm" onclick="dashboardPrevMonth()">← Prev</button>
+      <span id="dash-month-label" style="font-weight:600; font-size:15px;"></span>
+      <button class="btn btn-secondary btn-sm" onclick="dashboardNextMonth()">Next →</button>
+      <button class="btn btn-secondary btn-sm" onclick="loadDashboard()" style="margin-left:8px;">↻ Refresh</button>
+    </div>
+
+    <!-- KPI row -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px; margin-bottom:20px;">
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">MTD Spending</div>
+        <div id="dash-mtd" style="font-size:28px; font-weight:700; margin-top:4px;">—</div>
+        <div id="dash-vs-prev" style="font-size:12px; color:var(--text-muted); margin-top:4px;"></div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Prior Month</div>
+        <div id="dash-prev-spend" style="font-size:28px; font-weight:700; margin-top:4px;">—</div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Top Category</div>
+        <div id="dash-top-cat" style="font-size:18px; font-weight:700; margin-top:4px;">—</div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Unreviewed</div>
+        <div id="dash-unreviewed" style="font-size:28px; font-weight:700; margin-top:4px; color:var(--warning);">—</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">transactions pending review</div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px;">
+      <!-- Top categories -->
+      <div class="card">
+        <div class="card-title">Top Spending by Category</div>
+        <div id="dash-cat-list" style="display:flex; flex-direction:column; gap:6px; margin-top:4px;"></div>
+      </div>
+      <!-- Budget tracking -->
+      <div class="card">
+        <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>Budget Tracker</span>
+          <button class="btn btn-secondary btn-sm" onclick="openBudgetForm()">+ Set Budget</button>
+        </div>
+        <div id="dash-budget-list" style="display:flex; flex-direction:column; gap:8px; margin-top:4px;"></div>
+        <!-- Budget form (inline) -->
+        <div id="budget-form" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt,#f8f9fa); border-radius:8px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+            <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+              Parent Group
+              <input type="text" id="bf-parent" placeholder="e.g. Food & Dining" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+            </label>
+            <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+              Subcategory (optional)
+              <input type="text" id="bf-category" placeholder="e.g. Restaurants" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+            </label>
+            <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+              Monthly Budget ($)
+              <input type="number" id="bf-amount" placeholder="500" min="0" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+            </label>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-primary btn-sm" onclick="saveBudget()">Save</button>
+            <button class="btn btn-secondary btn-sm" onclick="closeBudgetForm()">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent transactions -->
+    <div class="card">
+      <div class="card-title">Recent Transactions</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th><th>Description / Merchant</th><th>Category</th><th>Account</th><th class="text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody id="dash-recent-tbody">
+            <tr><td colspan="5" class="text-center text-muted" style="padding:24px;">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── IMPORT PAGE ─── -->
+  <section id="page-import" class="page">
+
+    <div style="display:flex; justify-content:flex-end; margin-bottom:8px;">
+      <button class="btn btn-secondary btn-sm" onclick="resetImports()" title="Clear all uploads and reset the import flow">↺ Reset Imports</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">1 — Upload CSV file(s)</div>
+      <div class="drop-zone" id="drop-zone">
+        <div class="dz-icon">📂</div>
+        <p>Drag &amp; drop your bank export CSV here, or</p>
+        <label class="btn btn-secondary" style="cursor:pointer">
+          Browse files
+          <input type="file" id="file-input" accept=".csv" multiple hidden />
+        </label>
+      </div>
+      <div class="file-chips" id="file-chips"></div>
+      <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+        <label class="toggle-row" style="font-size:12px;">
+          <input type="checkbox" id="custom-headers-toggle" checked />
+          Include non-standard column headers in wizard (persisted per profile)
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">2 — Run pipeline</div>
+      <p style="font-size:13px; color:var(--text-muted); margin:0;">
+        Upload a CSV file above to open the mapping wizard. The wizard configures field
+        mapping, statement type, and account details, then starts the import automatically.
+      </p>
+    </div>
+
+    <!-- Run status card -->
+    <div class="run-status" id="run-status">
+      <div class="rs-header">
+        <span id="rs-icon">⏳</span>
+        <span id="rs-label">Processing…</span>
+        <span class="rs-id" id="rs-id"></span>
+      </div>
+      <div class="rs-counts" id="rs-counts"></div>
+      <div class="rs-actions" id="rs-actions"></div>
+    </div>
+
+    <!-- Preview panel (shown when staged) -->
+    <div id="preview-container" style="display:none">
+      <div class="preview-panel">
+        <div class="preview-header">
+          <span>Transaction Preview</span>
+          <span class="preview-meta" id="preview-meta"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="preview-table">
+            <thead><tr id="preview-head"><th>#</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Account</th></tr></thead>
+            <tbody id="preview-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ─── HISTORY PAGE ─── -->
+  <section id="page-history" class="page">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:13px; color:var(--text-muted);">All import runs, most recent first.</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadHistory()">↻ Refresh</button>
+    </div>
+
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Run ID</th>
+              <th>Imported File</th>
+              <th>Started</th>
+              <th>Status</th>
+              <th class="text-right">In</th>
+              <th class="text-right">Staged</th>
+              <th class="text-right">Loaded</th>
+              <th class="text-right">Errors</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody">
+            <tr><td colspan="9" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Inline preview for history runs -->
+    <div id="history-preview-container" style="display:none">
+      <div class="preview-panel">
+        <div class="preview-header">
+          <span>Staged Transactions — <span id="history-preview-id" class="mono"></span></span>
+          <span class="preview-meta" id="history-preview-meta"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr id="history-preview-head"><th>#</th><th>Date</th><th>Description</th><th>Amount</th><th>Currency</th><th>Account</th></tr></thead>
+            <tbody id="history-preview-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CREDIT CARDS PAGE ─── -->
+  <section id="page-credit-cards" class="page">
+    <!-- Filter controls (shared pattern with Reports tab) -->
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-title" style="margin-bottom:10px;">Filters</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <!-- Import Source filter — radio-button dropdown, populated by table_controls.js -->
+        <div class="form-group" style="margin:0; min-width:200px;">
+          <label style="font-size:11px;">Import Source</label>
+          <div id="cc-source-ctrl" class="source-dropdown-wrap"></div>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label style="font-size:11px;">Quick Date</label>
+          <div style="display:flex; gap:4px; flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('credit_card','this_month')" style="font-size:11px; padding:3px 8px;">This Month</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('credit_card','last_month')" style="font-size:11px; padding:3px 8px;">Last Month</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('credit_card','3months')" style="font-size:11px; padding:3px 8px;">3 Months</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('credit_card','ytd')" style="font-size:11px; padding:3px 8px;">YTD</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('credit_card','all')" style="font-size:11px; padding:3px 8px;">All</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="cc-date-from" style="font-size:11px;">Date from</label>
+          <input type="date" id="cc-date-from" onchange="loadTxnTab('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="cc-date-to" style="font-size:11px;">Date to</label>
+          <input type="date" id="cc-date-to" onchange="loadTxnTab('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:150px;">
+          <label for="cc-account" style="font-size:11px;">Account</label>
+          <input type="text" id="cc-account" placeholder="Account name or ID" oninput="debounceTxn('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="cc-category" style="font-size:11px;">Category</label>
+          <input type="text" id="cc-category" placeholder="Category…" oninput="debounceTxn('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:160px;">
+          <label for="cc-merchant" style="font-size:11px;">Merchant / Description</label>
+          <input type="text" id="cc-merchant" placeholder="Search…" oninput="debounceTxn('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="cc-subtype" style="font-size:11px;">Amount Type</label>
+          <select id="cc-subtype" onchange="loadTxnTab('credit_card')">
+            <option value="">All</option>
+            <option value="spending">Spending</option>
+            <option value="payment">Payment</option>
+            <option value="adjustment">Adjustment</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="cc-group-by" style="font-size:11px;">Group by</label>
+          <select id="cc-group-by" onchange="loadTxnTab('credit_card')">
+            <option value="">No grouping</option>
+            <option value="transaction_date">Date</option>
+            <option value="category">Category</option>
+            <option value="category_normalized">Category (Normalized)</option>
+            <option value="category_parent">Category (Parent Group)</option>
+            <option value="merchant">Merchant</option>
+            <option value="account_name">Account</option>
+          </select>
+        </div>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="cc-unreviewed-only" onchange="loadTxnTab('credit_card')" />
+          Unreviewed Only
+        </label>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('credit_card')">✕ Clear</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('credit_card')">↻ Refresh</button>
+        <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('credit_card')">Mark All Reviewed</button>
+      </div>
+    </div>
+    <!-- Transaction table -->
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="table-wrap">
+        <table id="cc-table">
+          <thead><tr id="cc-thead"></tr></thead>
+          <tbody id="cc-tbody">
+            <tr><td colspan="6" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+          <!-- Totals row — sits below all rows, visible by scrolling the page -->
+          <tfoot id="cc-tfoot"></tfoot>
+        </table>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+      <button class="btn btn-secondary btn-sm" id="cc-load-more" style="display:none;" onclick="loadMoreTxn('credit_card')">Load more</button>
+      <span id="cc-meta" style="font-size:12px; color:var(--text-muted);"></span>
+    </div>
+    <!-- CC legacy/conflict warning banners — populated by renderTxnTotals() -->
+    <div id="cc-totals-warn" style="margin-top:8px;"></div>
+  </section>
+
+  <!-- ─── BANK TRANSACTIONS PAGE ─── -->
+  <section id="page-bank-transactions" class="page">
+    <!-- Filter controls -->
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-title" style="margin-bottom:10px;">Filters</div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <!-- Import Source filter — radio-button dropdown, populated by table_controls.js -->
+        <div class="form-group" style="margin:0; min-width:200px;">
+          <label style="font-size:11px;">Import Source</label>
+          <div id="bk-source-ctrl" class="source-dropdown-wrap"></div>
+        </div>
+        <div class="form-group" style="margin:0;">
+          <label style="font-size:11px;">Quick Date</label>
+          <div style="display:flex; gap:4px; flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('bank','this_month')" style="font-size:11px; padding:3px 8px;">This Month</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('bank','last_month')" style="font-size:11px; padding:3px 8px;">Last Month</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('bank','3months')" style="font-size:11px; padding:3px 8px;">3 Months</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('bank','ytd')" style="font-size:11px; padding:3px 8px;">YTD</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('bank','all')" style="font-size:11px; padding:3px 8px;">All</button>
+          </div>
+        </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="bk-date-from" style="font-size:11px;">Date from</label>
+          <input type="date" id="bk-date-from" onchange="loadTxnTab('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="bk-date-to" style="font-size:11px;">Date to</label>
+          <input type="date" id="bk-date-to" onchange="loadTxnTab('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:150px;">
+          <label for="bk-account" style="font-size:11px;">Account</label>
+          <input type="text" id="bk-account" placeholder="Account name or ID" oninput="debounceTxn('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="bk-category" style="font-size:11px;">Category</label>
+          <input type="text" id="bk-category" placeholder="Category…" oninput="debounceTxn('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:160px;">
+          <label for="bk-merchant" style="font-size:11px;">Merchant / Description</label>
+          <input type="text" id="bk-merchant" placeholder="Search…" oninput="debounceTxn('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="bk-group-by" style="font-size:11px;">Group by</label>
+          <select id="bk-group-by" onchange="loadTxnTab('bank')">
+            <option value="">No grouping</option>
+            <option value="transaction_date">Date</option>
+            <option value="category">Category</option>
+            <option value="merchant">Merchant</option>
+            <option value="account_name">Account</option>
+          </select>
+        </div>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="bk-unreviewed-only" onchange="loadTxnTab('bank')" />
+          Unreviewed Only
+        </label>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('bank')">✕ Clear</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('bank')">↻ Refresh</button>
+        <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('bank')">Mark All Reviewed</button>
+      </div>
+    </div>
+    <!-- Transaction table -->
+    <div class="card" style="padding:0; overflow:hidden;">
+      <div class="table-wrap">
+        <table id="bk-table">
+          <thead><tr id="bk-thead"></tr></thead>
+          <tbody id="bk-tbody">
+            <tr><td colspan="6" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+          <tfoot id="bk-tfoot"></tfoot>
+        </table>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+      <button class="btn btn-secondary btn-sm" id="bk-load-more" style="display:none;" onclick="loadMoreTxn('bank')">Load more</button>
+      <span id="bk-meta" style="font-size:12px; color:var(--text-muted);"></span>
+    </div>
+    <!-- Bank-tab warn element (unused; kept for renderTxnTotals() API symmetry) -->
+    <div id="bk-totals-warn" style="margin-top:8px;"></div>
+  </section>
+
+  <!-- ─── REPORTS PAGE ─── -->
+  <section id="page-reports" class="page">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span style="font-size:13px; color:var(--text-muted);">Analytics generated after each successful import.</span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary btn-sm" onclick="toggleCustomReport()">+ Create report</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadReports()">↻ Refresh</button>
+      </div>
+    </div>
+
+    <!-- Custom report builder -->
+    <div class="card" id="custom-report-card" style="display:none; margin-top:14px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Custom Report Builder</span>
+        <button class="btn btn-secondary btn-sm" onclick="toggleCustomReport()">✕ Close</button>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:12px;">
+
+        <!-- Filters -->
+        <div>
+          <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">Filters</div>
+          <div id="report-filter-rows" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="addReportFilter()">+ Add filter</button>
+        </div>
+
+        <!-- Group by + bucket -->
+        <div style="display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap;">
+          <div class="form-group" style="flex:2; min-width:160px; margin:0;">
+            <label for="report-group-by">Group by</label>
+            <select id="report-group-by" multiple size="4" style="height:auto;">
+              <option value="transaction_date">Transaction Date</option>
+              <option value="category">Category</option>
+              <option value="category_normalized">Category (Normalized)</option>
+              <option value="category_parent">Category (Parent Group)</option>
+              <option value="merchant">Merchant</option>
+              <option value="bank_name">Bank</option>
+              <option value="account_name">Account</option>
+              <option value="currency">Currency</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:1; min-width:120px; margin:0;">
+            <label for="report-bucket">Date bucket</label>
+            <select id="report-bucket">
+              <option value="">None</option>
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month">Month</option>
+              <option value="year">Year</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex:2; min-width:200px; margin:0;">
+            <label style="font-size:11px;">Quick Date</label>
+            <div style="display:flex; gap:4px; flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-sm" onclick="setReportDatePreset('this_month')" style="font-size:11px; padding:3px 8px;">This Month</button>
+              <button class="btn btn-secondary btn-sm" onclick="setReportDatePreset('last_month')" style="font-size:11px; padding:3px 8px;">Last Month</button>
+              <button class="btn btn-secondary btn-sm" onclick="setReportDatePreset('3months')" style="font-size:11px; padding:3px 8px;">3 Months</button>
+              <button class="btn btn-secondary btn-sm" onclick="setReportDatePreset('ytd')" style="font-size:11px; padding:3px 8px;">YTD</button>
+              <button class="btn btn-secondary btn-sm" onclick="setReportDatePreset('all')" style="font-size:11px; padding:3px 8px;">All</button>
+            </div>
+          </div>
+          <div class="form-group" style="flex:1; min-width:120px; margin:0;">
+            <label for="report-date-from">Date from</label>
+            <input type="date" id="report-date-from" />
+          </div>
+          <div class="form-group" style="flex:1; min-width:120px; margin:0;">
+            <label for="report-date-to">Date to</label>
+            <input type="date" id="report-date-to" />
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-primary btn-sm" onclick="runCustomReport()">▶ Run report</button>
+          <button class="btn btn-secondary btn-sm" onclick="downloadReportResults()" title="Download current results as CSV">⬇ Download results</button>
+        </div>
+
+        <!-- Results -->
+        <div id="custom-report-results" style="display:none;">
+          <div style="font-size:12px; color:var(--text-muted); margin-bottom:6px;" id="custom-report-meta"></div>
+          <div class="table-wrap" style="max-height:380px; overflow-y:auto;">
+            <table>
+              <thead><tr id="custom-report-head"></tr></thead>
+              <tbody id="custom-report-body"></tbody>
+              <tfoot id="custom-report-foot"></tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="reports-grid" id="reports-grid">
+      <div class="empty"><div class="empty-icon">📊</div>No reports yet. Run an import first.</div>
+    </div>
+
+    <div id="chart-area" style="display:none">
+      <div class="chart-header">
+        <strong id="chart-title"></strong>
+        <button class="btn btn-secondary btn-sm" onclick="closeChart()">✕ Close</button>
+      </div>
+
+      <!-- Grouping controls for prebuilt reports -->
+      <div id="chart-grouping" style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; padding:10px 0 6px; border-bottom:1px solid var(--border); margin-bottom:8px;">
+        <input type="hidden" id="chart-current-name" value="" />
+        <div class="form-group" style="margin:0; min-width:140px;">
+          <label for="chart-group-field" style="font-size:11px;">Group by</label>
+          <select id="chart-group-field">
+            <option value="">— No re-grouping —</option>
+            <option value="transaction_date">Transaction Date</option>
+            <option value="category">Category</option>
+            <option value="category_normalized">Category (Normalized)</option>
+            <option value="category_parent">Category (Parent Group)</option>
+            <option value="merchant">Merchant</option>
+            <option value="bank_name">Bank</option>
+            <option value="account_name">Account</option>
+            <option value="currency">Currency</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin:0; min-width:110px;">
+          <label for="chart-group-bucket" style="font-size:11px;">Bucket</label>
+          <select id="chart-group-bucket">
+            <option value="">None</option>
+            <option value="day">Day</option>
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+            <option value="year">Year</option>
+          </select>
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="applyChartGrouping()">Apply grouping</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="resetChartGrouping()">Reset</button>
+      </div>
+
+      <div class="table-wrap" style="max-height:420px; overflow-y:auto;">
+        <table>
+          <thead><tr id="chart-head"></tr></thead>
+          <tbody id="chart-body"></tbody>
+          <tfoot id="chart-foot"></tfoot>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── SETTINGS PAGE ─── -->
+  <section id="page-settings" class="page">
+    <div class="card">
+      <div class="card-title">Debug &amp; Support Settings</div>
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <label class="toggle-row">
+          <input type="checkbox" id="verbose-logs-toggle" />
+          Verbose API error messages (include backend exception details)
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="show-logs-toggle" />
+          Show logs panel when an operation fails
+        </label>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <button class="btn btn-primary btn-sm" onclick="saveSettings()">Save settings</button>
+          <button class="btn btn-secondary btn-sm" onclick="refreshLogs()">Refresh logs</button>
+          <span id="settings-status" class="text-muted" style="font-size:12px;"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Backup & Restore (v2) -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Data Backup &amp; Restore</span>
+        <span id="backup-version-badge" class="badge" style="font-size:11px; background:var(--primary); color:#fff; padding:2px 8px; border-radius:4px;">v2</span>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+        Export the complete application state (all 8 tables + wizard profiles) as a single JSON file.
+        Restoring from a backup replaces all data. Auto-backups are created on every successful import commit.
+      </p>
+
+      <!-- Last backup info -->
+      <div id="backup-info" style="font-size:12px; color:var(--text-muted); margin-bottom:16px; display:none;">
+        <span id="backup-last-export"></span>
+        <span id="backup-auto-count" style="margin-left:12px;"></span>
+      </div>
+
+      <!-- Export -->
+      <div style="margin-bottom:20px;">
+        <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Export</div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="downloadBackup()">Download Full Backup (JSON)</button>
+          <span id="backup-export-status" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
+      </div>
+
+      <!-- Restore -->
+      <div>
+        <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Restore</div>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">
+          Select a backup JSON file (v1 or v2). A snapshot of the current state is saved automatically before overwriting.
+          All existing data will be <strong>replaced</strong>.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <input type="file" id="restore-file-input" accept=".json" style="font-size:13px;" onchange="previewBackup(this)" />
+          <span id="backup-restore-status" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
+      </div>
+
+      <!-- DB table counts -->
+      <div id="backup-table-counts" style="margin-top:16px; display:none;">
+        <div style="font-size:13px; font-weight:600; margin-bottom:6px;">Current Database</div>
+        <div id="backup-counts-grid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:6px; font-size:12px;"></div>
+      </div>
+    </div>
+
+    <!-- Restore preview modal (hidden by default) -->
+    <div id="restore-preview-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+      <div style="background:var(--bg-card); border-radius:8px; padding:24px; max-width:500px; width:90%; max-height:80vh; overflow-y:auto;">
+        <div style="font-size:16px; font-weight:600; margin-bottom:12px;">Restore Preview</div>
+        <div id="restore-preview-body" style="font-size:13px; margin-bottom:16px;"></div>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+          <button class="btn btn-secondary btn-sm" onclick="cancelRestore()">Cancel</button>
+          <button class="btn btn-primary btn-sm" onclick="confirmRestore()" style="background:#e74c3c; border-color:#e74c3c;">Replace All Data</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="logs-panel" style="display:none;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Backend Logs</span>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span id="logs-file" class="mono text-muted" style="font-size:11px;"></span>
+          <a id="logs-download-btn" class="btn btn-secondary btn-sm" href="/logs/download" download
+             title="Download the current log file as a text file">
+            ⬇ Download
+          </a>
+        </div>
+      </div>
+      <pre id="logs-output" class="logs-output">No logs loaded yet.</pre>
+    </div>
+  </section>
+
+  <!-- ─── MERCHANT RULES PAGE ─── -->
+  <section id="page-merchant-rules" class="page">
+
+    <!-- ── Recommended Rules ─────────────────────────────────── -->
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>💡 Recommended Normalization Rules</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="rule-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
+          <button class="btn btn-secondary btn-sm" onclick="loadRuleSuggestions()">Analyze My Data</button>
+          <button id="rule-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="acceptAllRuleSuggestions()">Accept All</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Automatically finds patterns in your raw transaction descriptions and proposes normalization rules.
+        Each suggestion shows the inferred merchant name, match pattern, and real examples from your data.
+        Click <strong>Analyze My Data</strong> to generate recommendations.
+      </p>
+      <div id="rule-suggestions-list" style="display:flex; flex-direction:column; gap:8px;">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <!-- Merchant Normalization Rules -->
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Merchant Normalization Rules</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="loadMerchantRules()">↻ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="openRuleForm(null)">+ Add Rule</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Rules map transaction descriptions to normalized merchant names. Applied in priority order (highest first) during import and re-normalization.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Priority</th>
+              <th>Match Type</th>
+              <th>Pattern</th>
+              <th>→ Merchant</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="merchant-rules-tbody">
+            <tr><td colspan="5" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Re-normalize button -->
+      <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
+        <button class="btn btn-secondary" onclick="startRenormalize()">↻ Re-normalize All Transactions</button>
+        <span id="renorm-status" style="font-size:13px; color:var(--text-muted);"></span>
+      </div>
+    </div>
+
+    <!-- Rule editor form (inline) -->
+    <div id="rule-form-card" class="card" style="display:none; margin-bottom:24px;">
+      <div class="card-title" id="rule-form-title">Add Rule</div>
+
+      <!-- Top row: Merchant name + Priority -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          → Normalized Merchant Name
+          <input id="rf-merchant" type="text" placeholder="e.g. Amazon, Uber, Starbucks" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Priority (higher = first)
+          <input id="rf-priority" type="number" value="0" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+      </div>
+
+      <!-- Conditions section -->
+      <div style="margin-bottom:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+          <span style="font-size:13px; font-weight:600;">Match Conditions</span>
+          <div id="rf-logic-wrap" style="display:none; align-items:center; gap:6px; font-size:13px;">
+            <span style="color:var(--text-muted);">Combine with:</span>
+            <select id="rf-logic" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;">
+              <option value="AND">AND — all conditions must match</option>
+              <option value="OR">OR — any condition must match</option>
+            </select>
+          </div>
+        </div>
+        <div id="rf-conditions" style="display:flex; flex-direction:column; gap:8px; margin-bottom:8px;">
+          <!-- Condition rows injected by JS -->
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="addConditionRow()" style="font-size:12px;">+ Add Condition</button>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:6px; margin-bottom:0;">
+          Use <strong>NOT</strong> to exclude patterns (e.g. contains "AMAZON" AND NOT contains "FRESH").
+        </p>
+      </div>
+
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-primary btn-sm" onclick="saveRule()">Save Rule</button>
+        <button class="btn btn-secondary btn-sm" onclick="testRule()">Test Conditions</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeRuleForm()">Cancel</button>
+        <span id="rf-test-result" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+      <div id="rf-test-matches" style="display:none; margin-top:8px; font-size:12px; color:var(--text-muted); background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:8px;"></div>
+    </div>
+
+    <!-- Uncategorized Merchants panel -->
+    <div class="card">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Uncategorized Merchants</span>
+        <button class="btn btn-secondary btn-sm" onclick="loadUncategorized()">↻ Refresh</button>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Merchants in the ledger with no category assigned. Assign a category to apply it to all matching transactions.
+      </p>
+      <div id="uncategorized-list" style="display:flex; flex-direction:column; gap:8px;">
+        <span style="color:var(--text-muted); font-size:13px;">Loading…</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ─── CATEGORY RULES PAGE ─── -->
+  <section id="page-category-rules" class="page">
+
+    <!-- Suggested Mappings panel -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Suggested Category Mappings</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="crule-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
+          <button class="btn btn-secondary btn-sm" id="crule-suggest-accept-all" style="display:none;" onclick="acceptAllCatSuggestions()">✓ Accept All</button>
+          <button class="btn btn-primary btn-sm" onclick="loadCatSuggestions()">Analyze My Data</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Scans all raw bank category strings and suggests normalized mappings. Green = matches built-in taxonomy; grey = needs manual assignment.
+      </p>
+      <div id="crule-suggestions-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+    </div>
+
+    <!-- Suggested Merchant Categories panel -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>🏷 Suggested Merchant Categories</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="cat-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
+          <button id="cat-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="acceptAllCategorySuggestions()">Accept All</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadCategorySuggestions()">Suggest Categories</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Matches your normalized merchants against common category patterns (Restaurants, Groceries, Gas, Shopping, etc.).
+        Only uncategorized merchants are shown. Click <strong>Suggest Categories</strong> to start.
+      </p>
+      <div id="cat-suggestions-list" style="display:flex; flex-direction:column; gap:6px;">
+        <!-- populated by JS -->
+      </div>
+    </div>
+
+    <!-- Category Rules table -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Category Normalization Rules</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="loadCategoryRules()">↻ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="openCatRuleForm(null)">+ Add Rule</button>
+        </div>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Maps raw bank categories to your normalized taxonomy. After saving rules, click "Apply Normalization" to update all transactions.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Raw Bank Category</th>
+              <th>→ Normalized Category</th>
+              <th>Parent Group</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="category-rules-tbody">
+            <tr><td colspan="4" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Category Rule editor form -->
+    <div id="cat-rule-form-card" class="card" style="display:none; margin-bottom:20px;">
+      <div class="card-title" id="cat-rule-form-title">Add Category Rule</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:12px;">
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Raw Bank Category (exact)
+          <input id="crf-raw" type="text" placeholder="e.g. Restaurant-Restaurant" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          → Normalized Category
+          <input id="crf-category" type="text" placeholder="e.g. Restaurants" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Parent Group
+          <select id="crf-parent" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
+            <option value="">— Select parent —</option>
+            <option>Food & Dining</option>
+            <option>Shopping</option>
+            <option>Travel</option>
+            <option>Transportation</option>
+            <option>Entertainment</option>
+            <option>Health & Wellness</option>
+            <option>Bills & Utilities</option>
+            <option>Financial</option>
+            <option>Education</option>
+            <option>Home</option>
+            <option>Gifts & Charity</option>
+            <option>Other</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-primary btn-sm" onclick="saveCatRule()">Save Rule</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeCatRuleForm()">Cancel</button>
+        <span id="crf-status" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+    </div>
+
+    <!-- Apply normalization -->
+    <div class="card">
+      <div class="card-title">Apply Normalization</div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Re-runs all category rules against every transaction. Updates <code>category_normalized</code> and <code>category_parent</code> columns used in reports and the dashboard.
+      </p>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-primary btn-sm" onclick="startCategoryNormalize()">▶ Apply Category Rules</button>
+        <span id="cat-norm-status" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── RECURRING TRANSACTIONS PAGE ─── -->
+  <section id="page-recurring-transactions" class="page">
+
+    <!-- Monthly total KPI -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:14px; margin-bottom:20px;">
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Monthly Recurring Cost</div>
+        <div id="recurring-monthly-total" style="font-size:28px; font-weight:700; margin-top:4px; color:var(--danger);">—</div>
+        <div id="recurring-count-label" style="font-size:12px; color:var(--text-muted); margin-top:4px;"></div>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" onclick="loadRecurringTransactions()">↻ Refresh</button>
+      <span id="recurring-status" style="font-size:12px; color:var(--text-muted);"></span>
+    </div>
+
+    <!-- Recurring list -->
+    <div class="card">
+      <div class="card-title">Detected Recurring Charges</div>
+      <div id="recurring-list" style="font-size:13px;">
+        <p style="color:var(--text-muted);">Loading…</p>
+      </div>
+    </div>
+
+    <!-- Manual add -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">Mark Merchant as Recurring</div>
+      <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+        If a subscription wasn't auto-detected, you can manually mark any merchant as recurring.
+      </p>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input type="text" id="recurring-manual-merchant" placeholder="Merchant name" style="font-size:13px; padding:6px 10px; border:1px solid var(--border); border-radius:4px; width:240px;" />
+        <button class="btn btn-primary btn-sm" onclick="manualMarkRecurring()">Mark as Recurring</button>
+      </div>
+    </div>
+
+  </section>
+
+</div><!-- .content -->
+
+<!-- Toast container -->
+<div id="toasts"></div>
+
+<!-- ══════════════ MAPPING WIZARD MODAL ══════════════ -->
+<div id="wizard-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+  <div class="wizard-modal">
+
+    <!-- Header -->
+    <div class="wm-header">
+      <h2 id="wizard-title">Map CSV Columns</h2>
+      <button class="wm-close" onclick="wizardClose()" title="Close">&times;</button>
+    </div>
+
+    <!-- Steps indicator -->
+    <div class="wm-steps">
+      <div class="wm-step active" id="wstep-ind-1">
+        <span class="step-num">1</span> Detected Headers
+      </div>
+      <div class="wm-step" id="wstep-ind-2">
+        <span class="step-num">2</span> Map Fields
+      </div>
+      <div class="wm-step" id="wstep-ind-3">
+        <span class="step-num">3</span> Review &amp; Run
+      </div>
+    </div>
+
+    <!-- Body (panels) -->
+    <div class="wm-body">
+
+      <!-- Step 1 — Detected Headers -->
+      <div class="wm-panel active" id="wstep-1">
+        <!-- Pre-processing banner: shown when CSV was auto-cleaned before mapping -->
+        <div id="w-preprocess-banner"></div>
+        <div id="w-detect-banner"></div>
+
+        <!-- Statement type selector (moved from step 3) — populated by renderWizardStep1() -->
+        <div id="w-step1-stmt-type"></div>
+
+        <!-- CC format detection + polarity confirmation — populated by renderWizardStep1() -->
+        <div id="w-cc-polarity-panel"></div>
+
+        <div class="info-grid" id="w-info-grid"></div>
+
+        <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">
+          Detected Columns
+        </div>
+        <div class="header-chips" id="w-header-chips"></div>
+
+        <div id="w-sample-block" style="margin-top:16px; display:none;">
+          <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">
+            Sample Data (first 3 rows)
+          </div>
+          <div class="table-wrap" style="max-height:160px; overflow:auto;">
+            <table id="w-sample-table" style="font-size:12px;">
+              <thead><tr id="w-sample-head"></tr></thead>
+              <tbody id="w-sample-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 — Map Fields -->
+      <div class="wm-panel" id="wstep-2">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+          For each canonical field, select the matching column from your CSV.
+          Fields marked <span style="color:var(--danger)">*</span> are required.
+          Highlighted selections were auto-suggested.
+        </p>
+        <div id="w-validation-errors" style="display:none" class="validation-errors"></div>
+        <table class="mapping-table">
+          <thead>
+            <tr>
+              <th>Canonical Field</th>
+              <th>CSV Column</th>
+            </tr>
+          </thead>
+          <tbody id="w-mapping-rows"></tbody>
+        </table>
+
+        <!-- CC polarity panel — shown in step 2 when cc_amount (single-column) is mapped for a credit card -->
+        <div id="w-step2-polarity-panel" style="display:none; margin-top:18px; padding:14px 16px; background:var(--surface-alt,#f8fafc); border:1px solid var(--border); border-radius:8px;">
+          <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:10px;">
+            Amount Polarity <span style="color:var(--danger)">*</span>
+            <small style="font-weight:normal; text-transform:none; margin-left:6px;">— which sign convention does this card use?</small>
+          </div>
+          <div style="display:flex; gap:24px; flex-wrap:wrap;">
+            <label style="cursor:pointer; display:flex; align-items:center; gap:8px; font-size:13px;">
+              <input type="radio" name="w-step2-cc-polarity" value="format_a"
+                     onchange="wizard.ccPolarity='format_a';" />
+              <span><strong>Positive = charge</strong> to card &nbsp;<em style="color:var(--text-muted)">(most US cards)</em></span>
+            </label>
+            <label style="cursor:pointer; display:flex; align-items:center; gap:8px; font-size:13px;">
+              <input type="radio" name="w-step2-cc-polarity" value="format_b"
+                     onchange="wizard.ccPolarity='format_b';" />
+              <span><strong>Negative = charge</strong> to card &nbsp;<em style="color:var(--text-muted)">(some EU/UK banks)</em></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Custom headers panel — shown when "Include custom headers" is checked -->
+        <div id="w-custom-headers-panel" style="display:none; margin-top:18px;">
+          <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">
+            Custom Headers <small style="font-weight:normal; text-transform:none;">(preserved as extra data, persisted in profile)</small>
+          </div>
+          <div id="w-custom-headers-list" style="display:flex; flex-wrap:wrap; gap:6px;"></div>
+        </div>
+      </div>
+
+      <!-- Step 3 — Review & Run -->
+      <div class="wm-panel" id="wstep-3">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+          Name this mapping profile. It will be saved and auto-detected on future uploads.
+        </p>
+
+        <!-- Statement type display (confirmed in step 1) — populated by renderWizardStep3() -->
+        <div id="w-step3-stmt-type-display" style="margin-bottom:14px;"></div>
+
+        <div class="review-grid">
+          <div class="form-group">
+            <label for="w-bank-name">Bank / Institution Name</label>
+            <input id="w-bank-name" type="text" placeholder="e.g. Chase" />
+          </div>
+          <div class="form-group">
+            <label for="w-account-name">Account Name</label>
+            <input id="w-account-name" type="text" placeholder="e.g. My Checking" />
+          </div>
+          <div class="form-group">
+            <label for="w-institution-key">Institution Key (slug)</label>
+            <input id="w-institution-key" type="text" placeholder="e.g. chase" />
+          </div>
+          <div class="form-group">
+            <label for="w-account-id">Account ID / Suffix</label>
+            <input id="w-account-id" type="text" placeholder="e.g. checking_1234" />
+          </div>
+          <div class="form-group">
+            <label for="w-date-format">Date Format (optional)</label>
+            <input id="w-date-format" type="text" placeholder="e.g. %m/%d/%Y" />
+          </div>
+          <div class="form-group">
+            <label for="w-currency">Default Currency</label>
+            <select id="w-currency">
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="GBP">GBP</option>
+              <option value="CAD">CAD</option>
+              <option value="AUD">AUD</option>
+            </select>
+          </div>
+        </div>
+
+        <label class="toggle-row" style="margin-bottom:14px;">
+          <input type="checkbox" id="w-preview-toggle" checked />
+          Preview transactions before committing to ledger
+        </label>
+
+        <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">
+          Field Mapping Summary
+        </div>
+        <div class="mapping-summary" id="w-mapping-summary"></div>
+      </div>
+
+    </div><!-- .wm-body -->
+
+    <!-- Footer -->
+    <div class="wm-footer">
+      <button class="btn btn-secondary" id="w-btn-back" onclick="wizardBack()" style="display:none;">← Back</button>
+      <span style="font-size:12px; color:var(--text-muted);" id="w-footer-hint"></span>
+      <div class="wm-footer-right">
+        <button class="btn btn-secondary" onclick="wizardClose()">Cancel</button>
+        <button class="btn btn-primary" id="w-btn-next" onclick="wizardNext()">Next →</button>
+      </div>
+    </div>
+
+  </div><!-- .wizard-modal -->
+</div><!-- #wizard-overlay -->
+
+<!-- Delete Run confirmation modal -->
+<div id="delete-run-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideDeleteModal()">
+  <div class="modal-dialog" style="max-width:420px;">
+    <div class="modal-title" style="font-size:16px; font-weight:600; margin-bottom:12px;">Delete Import Run?</div>
+    <p style="margin:0 0 14px; color:var(--text-muted); font-size:13px;">
+      Run <strong id="delete-run-modal-id" class="mono"></strong> will be permanently removed,
+      including its staged rows.
+    </p>
+    <label class="toggle-row" style="font-size:13px; margin-bottom:18px;">
+      <input type="checkbox" id="delete-keep-tx" />
+      Keep imported transactions in the ledger
+    </label>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn btn-secondary" onclick="hideDeleteModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmDeleteRun()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/table_controls.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
