@@ -889,6 +889,7 @@ Single-row table seeded with `1` on first migration run.
 - `api.py:2035` — `DELETE /transactions/{fingerprint}/split`: only reachable through dead `unsplitTransaction()`
 - `hashing.py:18` — `sha256_str()`: defined but never imported/called
 - `wizard_mapping.py:296` — `get_canonical_fields_for_type()`: defined but never called
+- **Tracked `.DS_Store` and `.env` files**: 5 `.DS_Store` files and `.env` are tracked in git despite being listed in `.gitignore` (added before gitignore existed). Should be untracked via `git rm --cached`.
 
 ### Audit 1 — Codebase vs PROJECT.md Reality Check (2026-03-10)
 
