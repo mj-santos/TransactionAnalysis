@@ -641,7 +641,7 @@ async function loadReports() {
   try {
     const data = await api('GET', '/reports');
     if (!data.reports.length) {
-      grid.innerHTML = '<div class="empty"><div class="empty-icon">📊</div>No reports yet. Run an import first.</div>';
+      grid.innerHTML = '<div class="empty"><div class="empty-icon">📊</div>No reports yet. Import data or restore a backup to generate reports.<br><button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="regenerateReports()">Generate Reports</button></div>';
       return;
     }
     grid.innerHTML = data.reports.map(name => {
@@ -673,6 +673,17 @@ async function loadReports() {
   document.getElementById('chart-area').style.display = 'none';
 }
 
+async function regenerateReports() {
+  try {
+    toast('Generating reports…', 'info');
+    await api('POST', '/reports/regenerate');
+    toast('Reports generated successfully.', 'success');
+    loadReports();
+  } catch (err) {
+    toast(`Report generation failed: ${err.message}`, 'error');
+  }
+}
+
 async function viewChart(name) {
   const area = document.getElementById('chart-area');
   area.style.display = 'block';
@@ -700,10 +711,31 @@ async function _loadChartData(name, queryParams) {
       return;
     }
     const cols = Object.keys(data.rows[0]);
+    const catCol = cols.find(c => /^category/i.test(c));
     document.getElementById('chart-head').innerHTML = cols.map(c => `<th>${esc(c)}</th>`).join('');
-    document.getElementById('chart-body').innerHTML = data.rows.map(row =>
-      `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
-    ).join('');
+    document.getElementById('chart-body').innerHTML = data.rows.map(row => {
+      if (catCol && row[catCol]) {
+        const dateCol = cols.find(c => /date|month|period/i.test(c));
+        let drillFrom = '', drillTo = '';
+        if (dateCol && row[dateCol]) {
+          const dv = String(row[dateCol]);
+          if (/^\d{4}-\d{2}$/.test(dv)) {
+            drillFrom = dv + '-01';
+            const [y, m] = dv.split('-').map(Number);
+            const ld = new Date(y, m, 0).getDate();
+            drillTo = dv + '-' + String(ld).padStart(2, '0');
+          } else if (/^\d{4}-\d{2}-\d{2}$/.test(dv)) {
+            drillFrom = dv; drillTo = dv;
+          }
+        }
+        const jsonCat = JSON.stringify(String(row[catCol])).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+        const onclick = drillFrom
+          ? `onclick="openCategoryDrilldown(${jsonCat}, '${drillFrom}', '${drillTo}')" style="cursor:pointer;" onmouseenter="this.style.background='var(--bg,#f1f5f9)'" onmouseleave="this.style.background=''"`
+          : `onclick="openCategoryDrilldown(${jsonCat})" style="cursor:pointer;" onmouseenter="this.style.background='var(--bg,#f1f5f9)'" onmouseleave="this.style.background=''"`;
+        return `<tr ${onclick}>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`;
+      }
+      return `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`;
+    }).join('');
     _renderTotalsRow('chart-foot', cols, data.rows);
   } catch (err) {
     document.getElementById('chart-body').innerHTML =
@@ -1454,6 +1486,7 @@ function esc(str) {
   } catch (_) { /* ignore */ }
 })();
 loadSettings();
+_loadTxnYears();
 loadDashboard();
 refreshUnreviewedBadge();
 restoreCollapseState();
@@ -3661,7 +3694,7 @@ function _renderDashboard(data) {
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerHTML = val; };
 
   set('dash-mtd', _fmt$(data.mtd_spend));
-  set('dash-prev-spend', _fmt$(data.prev_spend));
+  set('dash-prev-spend', _fmt$(data.prev_spend || 0));
 
   // Unreviewed count KPI + sidebar badge
   const unrevCount = data.unreviewed_count || 0;
@@ -3677,20 +3710,22 @@ function _renderDashboard(data) {
     set('dash-vs-prev', 'No prior month data');
   }
 
-  const topCat = data.top_categories[0];
-  set('dash-top-cat', topCat ? esc(topCat.parent) : '—');
+  const topCat = (data.top_categories || [])[0];
+  set('dash-top-cat', topCat ? esc(topCat.category_parent || '—') : '—');
 
   // Top categories bar chart (clickable for drill-down)
   const catList = document.getElementById('dash-cat-list');
-  if (catList && data.top_categories.length) {
-    const maxAmt = Math.max(...data.top_categories.map(c => c.amount), 1);
+  if (catList && data.top_categories && data.top_categories.length) {
+    const maxAmt = Math.max(...data.top_categories.map(c => c.total_amount || 0), 1);
     catList.innerHTML = data.top_categories.map(c => {
-      const pct = Math.round(c.amount / maxAmt * 100);
-      const jsonParent = JSON.stringify(c.parent).replace(/"/g, '&quot;');
+      const amt = c.total_amount || 0;
+      const catName = c.category_parent || '—';
+      const pct = Math.round(amt / maxAmt * 100);
+      const jsonParent = JSON.stringify(catName).replace(/"/g, '&quot;');
       return `<div style="margin-bottom:4px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:background .12s;" onclick="openCategoryDrilldown(${jsonParent})" onmouseenter="this.style.background='var(--bg,#f1f5f9)'" onmouseleave="this.style.background=''">
         <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;">
-          <span>${esc(c.parent)}</span>
-          <span style="font-weight:600;">${_fmt$(c.amount)}</span>
+          <span>${esc(catName)}</span>
+          <span style="font-weight:600;">${_fmt$(amt)}</span>
         </div>
         <div style="background:var(--border); border-radius:4px; height:6px;">
           <div style="background:var(--primary,#3b82f6); border-radius:4px; height:6px; width:${pct}%;"></div>
@@ -4617,30 +4652,128 @@ function _pollCatNorm() {
 
 // ── Date presets ──────────────────────────────────────────────
 
-function _presetDates(preset) {
+// ── Year filter logic ──────────────────────────────────────────
+let _txnYears = [];
+
+async function _loadTxnYears() {
+  try {
+    const data = await api('GET', '/transactions/years');
+    _txnYears = data.years || [];
+  } catch { _txnYears = []; }
+  _populateYearDropdowns();
+}
+
+function _populateYearDropdowns() {
   const now = new Date();
+  const currentYear = now.getFullYear();
+  ['cc-year', 'bk-year'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = '';
+    // Add year options — default to current year, fallback to most recent with data
+    const years = _txnYears.length ? _txnYears : [currentYear];
+    years.forEach(y => {
+      const opt = document.createElement('option');
+      opt.value = String(y); opt.textContent = String(y);
+      sel.appendChild(opt);
+    });
+    const allOpt = document.createElement('option');
+    allOpt.value = 'all'; allOpt.textContent = 'All Years';
+    sel.appendChild(allOpt);
+    // Default: current year if it has data, else most recent
+    if (years.includes(currentYear)) {
+      sel.value = String(currentYear);
+    } else {
+      sel.value = String(years[0]);
+    }
+  });
+  // Populate cash flow year options
+  _populateCfYearOptions();
+}
+
+function _populateCfYearOptions() {
+  const sel = document.getElementById('cf-period');
+  if (!sel) return;
+  // Remove existing year_* options
+  Array.from(sel.options).filter(o => o.value.startsWith('year_')).forEach(o => o.remove());
+  // Insert year options before "Custom Range"
+  const customOpt = Array.from(sel.options).find(o => o.value === 'custom');
+  _txnYears.forEach(y => {
+    const opt = document.createElement('option');
+    opt.value = 'year_' + y;
+    opt.textContent = String(y);
+    sel.insertBefore(opt, customOpt);
+  });
+}
+
+function _getSelectedYear(tab) {
+  const id = tab === 'credit_card' ? 'cc-year' : 'bk-year';
+  const sel = document.getElementById(id);
+  return sel ? sel.value : 'all';
+}
+
+function onYearChange(tab) {
+  const year = _getSelectedYear(tab);
+  const prefix = tab === 'credit_card' ? 'cc' : 'bk';
+  const fromEl = document.getElementById(prefix + '-date-from');
+  const toEl = document.getElementById(prefix + '-date-to');
+  if (year === 'all') {
+    if (fromEl) fromEl.value = '';
+    if (toEl) toEl.value = '';
+  } else {
+    const y = parseInt(year);
+    if (fromEl) fromEl.value = y + '-01-01';
+    if (toEl) toEl.value = y + '-12-31';
+  }
+  loadTxnTab(tab);
+}
+
+function onDateManualChange(tab) {
+  const prefix = tab === 'credit_card' ? 'cc' : 'bk';
+  const fromVal = document.getElementById(prefix + '-date-from')?.value || '';
+  const toVal = document.getElementById(prefix + '-date-to')?.value || '';
+  const yearSel = document.getElementById(prefix + '-year');
+  if (yearSel && yearSel.value !== 'all') {
+    const y = yearSel.value;
+    // If dates span outside selected year, snap to "All Years"
+    if ((fromVal && !fromVal.startsWith(y)) || (toVal && !toVal.startsWith(y))) {
+      yearSel.value = 'all';
+    }
+  }
+  loadTxnTab(tab);
+}
+
+function _presetDates(preset, yearOverride) {
+  const now = new Date();
+  const yr = yearOverride || now.getFullYear();
+  const isPast = yr < now.getFullYear();
   let from, to;
   const pad = n => String(n).padStart(2,'0');
   const fmt = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   switch (preset) {
     case 'this_month': {
-      from = new Date(now.getFullYear(), now.getMonth(), 1);
-      to   = new Date(now.getFullYear(), now.getMonth()+1, 0);
+      from = new Date(yr, now.getMonth(), 1);
+      to   = new Date(yr, now.getMonth()+1, 0);
       break;
     }
     case 'last_month': {
-      from = new Date(now.getFullYear(), now.getMonth()-1, 1);
-      to   = new Date(now.getFullYear(), now.getMonth(), 0);
+      from = new Date(yr, now.getMonth()-1, 1);
+      to   = new Date(yr, now.getMonth(), 0);
       break;
     }
     case '3months': {
-      from = new Date(now.getFullYear(), now.getMonth()-2, 1);
-      to   = new Date(now.getFullYear(), now.getMonth()+1, 0);
+      from = new Date(yr, now.getMonth()-2, 1);
+      to   = new Date(yr, now.getMonth()+1, 0);
       break;
     }
     case 'ytd': {
-      from = new Date(now.getFullYear(), 0, 1);
-      to   = now;
+      from = new Date(yr, 0, 1);
+      to   = isPast ? new Date(yr, 11, 31) : now;
+      break;
+    }
+    case 'all': {
+      from = new Date(yr, 0, 1);
+      to   = new Date(yr, 11, 31);
       break;
     }
     default: { from = null; to = null; }
@@ -4649,7 +4782,9 @@ function _presetDates(preset) {
 }
 
 function setDatePreset(tab, preset) {
-  const { from, to } = _presetDates(preset);
+  const year = _getSelectedYear(tab);
+  const yr = year === 'all' ? null : parseInt(year);
+  const { from, to } = _presetDates(preset, yr);
   if (tab === 'credit_card') {
     const f = document.getElementById('cc-date-from');
     const t = document.getElementById('cc-date-to');
@@ -4842,25 +4977,38 @@ function closeMonthlySummary() {
   document.getElementById('monthly-summary-modal').classList.add('hidden');
 }
 
-// ── Category Drill-Down from Dashboard ──────────────────────
+// ── Category Drill-Down (app-wide) ──────────────────────────
 let _drillCategory = '';
-let _drillYear = 0;
-let _drillMonth = 0;
+let _drillDateFrom = '';
+let _drillDateTo = '';
 
-async function openCategoryDrilldown(categoryParent) {
+async function openCategoryDrilldown(categoryParent, dateFrom, dateTo) {
   _drillCategory = categoryParent;
-  _drillYear = _dashYear;
-  _drillMonth = _dashMonth;
-  const monthNames = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  // Default to dashboard month if no dates provided
+  if (!dateFrom || !dateTo) {
+    const m = String(_dashMonth).padStart(2, '0');
+    dateFrom = `${_dashYear}-${m}-01`;
+    const lastDay = new Date(_dashYear, _dashMonth, 0).getDate();
+    dateTo = `${_dashYear}-${m}-${String(lastDay).padStart(2, '0')}`;
+  }
+  _drillDateFrom = dateFrom;
+  _drillDateTo = dateTo;
+
+  // Build title from date range
   const titleEl = document.getElementById('cat-drill-title');
-  titleEl.textContent = `${categoryParent} — ${monthNames[_drillMonth]} ${_drillYear}`;
+  const fd = new Date(dateFrom + 'T00:00:00');
+  const td = new Date(dateTo + 'T00:00:00');
+  const monthNames = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let titleDate;
+  if (fd.getFullYear() === td.getFullYear() && fd.getMonth() === td.getMonth()) {
+    titleDate = `${monthNames[fd.getMonth() + 1]} ${fd.getFullYear()}`;
+  } else {
+    titleDate = `${dateFrom} to ${dateTo}`;
+  }
+  titleEl.textContent = `${categoryParent} — ${titleDate}`;
   document.getElementById('cat-drill-body').innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Loading…</div>';
   document.getElementById('category-drilldown-modal').classList.remove('hidden');
-
-  const m = String(_drillMonth).padStart(2, '0');
-  const dateFrom = `${_drillYear}-${m}-01`;
-  const lastDay = new Date(_drillYear, _drillMonth, 0).getDate();
-  const dateTo = `${_drillYear}-${m}-${String(lastDay).padStart(2, '0')}`;
 
   try {
     const data = await api('GET',
@@ -4871,7 +5019,6 @@ async function openCategoryDrilldown(categoryParent) {
       document.getElementById('cat-drill-body').innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">No transactions found.</div>';
       return;
     }
-    // Filter to rows whose category_parent or category matches
     const subtotal = rows.reduce((s, r) => s + (r.amount || 0), 0);
     let html = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
       <thead><tr style="border-bottom:2px solid var(--border);">
@@ -4905,19 +5052,12 @@ function closeCategoryDrilldown() {
 
 function categoryDrilldownViewAll() {
   closeCategoryDrilldown();
-  // Navigate to the bank transactions tab with category + month pre-filtered
-  // We use bank tab as default since it typically has category data; CC works too
   navigate('bank-transactions');
   setTimeout(() => {
-    const m = String(_drillMonth).padStart(2, '0');
-    const dateFrom = `${_drillYear}-${m}-01`;
-    const lastDay = new Date(_drillYear, _drillMonth, 0).getDate();
-    const dateTo = `${_drillYear}-${m}-${String(lastDay).padStart(2, '0')}`;
     const fromEl = document.getElementById('bk-date-from');
     const toEl   = document.getElementById('bk-date-to');
-    if (fromEl) fromEl.value = dateFrom;
-    if (toEl)   toEl.value   = dateTo;
-    // Set category filter if it exists
+    if (fromEl) fromEl.value = _drillDateFrom;
+    if (toEl)   toEl.value   = _drillDateTo;
     const catEl = document.getElementById('bk-category');
     if (catEl) catEl.value = _drillCategory;
     loadTxnTab('bank');
@@ -4979,12 +5119,17 @@ function _renderMonthlySummary(el, data) {
   if (s.top_categories && s.top_categories.length) {
     html += '<div style="font-size:13px; font-weight:600; margin-bottom:6px;">Top Categories</div>';
     const maxAmt = Math.max(...s.top_categories.map(c => c.amount), 1);
+    const sm = String(_summaryMonth).padStart(2, '0');
+    const smFrom = `${_summaryYear}-${sm}-01`;
+    const smLastDay = new Date(_summaryYear, _summaryMonth, 0).getDate();
+    const smTo = `${_summaryYear}-${sm}-${String(smLastDay).padStart(2, '0')}`;
     html += s.top_categories.map(c => {
       const pct = Math.round(c.amount / maxAmt * 100);
       const delta = c.delta_pct != null
         ? ` <span style="font-size:11px; color:${c.delta_pct >= 0 ? '#ef4444' : '#22c55e'};">${c.delta_pct >= 0 ? '▲' : '▼'}${Math.abs(c.delta_pct)}%</span>`
         : '';
-      return `<div style="margin-bottom:6px;">
+      const jsonCat = JSON.stringify(c.name).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+      return `<div style="margin-bottom:6px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:background .12s;" onclick="openCategoryDrilldown(${jsonCat}, '${smFrom}', '${smTo}')" onmouseenter="this.style.background='var(--bg,#f1f5f9)'" onmouseleave="this.style.background=''">
         <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px;">
           <span>${esc(c.name)}${delta}</span><span style="font-weight:600;">${_fmt$(c.amount)}</span>
         </div>
@@ -5068,16 +5213,32 @@ function onCfPeriodChange() {
   const sel = document.getElementById('cf-period');
   const custom = document.getElementById('cf-custom-range');
   if (sel && custom) {
-    custom.style.display = sel.value === 'custom' ? '' : 'none';
+    const isCustom = sel.value === 'custom';
+    const isYear = sel.value.startsWith('year_');
+    custom.style.display = isCustom ? '' : 'none';
+    if (isYear) {
+      // Year selection → set custom dates for full year and load
+      const yr = parseInt(sel.value.replace('year_', ''));
+      document.getElementById('cf-date-from').value = yr + '-01-01';
+      document.getElementById('cf-date-to').value = yr + '-12-31';
+    }
   }
   if (sel && sel.value !== 'custom') loadCashFlow();
 }
 
 async function loadCashFlow() {
-  const period = document.getElementById('cf-period')?.value || 'last_3_months';
+  const periodRaw = document.getElementById('cf-period')?.value || 'last_3_months';
   const transfers = document.getElementById('cf-transfers')?.checked || false;
 
-  let url = `/cashflow/summary?period=${period}&include_transfers=${transfers}`;
+  // Map year_YYYY selections to custom range
+  let period = periodRaw;
+  let url;
+  if (periodRaw.startsWith('year_')) {
+    const yr = periodRaw.replace('year_', '');
+    url = `/cashflow/summary?period=custom&include_transfers=${transfers}&start_date=${yr}-01-01&end_date=${yr}-12-31`;
+  } else {
+    url = `/cashflow/summary?period=${period}&include_transfers=${transfers}`;
+  }
   if (period === 'custom') {
     const from = document.getElementById('cf-date-from')?.value;
     const to   = document.getElementById('cf-date-to')?.value;
@@ -5165,6 +5326,24 @@ function _renderCfChart(monthly) {
   }
 }
 
+function _getCfDateRange() {
+  const periodRaw = document.getElementById('cf-period')?.value || 'last_3_months';
+  if (periodRaw === 'custom') {
+    return { from: document.getElementById('cf-date-from')?.value, to: document.getElementById('cf-date-to')?.value };
+  }
+  if (periodRaw.startsWith('year_')) {
+    const yr = periodRaw.replace('year_', '');
+    return { from: yr + '-01-01', to: yr + '-12-31' };
+  }
+  // For preset periods, compute approximate range
+  const now = new Date();
+  const to = now.toISOString().slice(0, 10);
+  const months = { last_3_months: 3, last_6_months: 6, last_12_months: 12, ytd: now.getMonth() + 1 };
+  const m = months[periodRaw] || 3;
+  const fd = new Date(now.getFullYear(), now.getMonth() - m + 1, 1);
+  return { from: fd.toISOString().slice(0, 10), to };
+}
+
 function _renderCfCategories(cats) {
   const el = document.getElementById('cf-cat-list');
   if (!el) return;
@@ -5174,10 +5353,12 @@ function _renderCfCategories(cats) {
     return;
   }
 
+  const dr = _getCfDateRange();
   const maxAmt = Math.max(...cats.map(c => c.amount), 1);
   el.innerHTML = cats.map(c => {
     const pct = Math.round(c.amount / maxAmt * 100);
-    return `<div style="margin-bottom:6px;">
+    const jsonCat = JSON.stringify(c.category).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+    return `<div style="margin-bottom:6px; cursor:pointer; padding:2px 4px; border-radius:4px; transition:background .12s;" onclick="openCategoryDrilldown(${jsonCat}, '${dr.from}', '${dr.to}')" onmouseenter="this.style.background='var(--bg,#f1f5f9)'" onmouseleave="this.style.background=''">
       <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;">
         <span>${esc(c.category)}</span>
         <span style="font-weight:600;">${_fmt$(c.amount)} <span style="color:var(--text-muted); font-size:11px;">(${c.pct}%)</span></span>

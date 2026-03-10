@@ -434,6 +434,11 @@
           <label style="font-size:11px;">Import Source</label>
           <div id="cc-source-ctrl" class="source-dropdown-wrap"></div>
         </div>
+        <div class="form-group" style="margin:0; min-width:80px;">
+          <label style="font-size:11px;">Year</label>
+          <select id="cc-year" onchange="onYearChange('credit_card')" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;">
+          </select>
+        </div>
         <div class="form-group" style="margin:0;">
           <label style="font-size:11px;">Quick Date</label>
           <div style="display:flex; gap:4px; flex-wrap:wrap;">
@@ -446,11 +451,11 @@
         </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="cc-date-from" style="font-size:11px;">Date from</label>
-          <input type="date" id="cc-date-from" onchange="loadTxnTab('credit_card')" />
+          <input type="date" id="cc-date-from" onchange="onDateManualChange('credit_card')" />
         </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="cc-date-to" style="font-size:11px;">Date to</label>
-          <input type="date" id="cc-date-to" onchange="loadTxnTab('credit_card')" />
+          <input type="date" id="cc-date-to" onchange="onDateManualChange('credit_card')" />
         </div>
         <div class="form-group" style="margin:0; min-width:150px;">
           <label for="cc-account" style="font-size:11px;">Account</label>
@@ -540,6 +545,11 @@
           <label style="font-size:11px;">Import Source</label>
           <div id="bk-source-ctrl" class="source-dropdown-wrap"></div>
         </div>
+        <div class="form-group" style="margin:0; min-width:80px;">
+          <label style="font-size:11px;">Year</label>
+          <select id="bk-year" onchange="onYearChange('bank')" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;">
+          </select>
+        </div>
         <div class="form-group" style="margin:0;">
           <label style="font-size:11px;">Quick Date</label>
           <div style="display:flex; gap:4px; flex-wrap:wrap;">
@@ -552,11 +562,11 @@
         </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="bk-date-from" style="font-size:11px;">Date from</label>
-          <input type="date" id="bk-date-from" onchange="loadTxnTab('bank')" />
+          <input type="date" id="bk-date-from" onchange="onDateManualChange('bank')" />
         </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="bk-date-to" style="font-size:11px;">Date to</label>
-          <input type="date" id="bk-date-to" onchange="loadTxnTab('bank')" />
+          <input type="date" id="bk-date-to" onchange="onDateManualChange('bank')" />
         </div>
         <div class="form-group" style="margin:0; min-width:150px;">
           <label for="bk-account" style="font-size:11px;">Account</label>
@@ -632,6 +642,7 @@
         <option value="last_month">Last Month</option>
         <option value="last_3_months" selected>Last 3 Months</option>
         <option value="last_12_months">Last 12 Months</option>
+        <!-- Year options injected by JS -->
         <option value="custom">Custom Range</option>
       </select>
       <span id="cf-custom-range" style="display:none;">

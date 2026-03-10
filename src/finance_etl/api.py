@@ -1567,6 +1567,29 @@ No cloud services, no external dependencies — all data stays on your machine.
         ]
         return {"columns": col_names, "rows": rows, "count": len(rows), "offset": offset}
 
+    @app.get("/transactions/years", tags=["transactions"],
+             summary="Distinct years from transaction data")
+    def get_transaction_years():
+        """Return distinct years present in transactions_norm, ordered DESC."""
+        conn = None
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT DISTINCT YEAR(transaction_date) AS yr "
+                "FROM transactions_norm "
+                "WHERE transaction_date IS NOT NULL "
+                "ORDER BY yr DESC"
+            ).fetchall()
+        except Exception:
+            return {"years": []}
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return {"years": [int(r[0]) for r in rows if r[0] is not None]}
+
     @app.get(
         "/transactions/search",
         tags=["transactions"],
@@ -2320,6 +2343,26 @@ No cloud services, no external dependencies — all data stays on your machine.
         if path.suffix.lower() != ".csv" or not path.exists():
             raise HTTPException(status_code=404, detail=f"Report '{name}' not found. Run an import first.")
         return FileResponse(path, media_type="text/csv", filename=path.name)
+
+    @app.post("/reports/regenerate", tags=["reports"],
+              summary="Regenerate analytics CSV reports from current data",
+              status_code=200)
+    def regenerate_reports():
+        """Re-run analytics exports against the current ledger data."""
+        from finance_etl.analytics import run_analytics
+        conn = None
+        try:
+            conn = get_connection(db_path, read_only=True)
+            exported = run_analytics(conn, Path(reports_dir), Path("data/master"))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Report generation failed: {exc}") from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return {"status": "ok", "reports": [p.name for p in exported]}
 
     @app.post(
         "/reports/query",
@@ -4100,6 +4143,24 @@ No cloud services, no external dependencies — all data stays on your machine.
             mtd_spend = float(mtd_row[0]) if mtd_row else 0.0
             mtd_count = int(mtd_row[1]) if mtd_row else 0
 
+            # Prior month spend for comparison
+            prev_month = month - 1 if month > 1 else 12
+            prev_year = year if month > 1 else year - 1
+            prev_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(resolved_amount), 0)
+                FROM transactions_norm
+                WHERE transaction_subtype = 'spending'
+                  AND YEAR(transaction_date) = ?
+                  AND MONTH(transaction_date) = ?
+                """,
+                [prev_year, prev_month],
+            ).fetchone()
+            prev_spend = float(prev_row[0]) if prev_row else 0.0
+            pct_change = None
+            if prev_spend > 0:
+                pct_change = round((mtd_spend - prev_spend) / prev_spend * 100, 1)
+
             # Top categories
             top_cat_rows = conn.execute(
                 """
@@ -4284,6 +4345,8 @@ No cloud services, no external dependencies — all data stays on your machine.
             "month": month,
             "mtd_spend": mtd_spend,
             "mtd_count": mtd_count,
+            "prev_spend": prev_spend,
+            "pct_change": pct_change,
             "top_categories": top_categories,
             "top_merchants": top_merchants,
             "recent_transactions": recent_transactions,
@@ -5462,6 +5525,17 @@ No cloud services, no external dependencies — all data stays on your machine.
                 except Exception:
                     pass
             _restore_in_progress = False
+
+        # ── Regenerate analytics reports after restore ────────────────────
+        try:
+            from finance_etl.analytics import run_analytics as _ra
+            _rconn = get_connection(db_path, read_only=True)
+            try:
+                _ra(_rconn, Path(reports_dir), Path("data/master"))
+            finally:
+                _rconn.close()
+        except Exception:
+            pass  # Non-fatal — reports can be regenerated manually
 
         # ── Restore YAML wizard profiles ─────────────────────────────────
         profiles_restored = 0
