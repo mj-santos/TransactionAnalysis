@@ -3583,6 +3583,34 @@ No cloud services, no external dependencies — all data stays on your machine.
             ).fetchone()
             unreviewed_count = int(unrev_row[0]) if unrev_row else 0
 
+            # Net worth summary for dashboard widget
+            nw_summary = {"net_worth": 0, "total_assets": 0, "total_liabilities": 0,
+                          "trend": None, "prev_net_worth": None}
+            try:
+                nw_accts = conn.execute(
+                    "SELECT balance, is_asset FROM nw_accounts"
+                ).fetchall()
+                if nw_accts:
+                    assets = sum(float(r[0]) for r in nw_accts if r[1])
+                    liab = sum(abs(float(r[0])) for r in nw_accts if not r[1])
+                    nw_summary["total_assets"] = round(assets, 2)
+                    nw_summary["total_liabilities"] = round(liab, 2)
+                    nw_summary["net_worth"] = round(assets - liab, 2)
+                # Get last snapshot for trend
+                last_snap = conn.execute(
+                    "SELECT net_worth FROM nw_snapshots ORDER BY snapshot_date DESC LIMIT 1"
+                ).fetchone()
+                if last_snap:
+                    prev = float(last_snap[0])
+                    nw_summary["prev_net_worth"] = prev
+                    current = nw_summary["net_worth"]
+                    if prev != 0:
+                        nw_summary["trend"] = round((current - prev) / abs(prev) * 100, 1)
+                    elif current != 0:
+                        nw_summary["trend"] = 100.0
+            except Exception:
+                pass
+
             # Active savings goals summary
             savings_goals_summary = []
             try:
@@ -3620,6 +3648,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "spending_alerts": spending_alerts,
             "unreviewed_count": unreviewed_count,
             "savings_goals": savings_goals_summary,
+            "net_worth": nw_summary,
         }
 
     # -----------------------------------------------------------------------
@@ -3803,6 +3832,191 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
+    # Net Worth Tracker
+    # -----------------------------------------------------------------------
+
+    _NW_ACCOUNT_TYPES = {"checking", "savings", "investment", "credit_card", "loan", "other"}
+    _NW_ASSET_TYPES = {"checking", "savings", "investment", "other"}
+
+    @app.get("/net-worth/accounts", tags=["net-worth"], summary="List all net worth accounts")
+    def get_nw_accounts():
+        from finance_etl.db import get_connection as _gc
+        try:
+            conn = _gc(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, name, acct_type, balance, is_asset, created_at, updated_at "
+                "FROM nw_accounts ORDER BY is_asset DESC, name"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"accounts": []}
+        cols = ["id", "name", "acct_type", "balance", "is_asset", "created_at", "updated_at"]
+        return {"accounts": [dict(zip(cols, r)) for r in rows]}
+
+    @app.post("/net-worth/accounts", tags=["net-worth"], summary="Create a net worth account",
+              status_code=201)
+    def create_nw_account(payload: dict):
+        from finance_etl.db import get_connection as _gc
+        name = (payload.get("name") or "").strip()
+        acct_type = (payload.get("acct_type") or "").strip().lower()
+        balance = float(payload.get("balance", 0))
+        if not name:
+            raise HTTPException(status_code=422, detail="Account name is required.")
+        if acct_type not in _NW_ACCOUNT_TYPES:
+            raise HTTPException(status_code=422,
+                                detail=f"Invalid type. Must be one of: {', '.join(sorted(_NW_ACCOUNT_TYPES))}")
+        is_asset = acct_type in _NW_ASSET_TYPES
+        now = __import__("datetime").datetime.utcnow().isoformat()
+        try:
+            conn = _gc(db_path)
+            conn.execute(
+                "INSERT INTO nw_accounts (name, acct_type, balance, is_asset, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?)",
+                [name, acct_type, balance, is_asset, now, now],
+            )
+            row = conn.execute(
+                "SELECT id FROM nw_accounts WHERE name=? AND acct_type=? ORDER BY id DESC LIMIT 1",
+                [name, acct_type],
+            ).fetchone()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Create failed: {exc}") from exc
+        return {"status": "created", "id": row[0] if row else None}
+
+    @app.put("/net-worth/accounts/{account_id}", tags=["net-worth"],
+             summary="Update a net worth account")
+    def update_nw_account(account_id: int, payload: dict):
+        from finance_etl.db import get_connection as _gc
+        name = (payload.get("name") or "").strip()
+        acct_type = (payload.get("acct_type") or "").strip().lower()
+        balance = float(payload.get("balance", 0))
+        if not name:
+            raise HTTPException(status_code=422, detail="Account name is required.")
+        if acct_type not in _NW_ACCOUNT_TYPES:
+            raise HTTPException(status_code=422,
+                                detail=f"Invalid type. Must be one of: {', '.join(sorted(_NW_ACCOUNT_TYPES))}")
+        is_asset = acct_type in _NW_ASSET_TYPES
+        now = __import__("datetime").datetime.utcnow().isoformat()
+        try:
+            conn = _gc(db_path)
+            conn.execute(
+                "UPDATE nw_accounts SET name=?, acct_type=?, balance=?, is_asset=?, updated_at=? WHERE id=?",
+                [name, acct_type, balance, is_asset, now, account_id],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
+        return {"status": "updated", "id": account_id}
+
+    @app.delete("/net-worth/accounts/{account_id}", tags=["net-worth"],
+                summary="Delete a net worth account")
+    def delete_nw_account(account_id: int):
+        from finance_etl.db import get_connection as _gc
+        try:
+            conn = _gc(db_path)
+            conn.execute("DELETE FROM nw_accounts WHERE id=?", [account_id])
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Delete failed: {exc}") from exc
+        return {"status": "deleted", "id": account_id}
+
+    @app.get("/net-worth/summary", tags=["net-worth"],
+             summary="Current net worth breakdown")
+    def get_nw_summary():
+        """Return current totals: assets, liabilities, net worth."""
+        from finance_etl.db import get_connection as _gc
+        try:
+            conn = _gc(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, name, acct_type, balance, is_asset FROM nw_accounts ORDER BY is_asset DESC, name"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"total_assets": 0, "total_liabilities": 0, "net_worth": 0, "accounts": []}
+        accounts = []
+        total_assets = 0.0
+        total_liab = 0.0
+        for r in rows:
+            bal = float(r[3])
+            is_asset = r[4]
+            if is_asset:
+                total_assets += bal
+            else:
+                total_liab += abs(bal)
+            accounts.append({"id": r[0], "name": r[1], "acct_type": r[2],
+                             "balance": bal, "is_asset": is_asset})
+        return {
+            "total_assets": round(total_assets, 2),
+            "total_liabilities": round(total_liab, 2),
+            "net_worth": round(total_assets - total_liab, 2),
+            "accounts": accounts,
+        }
+
+    @app.post("/net-worth/snapshots", tags=["net-worth"],
+              summary="Save a net worth snapshot", status_code=201)
+    def create_nw_snapshot():
+        """Capture current account balances as a point-in-time snapshot."""
+        from finance_etl.db import get_connection as _gc
+        now = __import__("datetime").datetime.utcnow().isoformat()
+        today = __import__("datetime").date.today().isoformat()
+        try:
+            conn = _gc(db_path)
+            rows = conn.execute(
+                "SELECT id, name, acct_type, balance, is_asset FROM nw_accounts ORDER BY name"
+            ).fetchall()
+            total_assets = 0.0
+            total_liab = 0.0
+            detail = []
+            for r in rows:
+                bal = float(r[3])
+                is_asset = r[4]
+                if is_asset:
+                    total_assets += bal
+                else:
+                    total_liab += abs(bal)
+                detail.append({"id": r[0], "name": r[1], "acct_type": r[2],
+                               "balance": bal, "is_asset": is_asset})
+            net = round(total_assets - total_liab, 2)
+            conn.execute(
+                "INSERT INTO nw_snapshots (snapshot_date, total_assets, total_liab, net_worth, detail_json, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                [today, round(total_assets, 2), round(total_liab, 2), net,
+                 json.dumps(detail), now],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Snapshot failed: {exc}") from exc
+        return {"status": "created", "snapshot_date": today, "net_worth": net}
+
+    @app.get("/net-worth/snapshots", tags=["net-worth"],
+             summary="List all net worth snapshots")
+    def get_nw_snapshots():
+        from finance_etl.db import get_connection as _gc
+        try:
+            conn = _gc(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, snapshot_date, total_assets, total_liab, net_worth, detail_json, created_at "
+                "FROM nw_snapshots ORDER BY snapshot_date DESC"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"snapshots": []}
+        cols = ["id", "snapshot_date", "total_assets", "total_liab", "net_worth", "detail_json", "created_at"]
+        return {"snapshots": [dict(zip(cols, r)) for r in rows]}
+
+    @app.delete("/net-worth/snapshots/{snapshot_id}", tags=["net-worth"],
+                summary="Delete a net worth snapshot")
+    def delete_nw_snapshot(snapshot_id: int):
+        from finance_etl.db import get_connection as _gc
+        try:
+            conn = _gc(db_path)
+            conn.execute("DELETE FROM nw_snapshots WHERE id=?", [snapshot_id])
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Delete failed: {exc}") from exc
+        return {"status": "deleted", "id": snapshot_id}
+
+    # -----------------------------------------------------------------------
     # Recurring Transactions
     # -----------------------------------------------------------------------
 
@@ -3913,6 +4127,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         "transaction_tags",
         "savings_goals",
         "monthly_summaries",
+        "nw_accounts",
+        "nw_snapshots",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
@@ -4241,6 +4457,30 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("narrative", ""), r.get("created_at", now)],
                 )
 
+            # 14. nw_accounts
+            conn.execute("DELETE FROM nw_accounts")
+            for r in data.get("nw_accounts", []):
+                conn.execute(
+                    """INSERT INTO nw_accounts
+                       (name, acct_type, balance, is_asset, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?)""",
+                    [r["name"], r["acct_type"], r.get("balance", 0),
+                     r.get("is_asset", True),
+                     r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # 15. nw_snapshots
+            conn.execute("DELETE FROM nw_snapshots")
+            for r in data.get("nw_snapshots", []):
+                conn.execute(
+                    """INSERT INTO nw_snapshots
+                       (snapshot_date, total_assets, total_liab, net_worth, detail_json, created_at)
+                       VALUES (?,?,?,?,?,?)""",
+                    [r["snapshot_date"], r.get("total_assets", 0),
+                     r.get("total_liab", 0), r.get("net_worth", 0),
+                     r.get("detail_json", "[]"), r.get("created_at", now)],
+                )
+
             conn.close()
         except HTTPException:
             raise
@@ -4277,6 +4517,8 @@ No cloud services, no external dependencies — all data stays on your machine.
             "transaction_tags_restored": len(data.get("transaction_tags", [])),
             "savings_goals_restored": len(data.get("savings_goals", [])),
             "monthly_summaries_restored": len(data.get("monthly_summaries", [])),
+            "nw_accounts_restored": len(data.get("nw_accounts", [])),
+            "nw_snapshots_restored": len(data.get("nw_snapshots", [])),
             "wizard_profiles_restored": profiles_restored,
         }
 

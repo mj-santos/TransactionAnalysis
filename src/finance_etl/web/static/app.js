@@ -985,6 +985,8 @@ async function confirmRestore() {
     if (data.budget_goals_restored) parts.push(`${data.budget_goals_restored} budget goals`);
     if (data.transactions_norm_restored) parts.push(`${data.transactions_norm_restored} transactions`);
     if (data.runs_restored) parts.push(`${data.runs_restored} runs`);
+    if (data.nw_accounts_restored) parts.push(`${data.nw_accounts_restored} net worth accounts`);
+    if (data.nw_snapshots_restored) parts.push(`${data.nw_snapshots_restored} net worth snapshots`);
     if (data.wizard_profiles_restored) parts.push(`${data.wizard_profiles_restored} wizard profiles`);
     const msg = `Restored: ${parts.join(', ')}.`;
     if (statusEl) statusEl.textContent = msg;
@@ -3210,6 +3212,9 @@ function _renderDashboard(data) {
   // Savings goals
   _renderSavingsGoals(data.savings_goals || []);
 
+  // Net Worth widget
+  _renderNetWorthWidget(data.net_worth || {});
+
   // Recent transactions
   const tbody = document.getElementById('dash-recent-tbody');
   if (tbody) {
@@ -3234,6 +3239,194 @@ function _renderDashboard(data) {
     } else {
       tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px;">No transactions found.</td></tr>';
     }
+  }
+}
+
+// ── Net Worth Tracker ───────────────────────────────────────────
+
+const _NW_TYPE_LABELS = {
+  checking: 'Checking', savings: 'Savings', investment: 'Investment',
+  credit_card: 'Credit Card', loan: 'Loan', other: 'Other',
+};
+const _NW_ASSET_TYPES = new Set(['checking', 'savings', 'investment', 'other']);
+
+function _renderNetWorthWidget(nw) {
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerHTML = val; };
+  set('nw-assets', _fmt$(nw.total_assets || 0));
+  set('nw-liabilities', _fmt$(nw.total_liabilities || 0));
+
+  const netEl = document.getElementById('nw-total');
+  if (netEl) {
+    const net = nw.net_worth || 0;
+    netEl.style.color = net >= 0 ? '#22c55e' : '#ef4444';
+    netEl.innerHTML = (net < 0 ? '-' : '') + _fmt$(Math.abs(net));
+  }
+  const trendEl = document.getElementById('nw-trend');
+  if (trendEl) {
+    if (nw.trend != null) {
+      const arrow = nw.trend >= 0 ? '▲' : '▼';
+      const color = nw.trend >= 0 ? '#22c55e' : '#ef4444';
+      trendEl.innerHTML = `<span style="color:${color};">${arrow} ${Math.abs(nw.trend)}% vs last snapshot</span>`;
+    } else {
+      trendEl.innerHTML = '';
+    }
+  }
+  // Load accounts list
+  _loadNwAccounts();
+  _loadNwSnapshots();
+}
+
+async function _loadNwAccounts() {
+  try {
+    const data = await api('GET', '/net-worth/accounts');
+    const list = document.getElementById('nw-accounts-list');
+    if (!list) return;
+    const accounts = data.accounts || [];
+    if (!accounts.length) {
+      list.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No accounts added yet.</span>';
+      return;
+    }
+    list.innerHTML = accounts.map(a => {
+      const isAsset = _NW_ASSET_TYPES.has(a.acct_type);
+      const balColor = isAsset ? '#22c55e' : '#ef4444';
+      const typeLabel = _NW_TYPE_LABELS[a.acct_type] || a.acct_type;
+      return `<div class="nw-account-row">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="nw-type-badge">${esc(typeLabel)}</span>
+          <span style="font-weight:500; font-size:13px;">${esc(a.name)}</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-weight:600; color:${balColor};">${_fmt$(Math.abs(a.balance))}</span>
+          <button class="btn btn-secondary btn-sm" onclick="editNwAccount(${a.id},'${esc(a.name)}','${a.acct_type}',${a.balance})" style="font-size:10px; padding:2px 6px;">Edit</button>
+          <button class="btn btn-secondary btn-sm" onclick="deleteNwAccount(${a.id})" style="font-size:10px; padding:2px 6px; color:#ef4444;">Del</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    // silent
+  }
+}
+
+async function _loadNwSnapshots() {
+  try {
+    const data = await api('GET', '/net-worth/snapshots');
+    const snapshots = data.snapshots || [];
+    const toggle = document.getElementById('nw-history-toggle');
+    if (toggle) toggle.style.display = snapshots.length ? '' : 'none';
+
+    const chartEl = document.getElementById('nw-chart');
+    const listEl = document.getElementById('nw-history-list');
+    if (!chartEl || !listEl || !snapshots.length) return;
+
+    // Mini bar chart (last 12 snapshots, oldest to newest)
+    const recent = snapshots.slice(0, 12).reverse();
+    const maxNw = Math.max(...recent.map(s => Math.abs(parseFloat(s.net_worth))), 1);
+    chartEl.innerHTML = recent.map(s => {
+      const nw = parseFloat(s.net_worth);
+      const h = Math.max(Math.round(Math.abs(nw) / maxNw * 70), 2);
+      const color = nw >= 0 ? '#22c55e' : '#ef4444';
+      return `<div title="${s.snapshot_date}: ${_fmt$(nw)}" style="flex:1; min-width:8px; max-width:24px; height:${h}px; background:${color}; border-radius:2px;"></div>`;
+    }).join('');
+
+    // History list
+    listEl.innerHTML = snapshots.slice(0, 20).map(s => {
+      const nw = parseFloat(s.net_worth);
+      const color = nw >= 0 ? '#22c55e' : '#ef4444';
+      return `<div class="nw-history-row">
+        <span style="font-size:12px;">${esc(s.snapshot_date)}</span>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:12px; font-weight:600; color:${color};">${_fmt$(nw)}</span>
+          <button class="btn btn-secondary btn-sm" onclick="deleteNwSnapshot(${s.id})" style="font-size:10px; padding:1px 5px; color:#ef4444;">✕</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    // silent
+  }
+}
+
+function openNwForm() {
+  document.getElementById('nw-form').style.display = '';
+  document.getElementById('nw-edit-id').value = '';
+  document.getElementById('nw-name').value = '';
+  document.getElementById('nw-type').value = 'checking';
+  document.getElementById('nw-balance').value = '';
+}
+
+function closeNwForm() {
+  document.getElementById('nw-form').style.display = 'none';
+}
+
+function editNwAccount(id, name, type, balance) {
+  document.getElementById('nw-form').style.display = '';
+  document.getElementById('nw-edit-id').value = id;
+  document.getElementById('nw-name').value = name;
+  document.getElementById('nw-type').value = type;
+  document.getElementById('nw-balance').value = balance;
+}
+
+async function saveNwAccount() {
+  const editId = document.getElementById('nw-edit-id').value;
+  const name = document.getElementById('nw-name').value.trim();
+  const acct_type = document.getElementById('nw-type').value;
+  const balance = parseFloat(document.getElementById('nw-balance').value || 0);
+  if (!name) { toast('Account name is required.', 'error'); return; }
+  try {
+    if (editId) {
+      await api('PUT', `/net-worth/accounts/${editId}`, { name, acct_type, balance });
+      toast('Account updated.', 'success');
+    } else {
+      await api('POST', '/net-worth/accounts', { name, acct_type, balance });
+      toast('Account added.', 'success');
+    }
+    closeNwForm();
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function deleteNwAccount(id) {
+  if (!confirm('Delete this account?')) return;
+  try {
+    await api('DELETE', `/net-worth/accounts/${id}`);
+    toast('Account deleted.', 'success');
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function takeNwSnapshot() {
+  try {
+    const result = await api('POST', '/net-worth/snapshots');
+    toast(`Snapshot saved (${result.snapshot_date}): ${_fmt$(result.net_worth)}`, 'success');
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function deleteNwSnapshot(id) {
+  if (!confirm('Delete this snapshot?')) return;
+  try {
+    await api('DELETE', `/net-worth/snapshots/${id}`);
+    toast('Snapshot deleted.', 'success');
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function toggleNwHistory() {
+  const panel = document.getElementById('nw-history-panel');
+  const btn = document.querySelector('#nw-history-toggle button');
+  if (panel.style.display === 'none') {
+    panel.style.display = '';
+    if (btn) btn.textContent = 'Hide History';
+  } else {
+    panel.style.display = 'none';
+    if (btn) btn.textContent = 'Show History';
   }
 }
 

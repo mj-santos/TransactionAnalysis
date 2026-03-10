@@ -201,9 +201,10 @@ TransactionAnalysis/
 - **Spending Alerts & Thresholds**: in-app alert banners for categories at ≥80% (yellow warning) and ≥100% (red exceeded) of monthly budget; budget status overview card with green/yellow/red status chips per category; color-coded status dots on budget tracker bars; dismissible banners; alerts auto-reset each month
 - **Savings Goals** widget: progress bars for each goal, inline create/edit/delete, manual progress updates (set or add mode), auto-calculated monthly savings needed to hit target by deadline, suggested monthly amount from avg net cash flow
 - **Monthly Summary** button: opens modal with plain-language narrative, KPI grid (spent/income/net/txns), top categories with delta bars, top merchants chips, biggest purchase card; month navigation ←/→; save/regenerate summaries; "Browse History" opens stored summaries list
+- **Net Worth** widget: assets/liabilities/net KPI row with trend vs last snapshot; account list with type badges and inline edit/delete; add account form (name, type dropdown, balance); save snapshot button captures point-in-time balances; collapsible history panel with mini bar chart and snapshot list
 - Recent transactions table (last 10) with unreviewed dot indicators
 - Unreviewed count badge on sidebar Dashboard nav link
-- API: `GET /dashboard/summary?year=&month=`, `GET /budgets/rebalance`, `POST /budgets/rebalance/apply`, `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions`, `POST /monthly-summaries/generate?year=&month=`, `GET /monthly-summaries`, `GET /monthly-summaries/{year}/{month}`, `DELETE /monthly-summaries/{year}/{month}`
+- API: `GET /dashboard/summary?year=&month=`, `GET /budgets/rebalance`, `POST /budgets/rebalance/apply`, `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions`, `POST /monthly-summaries/generate?year=&month=`, `GET /monthly-summaries`, `GET /monthly-summaries/{year}/{month}`, `DELETE /monthly-summaries/{year}/{month}`, `GET/POST/PUT/DELETE /net-worth/accounts`, `GET /net-worth/summary`, `GET/POST/DELETE /net-worth/snapshots`
 
 **Import (`#page-import`)**
 - Drag-and-drop CSV upload zone; multi-file supported
@@ -598,6 +599,34 @@ UNIQUE constraint on `(year, month)`.
 
 ---
 
+### `nw_accounts` — net worth account balances
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-seq |
+| `name` | TEXT NOT NULL | Account display name (e.g. "Chase Checking") |
+| `acct_type` | TEXT NOT NULL | One of: `checking`, `savings`, `investment`, `credit_card`, `loan`, `other` |
+| `balance` | DECIMAL(18,2) DEFAULT 0 | Current balance (positive for assets, positive for liabilities too — `is_asset` flag determines sign) |
+| `is_asset` | BOOLEAN DEFAULT TRUE | TRUE for checking/savings/investment/other; FALSE for credit_card/loan |
+| `created_at` | TEXT | ISO timestamp |
+| `updated_at` | TEXT | ISO timestamp |
+
+---
+
+### `nw_snapshots` — point-in-time net worth snapshots
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-seq |
+| `snapshot_date` | TEXT NOT NULL | ISO date when snapshot was taken |
+| `total_assets` | DECIMAL(18,2) DEFAULT 0 | Sum of all asset account balances |
+| `total_liab` | DECIMAL(18,2) DEFAULT 0 | Sum of all liability account balances |
+| `net_worth` | DECIMAL(18,2) DEFAULT 0 | total_assets - total_liab |
+| `detail_json` | TEXT NOT NULL | JSON array of account details at snapshot time |
+| `created_at` | TEXT | ISO timestamp |
+
+---
+
 ### `schema_version` — DuckDB schema version tracking
 
 | Column | Type | Notes |
@@ -766,7 +795,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.10.0
+**Current Version:** v2.11.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -788,6 +817,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.8.0 | 2026-03-10 | Sprint 7 — Monthly Summary Engine: auto-generated plain-language monthly summaries with total spent/income/net, vs-prior-month delta, top 3 categories with deltas, top 3 merchants, biggest single transaction; modal viewer with month navigation, save/regenerate, browsable history of stored summaries; new `monthly_summaries` table; new `POST /monthly-summaries/generate`, `GET /monthly-summaries`, `GET /monthly-summaries/{year}/{month}`, `DELETE /monthly-summaries/{year}/{month}` endpoints; backup/restore support |
 | v2.9.0 | 2026-03-10 | Sprint 8 — Merchant Intelligence: per-merchant analytics with total spend, monthly avg, transaction frequency, months active, last transaction date; 3-month trend indicator (increasing/decreasing/flat) with MoM %; accelerating spend flag (>20% MoM); mini sparkline bars; sort by total spend/frequency/recent/trend; search filter; KPI summary (total merchants, accelerating count); new `GET /merchant-analytics` endpoint |
 | v2.10.0 | 2026-03-10 | Sprint 9 — Spending Alerts & Thresholds: per-category spending alerts derived from existing budget goals; alert banners at top of dashboard for categories at 80% (warning) and 100% (exceeded) of monthly budget; budget status overview card with green/yellow/red chips per category; color-coded status dots on budget tracker progress bars; dismissible alert banners; alerts auto-reset each month (spending is month-scoped); enhanced `GET /dashboard/summary` response with `spending_alerts` array |
+| v2.11.0 | 2026-03-10 | Sprint 10 — Net Worth Snapshot: manual net worth tracker with account management (checking/savings/investment/credit card/loan/other); assets vs liabilities breakdown; point-in-time snapshots with history chart; dashboard widget showing current net worth with trend vs last snapshot; new `nw_accounts` and `nw_snapshots` tables; new `GET/POST/PUT/DELETE /net-worth/accounts`, `GET /net-worth/summary`, `GET/POST/DELETE /net-worth/snapshots` endpoints; backup/restore support |
 
 ### Version Increment Rules
 
@@ -871,7 +901,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/budgets/rebalance` | budgets | Analyse avg spend vs budget, generate rebalance suggestions | 🟢 Called |
 | `POST` | `/budgets/rebalance/apply` | budgets | Apply user-selected budget adjustments | 🟢 Called |
 | `GET` | `/merchant-analytics` | merchant | Per-merchant spend, trends, frequency, acceleration flags | 🟢 Called |
-| `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, spending alerts, recent transactions | 🟢 Called |
+| `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, spending alerts, net worth summary, recent transactions | 🟢 Called |
 | `GET` | `/cashflow/summary` | cashflow | Income vs spending vs net, monthly breakdown, category breakdown, MoM delta | 🟢 Called |
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
 | `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) | 🟢 Called |
@@ -889,6 +919,14 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/monthly-summaries` | summaries | List all stored monthly summaries | 🟢 Called |
 | `GET` | `/monthly-summaries/{year}/{month}` | summaries | Get stored summary or generate on-the-fly | 🟢 Called |
 | `DELETE` | `/monthly-summaries/{year}/{month}` | summaries | Delete a stored monthly summary | 🟢 Called |
+| `GET` | `/net-worth/accounts` | net-worth | List all net worth accounts | 🟢 Called |
+| `POST` | `/net-worth/accounts` | net-worth | Create a net worth account | 🟢 Called |
+| `PUT` | `/net-worth/accounts/{id}` | net-worth | Update a net worth account | 🟢 Called |
+| `DELETE` | `/net-worth/accounts/{id}` | net-worth | Delete a net worth account | 🟢 Called |
+| `GET` | `/net-worth/summary` | net-worth | Current net worth breakdown (assets, liabilities, net) | 🟢 Called |
+| `POST` | `/net-worth/snapshots` | net-worth | Save point-in-time net worth snapshot | 🟢 Called |
+| `GET` | `/net-worth/snapshots` | net-worth | List all net worth snapshots | 🟢 Called |
+| `DELETE` | `/net-worth/snapshots/{id}` | net-worth | Delete a net worth snapshot | 🟢 Called |
 | `GET` | `/` | ui | Serve web UI (index.html) | 🟢 Entry point |
 | `GET` | `/docs` | (FastAPI auto) | Interactive API documentation | 🟢 Auto-generated |
 
