@@ -2090,11 +2090,11 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn = get_connection(db_path, read_only=True)
             # Also include any user-created categories from category_rules table
             user_rules = conn.execute(
-                "SELECT DISTINCT normalized_category, parent_category FROM category_rules"
+                "SELECT DISTINCT category, parent FROM category_rules ORDER BY parent, category"
             ).fetchall()
-            for norm, parent in user_rules:
-                if parent and norm:
-                    taxonomy.setdefault(parent, set()).add(norm)
+            for cat, parent in user_rules:
+                if parent and cat:
+                    taxonomy.setdefault(parent, set()).add(cat)
             # Get transaction counts per normalized category
             counts_raw = conn.execute(
                 """SELECT COALESCE(category_normalized, category, 'Uncategorized') AS cat,
