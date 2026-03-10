@@ -6,7 +6,7 @@
 
 ## 1. APP OVERVIEW
 
-**finance_etl** is a fully local, deterministic ETL pipeline and web dashboard for importing, normalizing, categorizing, and analyzing personal bank and credit-card transaction CSVs. It runs entirely on the user's machine — no cloud, no sync, no external services. All data lives in a single DuckDB file on disk.
+**finance_etl** is a fully local, deterministic ETL pipeline and web dashboard for importing, normalizing, categorizing, and analyzing personal bank and credit-card transaction CSVs. It runs entirely on the user's machine — no cloud, no sync, no external services. All data lives in a single DuckDB file on disk..
 
 **Who it's for:** Individual users who export CSVs from their bank(s) and want a structured, queryable ledger with analytics, merchant normalization, and category tracking.
 

@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.pyc
 .Python
 
 # Distribution / packaging
@@ -42,3 +43,5 @@ config/wizard_profiles/
 # OS
 .DS_Store
 Thumbs.db
+.venv/
+#.github/workflows/
