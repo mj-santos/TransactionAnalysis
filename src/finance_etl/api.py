@@ -5372,11 +5372,23 @@ No cloud services, no external dependencies — all data stays on your machine.
         from finance_etl.backup_migrations import CURRENT_BACKUP_VERSION
         from finance_etl.db import get_connection as _gc
 
+        # Explicit column lists for each table to ensure all columns round-trip
+        _TABLE_COLUMNS = {
+            "transactions_norm": (
+                "transaction_date, posted_date, description, merchant, category, "
+                "amount, currency, bank_name, account_name, account_id, "
+                "source_file, source_row, file_hash, transaction_fingerprint, "
+                "ingested_at, statement_type, run_id, transaction_subtype, "
+                "resolved_amount, category_normalized, category_parent, "
+                "unreviewed, notes, is_split, split_parent_fingerprint"
+            ),
+        }
         conn = _gc(db_path, read_only=True)
         try:
             data: dict[str, Any] = {}
             for table in _BACKUP_TABLES:
-                data[table] = _rows_to_dicts(conn.execute(f"SELECT * FROM {table}"))
+                cols = _TABLE_COLUMNS.get(table, "*")
+                data[table] = _rows_to_dicts(conn.execute(f"SELECT {cols} FROM {table}"))
             schema_ver = _get_schema_version(conn)
         finally:
             conn.close()
