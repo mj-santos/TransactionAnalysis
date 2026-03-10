@@ -723,5 +723,40 @@ tr.unreviewed-row {
 }
 .nav-badge:empty { display: none; }
 
+/* ── Cash Flow chart ────────────────────────────────────────── */
+.cf-bar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 48px;
+}
+.cf-bar-pair {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+}
+.cf-bar {
+  width: 18px;
+  border-radius: 3px 3px 0 0;
+  transition: height 0.3s ease;
+}
+.cf-bar-income  { background: #22c55e; }
+.cf-bar-spending { background: #ef4444; }
+.cf-bar-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  white-space: nowrap;
+}
+.cf-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
 /* ── Dashboard ──────────────────────────────────────────────── */
 #page-dashboard .card { padding: 16px 20px; }

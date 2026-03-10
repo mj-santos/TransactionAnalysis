@@ -31,6 +31,9 @@
     <a href="#" data-page="bank-transactions">
       <span class="icon">🏦</span> Bank Transactions
     </a>
+    <a href="#" data-page="cashflow">
+      <span class="icon">💰</span> Cash Flow
+    </a>
     <a href="#" data-page="reports">
       <span class="icon">📊</span> Reports
     </a>
@@ -429,6 +432,80 @@
     </div>
     <!-- Bank-tab warn element (unused; kept for renderTxnTotals() API symmetry) -->
     <div id="bk-totals-warn" style="margin-top:8px;"></div>
+  </section>
+
+  <!-- ─── CASH FLOW PAGE ─── -->
+  <section id="page-cashflow" class="page">
+    <!-- Filters -->
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+      <select id="cf-period" onchange="onCfPeriodChange()" style="padding:6px 10px; border-radius:6px; border:1px solid var(--border); font-size:13px;">
+        <option value="this_month">This Month</option>
+        <option value="last_month">Last Month</option>
+        <option value="last_3_months" selected>Last 3 Months</option>
+        <option value="last_12_months">Last 12 Months</option>
+        <option value="custom">Custom Range</option>
+      </select>
+      <span id="cf-custom-range" style="display:none;">
+        <input type="date" id="cf-date-from" style="padding:5px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+        <span style="color:var(--text-muted);">to</span>
+        <input type="date" id="cf-date-to" style="padding:5px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+      </span>
+      <label style="font-size:13px; display:flex; align-items:center; gap:4px; cursor:pointer;">
+        <input type="checkbox" id="cf-transfers" onchange="loadCashFlow()" />
+        Include transfers
+      </label>
+      <button class="btn btn-secondary btn-sm" onclick="loadCashFlow()">Refresh</button>
+    </div>
+
+    <!-- KPI cards -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px; margin-bottom:20px;">
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Income</div>
+        <div id="cf-income" style="font-size:28px; font-weight:700; margin-top:4px; color:#22c55e;">—</div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Spending</div>
+        <div id="cf-spending" style="font-size:28px; font-weight:700; margin-top:4px; color:#ef4444;">—</div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Net</div>
+        <div id="cf-net" style="font-size:28px; font-weight:700; margin-top:4px;">—</div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">vs Prior Month</div>
+        <div id="cf-mom-delta" style="font-size:18px; font-weight:700; margin-top:4px;">—</div>
+        <div id="cf-mom-detail" style="font-size:12px; color:var(--text-muted); margin-top:4px;"></div>
+      </div>
+    </div>
+
+    <!-- Chart + Category breakdown -->
+    <div style="display:grid; grid-template-columns:2fr 1fr; gap:16px; margin-bottom:20px;">
+      <div class="card">
+        <div class="card-title">Monthly Cash Flow</div>
+        <div id="cf-chart" style="padding:10px 16px; min-height:220px; display:flex; align-items:flex-end; gap:4px; overflow-x:auto;"></div>
+        <div id="cf-chart-legend" style="display:flex; gap:16px; padding:8px 16px; font-size:12px; color:var(--text-muted);"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Spending by Category</div>
+        <div id="cf-cat-list" style="padding:8px 16px;"></div>
+      </div>
+    </div>
+
+    <!-- Monthly detail table -->
+    <div class="card">
+      <div class="card-title">Monthly Detail</div>
+      <table class="tbl" style="font-size:13px;">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th class="text-right">Income</th>
+            <th class="text-right">Spending</th>
+            <th class="text-right">Net</th>
+          </tr>
+        </thead>
+        <tbody id="cf-table-body"></tbody>
+      </table>
+    </div>
   </section>
 
   <!-- ─── REPORTS PAGE ─── -->

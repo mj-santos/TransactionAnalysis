@@ -2582,6 +2582,186 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
+    # Cash Flow
+    # -----------------------------------------------------------------------
+
+    @app.get("/cashflow/summary", tags=["cashflow"],
+             summary="Cash flow summary with monthly breakdown")
+    def get_cashflow_summary(
+        period: str = Query(
+            "last_3_months",
+            description="Preset period: this_month, last_month, last_3_months, last_12_months, custom",
+        ),
+        start_date: Optional[str] = Query(None, description="ISO start date for custom range"),
+        end_date: Optional[str] = Query(None, description="ISO end date for custom range"),
+        include_transfers: bool = Query(False, description="Include transfer/payment transactions"),
+    ):
+        """
+        Return cash flow summary: income vs spending vs net, monthly breakdown,
+        category breakdown, and month-over-month delta.
+
+        Uses the signed `amount` column: positive = income, negative = spending.
+        """
+        import datetime as _dt
+
+        now = _dt.date.today()
+
+        # Resolve date range from preset
+        if period == "this_month":
+            d_from = now.replace(day=1)
+            d_to = now
+        elif period == "last_month":
+            first_this = now.replace(day=1)
+            last_prev = first_this - _dt.timedelta(days=1)
+            d_from = last_prev.replace(day=1)
+            d_to = last_prev
+        elif period == "last_3_months":
+            d_to = now
+            m = now.month - 2
+            y = now.year
+            while m < 1:
+                m += 12
+                y -= 1
+            d_from = _dt.date(y, m, 1)
+        elif period == "last_12_months":
+            d_to = now
+            m = now.month
+            y = now.year - 1
+            d_from = _dt.date(y, m, 1)
+        elif period == "custom" and start_date and end_date:
+            d_from = _dt.date.fromisoformat(start_date)
+            d_to = _dt.date.fromisoformat(end_date)
+        else:
+            d_from = now.replace(day=1)
+            d_to = now
+
+        try:
+            conn = get_connection(db_path, read_only=True)
+
+            # Build transfer exclusion clause
+            transfer_clause = ""
+            if not include_transfers:
+                transfer_clause = (
+                    " AND COALESCE(transaction_subtype, '') != 'payment'"
+                    " AND LOWER(COALESCE(category, '')) NOT LIKE '%transfer%'"
+                )
+
+            # ── Summary totals ──────────────────────────────────────
+            summary_row = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0),
+                    ABS(COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0)),
+                    COALESCE(SUM(amount), 0),
+                    COUNT(*)
+                FROM transactions_norm
+                WHERE transaction_date >= ? AND transaction_date <= ?
+                {transfer_clause}
+                """,
+                [d_from.isoformat(), d_to.isoformat()],
+            ).fetchone()
+            total_income = float(summary_row[0])
+            total_spending = float(summary_row[1])
+            net = float(summary_row[2])
+            txn_count = int(summary_row[3])
+
+            # ── Monthly breakdown ───────────────────────────────────
+            monthly_rows = conn.execute(
+                f"""
+                SELECT
+                    DATE_TRUNC('month', transaction_date) AS month,
+                    COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS income,
+                    ABS(COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0)) AS spending,
+                    COALESCE(SUM(amount), 0) AS net
+                FROM transactions_norm
+                WHERE transaction_date >= ? AND transaction_date <= ?
+                {transfer_clause}
+                GROUP BY 1
+                ORDER BY 1
+                """,
+                [d_from.isoformat(), d_to.isoformat()],
+            ).fetchall()
+            monthly = [
+                {
+                    "month": _isoformat(r[0])[:10],
+                    "income": float(r[1]),
+                    "spending": float(r[2]),
+                    "net": float(r[3]),
+                }
+                for r in monthly_rows
+            ]
+
+            # ── Category breakdown (spending only) ──────────────────
+            cat_rows = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(category_parent, category, 'Uncategorized') AS grp,
+                    ABS(SUM(amount)) AS total
+                FROM transactions_norm
+                WHERE transaction_date >= ? AND transaction_date <= ?
+                  AND amount < 0
+                {transfer_clause}
+                GROUP BY grp
+                ORDER BY total DESC
+                LIMIT 12
+                """,
+                [d_from.isoformat(), d_to.isoformat()],
+            ).fetchall()
+            cat_total = sum(float(r[1]) for r in cat_rows) if cat_rows else 1.0
+            by_category = [
+                {
+                    "category": r[0],
+                    "amount": float(r[1]),
+                    "pct": round(float(r[1]) / cat_total * 100, 1) if cat_total else 0,
+                }
+                for r in cat_rows
+            ]
+
+            # ── Month-over-month delta ──────────────────────────────
+            # Compare the most recent full month to the one before it
+            mom_delta = None
+            if len(monthly) >= 2:
+                curr = monthly[-1]
+                prev = monthly[-2]
+                delta = curr["net"] - prev["net"]
+                spending_delta = curr["spending"] - prev["spending"]
+                mom_delta = {
+                    "current_month": curr["month"],
+                    "prior_month": prev["month"],
+                    "current_net": curr["net"],
+                    "prior_net": prev["net"],
+                    "delta": delta,
+                    "current_spending": curr["spending"],
+                    "prior_spending": prev["spending"],
+                    "spending_delta": spending_delta,
+                }
+
+            conn.close()
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Cash flow query failed: {exc}"
+            ) from exc
+
+        return {
+            "period": {
+                "preset": period,
+                "start_date": d_from.isoformat(),
+                "end_date": d_to.isoformat(),
+            },
+            "summary": {
+                "total_income": total_income,
+                "total_spending": total_spending,
+                "net": net,
+                "transaction_count": txn_count,
+            },
+            "monthly": monthly,
+            "by_category": by_category,
+            "mom_delta": mom_delta,
+            "include_transfers": include_transfers,
+        }
+
+    # -----------------------------------------------------------------------
     # Recurring Transactions
     # -----------------------------------------------------------------------
 

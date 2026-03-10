@@ -45,6 +45,7 @@ function navigate(page) {
     history:            'Import History',
     'credit-cards':     'Credit Card Transactions',
     'bank-transactions':'Bank Transactions',
+    cashflow:           'Cash Flow',
     reports:            'Analytics Reports',
     'merchant-rules':   'Merchant Rules & Categories',
     'category-rules':   'Category Rules',
@@ -54,6 +55,7 @@ function navigate(page) {
   document.getElementById('topbar-title').textContent = titles[page] || page;
 
   if (page === 'history')            loadHistory();
+  if (page === 'cashflow')           loadCashFlow();
   if (page === 'reports')            loadReports();
   if (page === 'settings')           loadSettings();
   if (page === 'credit-cards')       loadTxnTab('credit_card');
@@ -3251,4 +3253,152 @@ function setReportDatePreset(preset) {
   const t = document.getElementById('report-date-to');
   if (f) f.value = from;
   if (t) t.value = to;
+}
+
+// ── Cash Flow ──────────────────────────────────────────────────
+
+function onCfPeriodChange() {
+  const sel = document.getElementById('cf-period');
+  const custom = document.getElementById('cf-custom-range');
+  if (sel && custom) {
+    custom.style.display = sel.value === 'custom' ? '' : 'none';
+  }
+  if (sel && sel.value !== 'custom') loadCashFlow();
+}
+
+async function loadCashFlow() {
+  const period = document.getElementById('cf-period')?.value || 'last_3_months';
+  const transfers = document.getElementById('cf-transfers')?.checked || false;
+
+  let url = `/cashflow/summary?period=${period}&include_transfers=${transfers}`;
+  if (period === 'custom') {
+    const from = document.getElementById('cf-date-from')?.value;
+    const to   = document.getElementById('cf-date-to')?.value;
+    if (from) url += `&start_date=${from}`;
+    if (to)   url += `&end_date=${to}`;
+  }
+
+  try {
+    const data = await api('GET', url);
+    _renderCashFlow(data);
+  } catch (err) {
+    const el = document.getElementById('cf-income');
+    if (el) el.textContent = 'Error';
+    toast(`Cash flow: ${err.message}`, 'error');
+  }
+}
+
+function _renderCashFlow(data) {
+  const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+  const s = data.summary;
+
+  // KPI cards
+  set('cf-income',   _fmt$(s.total_income));
+  set('cf-spending', _fmt$(s.total_spending));
+
+  const netColor = s.net >= 0 ? '#22c55e' : '#ef4444';
+  set('cf-net', `<span style="color:${netColor}">${s.net >= 0 ? '+' : ''}${_fmt$(s.net)}</span>`);
+
+  // Month-over-month delta
+  if (data.mom_delta) {
+    const d = data.mom_delta;
+    const arrow = d.spending_delta >= 0 ? '▲' : '▼';
+    const color = d.spending_delta >= 0 ? '#ef4444' : '#22c55e';
+    const sign  = d.spending_delta >= 0 ? '+' : '-';
+    set('cf-mom-delta', `<span style="color:${color}">${arrow} ${sign}${_fmt$(Math.abs(d.spending_delta))}</span>`);
+    set('cf-mom-detail', `spending vs prior month`);
+  } else {
+    set('cf-mom-delta', '—');
+    set('cf-mom-detail', 'Not enough data');
+  }
+
+  // Bar chart
+  _renderCfChart(data.monthly);
+
+  // Category breakdown
+  _renderCfCategories(data.by_category);
+
+  // Monthly detail table
+  _renderCfTable(data.monthly);
+}
+
+function _renderCfChart(monthly) {
+  const el = document.getElementById('cf-chart');
+  const legendEl = document.getElementById('cf-chart-legend');
+  if (!el) return;
+
+  if (!monthly.length) {
+    el.innerHTML = '<span style="color:var(--text-muted); font-size:13px; padding:20px;">No data for selected period.</span>';
+    if (legendEl) legendEl.innerHTML = '';
+    return;
+  }
+
+  const maxVal = Math.max(...monthly.flatMap(m => [m.income, m.spending]), 1);
+  const chartH = 180;
+
+  el.innerHTML = monthly.map(m => {
+    const incH = Math.max(Math.round(m.income / maxVal * chartH), 2);
+    const spnH = Math.max(Math.round(m.spending / maxVal * chartH), 2);
+    const label = m.month.slice(0, 7); // YYYY-MM
+    const shortLabel = _MONTH_NAMES[parseInt(m.month.slice(5,7), 10) - 1]?.slice(0, 3) || label;
+    return `<div class="cf-bar-group" title="${label}">
+      <div class="cf-bar-pair" style="height:${chartH}px;">
+        <div class="cf-bar cf-bar-income" style="height:${incH}px;" title="Income: ${_fmt$(m.income)}"></div>
+        <div class="cf-bar cf-bar-spending" style="height:${spnH}px;" title="Spending: ${_fmt$(m.spending)}"></div>
+      </div>
+      <div class="cf-bar-label">${esc(shortLabel)}</div>
+    </div>`;
+  }).join('');
+
+  if (legendEl) {
+    legendEl.innerHTML = `
+      <span><span class="cf-legend-dot" style="background:#22c55e;"></span> Income</span>
+      <span><span class="cf-legend-dot" style="background:#ef4444;"></span> Spending</span>
+    `;
+  }
+}
+
+function _renderCfCategories(cats) {
+  const el = document.getElementById('cf-cat-list');
+  if (!el) return;
+
+  if (!cats.length) {
+    el.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No spending data.</span>';
+    return;
+  }
+
+  const maxAmt = Math.max(...cats.map(c => c.amount), 1);
+  el.innerHTML = cats.map(c => {
+    const pct = Math.round(c.amount / maxAmt * 100);
+    return `<div style="margin-bottom:6px;">
+      <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;">
+        <span>${esc(c.category)}</span>
+        <span style="font-weight:600;">${_fmt$(c.amount)} <span style="color:var(--text-muted); font-size:11px;">(${c.pct}%)</span></span>
+      </div>
+      <div style="background:var(--border); border-radius:4px; height:6px;">
+        <div style="background:#ef4444; border-radius:4px; height:6px; width:${pct}%;"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _renderCfTable(monthly) {
+  const tbody = document.getElementById('cf-table-body');
+  if (!tbody) return;
+
+  if (!monthly.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:20px;">No data.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = monthly.map(m => {
+    const netColor = m.net >= 0 ? 'color:#22c55e;' : 'color:#ef4444;';
+    const label = m.month.slice(0, 7);
+    return `<tr>
+      <td>${label}</td>
+      <td class="text-right" style="color:#22c55e;">${_fmt$(m.income)}</td>
+      <td class="text-right" style="color:#ef4444;">${_fmt$(m.spending)}</td>
+      <td class="text-right" style="${netColor} font-weight:600;">${m.net >= 0 ? '+' : ''}${_fmt$(m.net)}</td>
+    </tr>`;
+  }).join('');
 }
