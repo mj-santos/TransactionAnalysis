@@ -211,7 +211,7 @@ TransactionAnalysis/
 - Budget rebalance suggestions — `loadRebalanceSuggestions()`, `applyRebalance()`: analyses avg monthly spend vs budget, suggests adjustments for categories >=15% over/under, user selects and confirms before applying
 - **Spending Alerts & Thresholds**: in-app alert banners for categories at ≥80% (yellow warning) and ≥100% (red exceeded) of monthly budget; budget status overview card with green/yellow/red status chips per category; color-coded status dots on budget tracker bars; dismissible banners; alerts auto-reset each month
 - **Savings Goals** widget: progress bars for each goal, inline create/edit/delete, manual progress updates (set or add mode), auto-calculated monthly savings needed to hit target by deadline, suggested monthly amount from avg net cash flow
-- **Monthly Summary** button: opens modal with plain-language narrative, KPI grid (spent/income/net/txns), top categories with delta bars, top merchants chips, biggest purchase card; month navigation ←/→; save/regenerate summaries; "Browse History" opens stored summaries list
+- **Monthly Summary** button: opens modal with plain-language narrative, KPI grid (spent/income/net/txns), **clickable top categories** with delta bars (opens drill-down for that month), top merchants chips, biggest purchase card; month navigation ←/→; save/regenerate summaries; "Browse History" opens stored summaries list
 - **Net Worth** widget: assets/liabilities/net KPI row with trend vs last snapshot; account list with type badges and inline edit/delete; add account form (name, type dropdown, balance); save snapshot button captures point-in-time balances; collapsible history panel with mini bar chart and snapshot list
 - **Year in Review** button: opens modal with annual report — total income/spent/net saved KPIs, biggest/lightest months, recurring costs estimate, month-by-month bar chart, top 5 categories with progress bars, top 5 merchants ranked list; year navigation ←/→; save/regenerate reports; print/PDF export via browser print dialog; "Browse Past Reports" opens stored reports history with view/delete per year
 - Recent transactions table (last 10) with unreviewed dot indicators
@@ -243,8 +243,8 @@ TransactionAnalysis/
 - API: `GET /runs`, `GET /runs/{id}/preview`, `POST /runs/{id}/commit`, `DELETE /runs/{id}`
 
 **Credit Cards / Bank Transactions (separate tabs, identical feature set)**
-- Filter bar: date range, description search, merchant filter, category filter, account filter
-- Quick date preset buttons: This Month, Last Month, 3 Months, YTD, All
+- Filter bar: date range, description search, merchant filter, category filter, account filter, **year selector** (scopes presets to selected year; defaults to current year or most recent with data)
+- Quick date preset buttons: This Month, Last Month, 3 Months, YTD, All (scoped to selected year)
 - Import Source dropdown (per statement type)
 - Group-by selector (including `category_normalized`, `category_parent`)
 - "Show Unreviewed Only" toggle filter
@@ -260,15 +260,15 @@ TransactionAnalysis/
 - **Inline Category Editing**: double-click category cell to edit in-place; Enter saves via `/merchant-categories`, Escape/blur cancels; no modal required
 - **Transaction Notes**: per-transaction notes via pencil icon; inline popup editor with textarea; auto-save on Enter or Save click; PATCH endpoint updates `notes` field
 - **Split Transactions**: split one transaction into N sub-rows across categories; parent marked `is_split=TRUE` and excluded from totals; children carry `split_parent_fingerprint`; "split" badge on child descriptions; unsplit restores parent and removes children
-- API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`, `PATCH /transactions/{fingerprint}`, `POST /transactions/{fingerprint}/split`, `DELETE /transactions/{fingerprint}/split`
+- API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `GET /transactions/years`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`, `PATCH /transactions/{fingerprint}`, `POST /transactions/{fingerprint}/split`, `DELETE /transactions/{fingerprint}/split`
 
 **Cash Flow (`#page-cashflow`)**
 - Summary KPI cards: Income (green), Spending (red), Net (color-coded), Month-over-Month delta
-- Time period filter dropdown: This Month, Last Month, Last 3 Months, Last 12 Months, Custom Range
+- Time period filter dropdown: This Month, Last Month, Last 3 Months, Last 12 Months, per-year options (from transaction data), Custom Range
 - Custom date range inputs (shown when "Custom Range" selected)
 - Toggleable "Include transfers" checkbox (excludes payment subtypes and transfer categories by default)
 - Monthly bar chart: paired income/spending bars per month, CSS-rendered (no Chart.js dependency)
-- Spending by category breakdown: horizontal bars with percentage labels (top 12)
+- Spending by category breakdown: horizontal bars with percentage labels (top 12) — **clickable rows open category drill-down modal** with date range from current period
 - Monthly detail table: Income, Spending, Net per month with color-coded values
 - Month-over-month delta indicator showing spending change vs prior month
 - API: `GET /cashflow/summary?period=&start_date=&end_date=&include_transfers=`
@@ -276,11 +276,11 @@ TransactionAnalysis/
 **Reports (`#page-reports`)**
 - Static report cards: spend_by_month_category, cashflow_by_month, spend_by_merchant, totals_by_account, top_merchants
 - Per-report: view as chart (bar, time-series), download CSV
-- Chart viewer with group-by and date-from/date-to filters
+- Chart viewer with group-by and date-from/date-to filters — **rows with a category column are clickable** for drill-down (date range inferred from row's date/month column if present)
 - Custom Report Builder: add/remove filters, group-by, bucket (day/week/month/year), order-by, limit
 - Quick date presets in custom report
 - Results rendered as table with download-to-CSV button
-- API: `GET /reports`, `GET /reports/{name}`, `GET /charts/{name}`, `POST /reports/query`, `GET /metric-docs/{topic}`
+- API: `GET /reports`, `GET /reports/{name}`, `GET /charts/{name}`, `POST /reports/query`, `POST /reports/regenerate`, `GET /metric-docs/{topic}`
 
 **Merchants (`#page-merchant-rules`)**
 - **Merchant Intelligence** panel: `loadMerchantAnalytics()` → `GET /merchant-analytics`
@@ -848,6 +848,7 @@ Single-row table seeded with `1` on first migration run.
 - `esc(str)` is used throughout `app.js` to HTML-encode user data before inserting into innerHTML.
 - **`INCOME_FILTER`** constant in `utils/query_helpers.py` defines the canonical income SQL condition: `amount > 0 AND statement_type = 'bank'`. All income queries must import and use this constant (or reference it in a comment when table aliases prevent direct use). CC positive amounts (payments, refunds) are never income. See BUG-6/7/8 history. A tripwire test (`test_income_filter_constant_unchanged`) guards against accidental changes.
 - **Collapsible card panels**: Cards on Merchants and Categories pages use `.card-header-toggle` + `.card-collapsible-body` pattern. `toggleCardCollapse()` toggles `.collapsed` class and persists state in localStorage (`collapse_<cardId>`). Badge counts (`.badge-count`) show item totals even when collapsed. `ensureCardExpanded(cardId)` auto-opens a panel before scrolling to its content (e.g., when opening a form). Suggestion lists use `.suggestions-scroll` (max-height 400px), rule tables use `.rules-table-scroll` (max-height 450px). Note: localStorage is used for collapse state (alongside dark mode, colorblind palette, and onboarding prefs). If a DB-backed settings store is added later, consider migrating these UI prefs for cross-device consistency.
+- **Category drill-down pattern**: `openCategoryDrilldown(categoryParent, dateFrom, dateTo)` opens a modal listing transactions for the given category within the date range. If `dateFrom`/`dateTo` are omitted, defaults to dashboard's current month. Used in: Dashboard top categories, Cash Flow spending breakdown, Monthly Summary top categories, Reports category tables. NOT applied to: Budget Tracker, Utilities Category List, Rule editors. "View All in Transactions" navigates to Bank tab with category + dates pre-filtered.
 - **Docker BuildKit cache corruption**: If Docker build fails with `parent snapshot does not exist` or similar layer cache errors, run `docker builder prune --all --force` before investigating code. Cache corruption from failed builds is a known Docker BuildKit issue and is not always a code problem.
 
 ---
@@ -880,7 +881,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.18.0
+**Current Version:** v2.19.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -915,6 +916,8 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.17.2 | 2026-03-10 | Fixed Utilities category list column name mismatch; `GET /utilities/categories` query used `normalized_category`/`parent_category` instead of correct `category`/`parent` from `category_rules` schema; audited merchants and health endpoints (no issues); added utility endpoint test |
 | v2.17.3 | 2026-03-10 | Fixed Docker build cache corruption after category list fix; verified clean build — no code changes needed; issue was Docker BuildKit layer cache corruption, not a dependency or packaging problem; added Docker cache troubleshooting note to architectural decisions |
 | v2.18.0 | 2026-03-10 | Merchant rule grouped boolean logic — implicit AND between groups; rules now support 1+ condition groups each with own AND/OR combiner; inter-group logic always AND; legacy flat conditions auto-migrate to single group on read; rule editor UI shows visually separated group blocks with per-group logic selector; matching engine evaluates groups independently then ANDs results; 6 new unit tests including Amazon-not-Prime example; conditions JSON schema updated to grouped format |
+| v2.18.1 | 2026-03-10 | Fixed dashboard error loading (undefined values for `category_parent`/`total_amount`/`prev_spend`/`pct_change`); fixed analytics reports empty after backup restore — restore now auto-regenerates reports; new `POST /reports/regenerate` endpoint |
+| v2.19.0 | 2026-03-10 | Year filter for transactions + cash flow — new `GET /transactions/years` endpoint; year dropdown on CC and Bank filter bars scopes Quick Date presets to selected year; cash flow period dropdown includes per-year options; clickable category drill-down app-wide — category rows in Cash Flow spending breakdown, Monthly Summary top categories, and Reports category tables now open drill-down modal with date-scoped transaction list; `openCategoryDrilldown()` accepts optional date range for flexible reuse |
 
 ### Version Increment Rules
 
