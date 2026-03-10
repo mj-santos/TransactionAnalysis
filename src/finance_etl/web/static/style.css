@@ -817,6 +817,65 @@ tr.unreviewed-row {
   box-shadow: 0 8px 24px rgba(0,0,0,.2);
 }
 
+/* ── Monthly Summary Modal ─────────────────────────────────── */
+.modal-dialog {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 24px;
+  width: min(96vw, 620px);
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+}
+.ms-narrative {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+  padding: 14px;
+  background: var(--bg-alt, #f8f9fa);
+  border-radius: 8px;
+  border-left: 4px solid var(--primary, #3b82f6);
+}
+.ms-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.ms-kpi {
+  text-align: center;
+  padding: 10px 6px;
+  background: var(--bg-alt, #f8f9fa);
+  border-radius: 8px;
+}
+.ms-kpi-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.ms-kpi-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+.ms-merchant-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  background: var(--bg-alt, #f8f9fa);
+  border-radius: 16px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+.sh-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  transition: background .15s;
+}
+.sh-item:hover {
+  background: var(--bg-alt, #f8f9fa);
+}
+
 /* ── Savings Goals ──────────────────────────────────────────── */
 .savings-goal-card {
   padding: 10px 12px;
