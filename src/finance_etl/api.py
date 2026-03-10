@@ -1908,9 +1908,10 @@ No cloud services, no external dependencies — all data stays on your machine.
         """
         Update mutable fields on one transaction identified by its fingerprint.
 
-        Supported fields: notes (TEXT | null), category_normalized (TEXT), excluded (BOOL)
+        Supported fields: notes (TEXT | null), category_normalized (TEXT),
+        category_parent (TEXT), category_override (BOOL), excluded (BOOL)
         """
-        allowed = {"notes", "category_normalized", "excluded"}
+        allowed = {"notes", "category_normalized", "category_parent", "category_override", "excluded"}
         updates = {k: v for k, v in body.items() if k in allowed}
         if not updates:
             raise HTTPException(status_code=400, detail=f"No valid fields. Allowed: {sorted(allowed)}")
@@ -5380,7 +5381,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "source_file, source_row, file_hash, transaction_fingerprint, "
                 "ingested_at, statement_type, run_id, transaction_subtype, "
                 "resolved_amount, category_normalized, category_parent, "
-                "unreviewed, notes, is_split, split_parent_fingerprint"
+                "unreviewed, notes, is_split, split_parent_fingerprint, "
+                "category_override"
             ),
         }
         conn = _gc(db_path, read_only=True)
@@ -5614,8 +5616,9 @@ No cloud services, no external dependencies — all data stays on your machine.
                          transaction_fingerprint, ingested_at, statement_type,
                          run_id, transaction_subtype, resolved_amount,
                          category_normalized, category_parent, unreviewed,
-                         notes, is_split, split_parent_fingerprint
-                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         notes, is_split, split_parent_fingerprint,
+                         category_override
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [
                         r.get("transaction_date"), r.get("posted_date"),
                         r.get("description", ""), r.get("merchant"),
@@ -5630,6 +5633,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                         r.get("category_parent"), r.get("unreviewed", True),
                         r.get("notes"), r.get("is_split", False),
                         r.get("split_parent_fingerprint"),
+                        r.get("category_override", False),
                     ],
                 )
                 tx_count += 1

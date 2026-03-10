@@ -362,6 +362,9 @@ CREATE TABLE IF NOT EXISTS annual_reports (
     # ── Split Transactions ────────────────────────────────────────────────────
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS is_split BOOLEAN DEFAULT FALSE",
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS split_parent_fingerprint TEXT",
+
+    # ── Category Override flag ─────────────────────────────────────────────────
+    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS category_override BOOLEAN DEFAULT FALSE",
 ]
 # ---------------------------------------------------------------------------
 

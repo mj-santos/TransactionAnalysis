@@ -167,6 +167,8 @@ TransactionAnalysis/
     ├── test_income_classification.py ← income rule regression tests (BUG-6/7/8)
     ├── test_recurring.py       ← recurring detection engine tests
     ├── test_utilities.py       ← Utilities endpoint tests
+    ├── test_merchant_category_edit.py ← inline category edit, override, fix-for-all, merchant bulk tests
+    ├── test_bulk_actions.py    ← bulk-assign-merchant, merchant search, changes() audit tests
     └── test_wizard_mapping.py
 ```
 
@@ -257,7 +259,7 @@ TransactionAnalysis/
 - Per-row tag chips showing assigned tags, "+tag" button opens tag assignment popup
 - Tag assignment popup: checkboxes for all tags, toggle to assign/remove per transaction
 - **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar (blue) appears when ≥1 selected with buttons: Assign Category, Mark Reviewed, Exclude, Assign Merchant (inline type-ahead panel), Assign Tag, Clear Selection ×; selected rows get left border accent + light blue tint; "{N} selected" counter updates in real time
-- **Inline Category Editing**: double-click category cell to edit in-place; Enter saves via `/merchant-categories`, Escape/blur cancels; no modal required
+- **Inline Category Editing**: click category cell to edit via `openCategoryPicker`; sets `category_override=TRUE` on save to protect from batch normalization; override badge ("edited" pill) shown on overridden rows with click-to-reset; "Fix for All?" prompt after save offers to apply category to all transactions from same merchant (auto-dismiss 8s); `_fixForAllMerchant()` updates merchant→category map and patches non-override transactions
 - **Transaction Notes**: per-transaction notes via pencil icon; inline popup editor with textarea; auto-save on Enter or Save click; PATCH endpoint updates `notes` field
 - **Split Transactions**: split one transaction into N sub-rows across categories; parent marked `is_split=TRUE` and excluded from totals; children carry `split_parent_fingerprint`; "split" badge on child descriptions; unsplit restores parent and removes children
 - API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `GET /transactions/years`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`, `PATCH /transactions/{fingerprint}`, `POST /transactions/{fingerprint}/split`, `DELETE /transactions/{fingerprint}/split`
@@ -303,6 +305,7 @@ TransactionAnalysis/
 - Uncategorized Merchants panel: `loadUncategorized()` → `GET /merchant-categories/uncategorized`
   - Inline category assignment dropdown + assign button per merchant
   - Backfills category onto all transactions for that merchant
+  - **"Show categorized merchants too" toggle**: fetches `GET /merchant-categories` and displays categorized merchants below the uncategorized list with inline category edit via `openCategoryPicker`
 - **Collapsible panels**: Recommended Rules, Merchant Rules, Uncategorized panels all collapse/expand with item count badges; scroll-capped containers; collapse state persisted in localStorage
 - API: Full CRUD on `/merchant-rules`, `/merchant-categories`, `/normalize/apply`, `/normalize/{job_id}`, `GET /merchant-analytics`
 
@@ -341,7 +344,7 @@ TransactionAnalysis/
 - Sidebar nav item with pending-duplicates badge (between Categories and Settings)
 - 5 collapsible card sections following standard collapsible panel pattern:
   - **Category List**: Full searchable taxonomy from `BUILT_IN_CATEGORY_MAP` + user categories; grouped by parent with subcategories; transaction counts per category; real-time JS filter
-  - **Merchant List**: All merchants with normalized name, raw name, transaction count, assigned category, last seen date; sortable (count/name/last seen); inline category edit via double-click; search filter
+  - **Merchant List**: All merchants with normalized name, raw name, transaction count, assigned category, last seen date; sortable (count/name/last seen); inline category edit via `openCategoryPicker` (click to edit); search filter; bulk select checkboxes with bulk action bar (Assign Category, Remove Category, Clear Selection)
   - **Rule Tester**: Paste transaction description → shows full classification trace: raw → merchant rule match → normalized merchant → category → parent
   - **Duplicate Review**: Lists pending `duplicate_candidates` with side-by-side transaction details; action buttons: Keep Both / Remove Newer / Not a Duplicate; empty state message when clean
   - **Data Health**: Read-only dashboard with 5 metrics (uncategorized txns, unreviewed txns, merchants without category, no merchant match, pending duplicates); each metric links to relevant page
@@ -416,6 +419,7 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 | `notes` | TEXT | User-editable note per transaction (added by migration) |
 | `is_split` | BOOLEAN DEFAULT FALSE | TRUE = parent row that has been split; excluded from totals (added by migration) |
 | `split_parent_fingerprint` | TEXT | FK to parent's `transaction_fingerprint`; set on child split rows (added by migration) |
+| `category_override` | BOOLEAN DEFAULT FALSE | When TRUE, category normalization jobs skip this row — preserves user's manual category edit (added by migration) |
 
 **Index:** `UNIQUE INDEX idx_tx_fingerprint ON transactions_norm(transaction_fingerprint)`
 
@@ -426,7 +430,7 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 - `category` → `category_rules.raw_category` (soft, not enforced)
 
 **⚠️ Schema notes:**
-- 10 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`, `notes`, `is_split`, `split_parent_fingerprint`
+- 11 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`, `notes`, `is_split`, `split_parent_fingerprint`, `category_override`
 - No explicit UNIQUE constraint on `transaction_fingerprint` in DDL — dedup relies on the separate CREATE UNIQUE INDEX statement
 
 ---
@@ -783,6 +787,16 @@ Single-row table seeded with `1` on first migration run.
 **BUG (FIXED): Utilities category list column name mismatch**
 - `GET /utilities/categories` queried `category_rules` using `normalized_category` and `parent_category` — columns that don't exist. The actual schema uses `category` and `parent`. Utilities endpoints were written against incorrect assumed column names rather than the actual `category_rules` table schema. Fixed in v2.17.2.
 
+**BUG-11 (FIXED): `SELECT changes()` SQLite function used in DuckDB**
+- Files: `api.py` (4 occurrences), `load.py` (1 occurrence)
+- Description: `changes()` is a SQLite-only function that returns the number of rows affected by the last INSERT/UPDATE/DELETE. DuckDB does not support it, causing bulk operations (mark-reviewed, mark-all-reviewed, unsplit, patch transaction) to fail silently or raise errors.
+- Fix: Replaced all 5 occurrences with DuckDB-compatible patterns: COUNT queries before mutations, existence checks, and row count tracking. In `load.py`, replaced INSERT OR IGNORE + `changes()` with pre-insert existence check pattern. Fixed in v2.23.1.
+
+**BUG-12 (FIXED): Backup/restore uses `SELECT *` — misses migration-added columns**
+- File: `api.py` (backup export + restore)
+- Description: Backup export used `SELECT * FROM transactions_norm` which relies on column order matching the restore INSERT. Migration-added columns (11 total) may not appear in a consistent order with `SELECT *`, and future migrations could silently break backup roundtrips.
+- Fix: Added `_TABLE_COLUMNS` dict with explicit column list for `transactions_norm` (26 columns). Export uses explicit SELECT, restore INSERT matches exactly. Other tables without migration columns continue using `SELECT *`. Fixed in v2.23.2.
+
 ### Hardcoded Values & Workarounds
 
 - **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">`) with exactly 12 options. These match `BUILT_IN_CATEGORY_MAP`'s parent groups exactly but are not dynamically derived — adding a new taxonomy parent requires editing both `category_rules.py` and `index.html`.
@@ -861,6 +875,9 @@ Single-row table seeded with `1` on first migration run.
 - **Category drill-down pattern**: `openCategoryDrilldown(categoryParent, dateFrom, dateTo)` opens a modal listing transactions for the given category within the date range. If `dateFrom`/`dateTo` are omitted, defaults to dashboard's current month. Used in: Dashboard top categories, Cash Flow spending breakdown, Monthly Summary top categories, Reports category tables. NOT applied to: Budget Tracker, Utilities Category List, Rule editors. "View All in Transactions" navigates to Bank tab with category + dates pre-filtered.
 - **`evaluate_rule_groups(groups, text, compiled_regexes)`** in `utils/query_helpers.py` is the shared grouped boolean condition evaluator. All groups must pass (implicit AND). Within each group, conditions combined by `group_logic` (AND|OR). Supports match types: `exact`, `contains`, `starts_with`, `startswith`, `regex`. Used by `merchant_rules.CompiledRule.matches()` and `category_rules.normalize_category()`. Single implementation, two consumers — no duplicated logic.
 - **Rule table search**: Merchant and Category rule tables have inline search bars. JS-only filtering (`filterMerchantRules()`, `filterCatRules()`) against cached `_allMerchantRules`/`_allCatRules` arrays. Case-insensitive match across all visible columns. Shows "X of N rules" count. Escape key clears filter. Search does NOT steal focus on load.
+- **`openCategoryPicker(targetElement, options)`** is the single shared inline category picker used by all category-editing surfaces. Options: `{ currentCategory, onSave(category), onRemove(), allowRemove, placeholder }`. Internally uses `_ensureCategoryTaxonomy()` to cache the full category list from `GET /utilities/categories`. Renders a type-ahead dropdown at the target element position with "Parent > Subcategory" format. Escape key and click-outside cancel. Consumers: transaction row inline edit (`inlineCategoryEdit`), Utilities Merchant List inline edit (`_utilMerchCatClick`), Utilities bulk assign (`_utilMerchBulkAssignCat`), categorized merchant edit (`_editCategorizedMerchant`). All other inline-edit / category-pick implementations have been removed — this is the ONLY category picker.
+- **`category_override` pattern**: When a user manually edits a transaction's category (via inline edit), the `category_override` flag is set to TRUE. The batch `apply_category_rules()` job filters with `WHERE COALESCE(category_override, FALSE) = FALSE`, skipping overridden rows. Users can reset the override via the "edited" badge, which sets `category_override=FALSE` and makes the row eligible for normalization again.
+- **Backup explicit column list policy**: `_TABLE_COLUMNS` in `api.py` maps table names to explicit SELECT column lists for backup export. Only `transactions_norm` currently needs this (26 columns, 11 from migrations). Other tables without migration-added columns continue using `SELECT *`. When adding migration columns to `transactions_norm`, update both `_TABLE_COLUMNS` and the restore INSERT statement.
 - **Docker BuildKit cache corruption**: If Docker build fails with `parent snapshot does not exist` or similar layer cache errors, run `docker builder prune --all --force` before investigating code. Cache corruption from failed builds is a known Docker BuildKit issue and is not always a code problem.
 - **Dark mode implementation**: Uses `[data-theme="dark"]` attribute on `<html>`, toggled via `toggleTheme()` in sidebar header. Persisted to `localStorage('spendly-theme')`. Initialized on page load via IIFE `_initTheme()` before first render. 11 of 19 root CSS variables have dark overrides. Accent colors (`--primary`, `--success`, `--danger`, `--warning`, `--staged`) intentionally keep their light-mode values (readable on dark backgrounds). Approximately 15 hardcoded color values remain in minor elements (file chip states, run status badges, alert banners) — these have dark-specific overrides via `[data-theme="dark"] .class` rules. Remaining hardcoded inline styles in app.js (e.g., inline `style="color:#22c55e"` for status colors) are impractical to convert to CSS variables without major refactoring — a future sprint could address these via data attributes or class-based styling.
 
@@ -894,7 +911,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.23.0
+**Current Version:** v2.24.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -935,6 +952,9 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.21.0 | 2026-03-10 | Suggested category edit + category rule test + retention features; editable category picker dropdown on Suggested Merchant Categories rows (searchable, pre-filled with suggestion, Accept/Accept All respects user changes); Test Conditions button on Category Rule Editor with inline test panel + new `POST /category-rules/test` endpoint (match result + live transaction count); Smart Unreviewed Nudge widget on Dashboard (shows when >5 unreviewed, progressive tone, dismiss options: tomorrow/next week/never via localStorage, estimated review time); Weekly Spending Recap banner on Mondays before 6pm (total spend, txn count, top category, See Details links to filtered transactions, dismissible per week); Budget Pace Indicator per budget row (projected end-of-month spend, color-coded green/yellow/red, only after day 5); new `GET /dashboard/weekly-recap` endpoint; 281 total tests |
 | v2.22.0 | 2026-03-10 | Fixed bulk action bar visibility + added bulk assign merchant + selected row highlight; bulk bar buttons now use semi-transparent white styling (rgba backgrounds, white text/borders) instead of btn-secondary which was invisible against blue bar; full button set: Assign Category, Mark Reviewed, Exclude, Assign Merchant, Assign Tag, Clear Selection; selected rows get left border accent + light blue background tint (works in dark mode); Assign Merchant opens inline panel with debounced type-ahead merchant search (frequency-ordered); bulk merchant assign auto-applies category if merchant→category mapping exists; fixed bulkAssignCategory to use PATCH /transactions/{fp} instead of wrong /merchant-categories endpoint; extended PATCH /transactions/{fp} to accept category_normalized and excluded fields; new `PATCH /transactions/bulk-assign-merchant` and `GET /merchants/search` endpoints; 5 new tests; 286 total tests |
 | v2.23.0 | 2026-03-10 | Restore modal UI fix + transaction empty filters + dark mode audit and fix; restore preview modal now has opaque backdrop (rgba 0.65 + blur), proper CSS classes instead of inline styles, warning text in styled warning box with red left border, alternating table rows, zero-value rows muted, clear content hierarchy with divider above action buttons; new "No Merchant" and "No Category" filter toggles on both CC and Bank transaction pages (independent, combinable, with Show only: label group); `GET /transactions` and `/transactions/totals` now accept `no_merchant` and `no_category` query params; dark mode audit: approach is `[data-theme="dark"]` attribute toggle (partially implemented, 11/19 root vars overridden); fixed 10+ hardcoded background colors to use CSS variables (`--bg-alt`, `--card-bg`, `--border`); added 20+ new dark mode rules for restore modal, wizard modal, file chips, run status badges, category picker, source dropdown, report cards, inline edit inputs, onboarding overlay; added `--bg-alt` to `:root`; 286 total tests |
+| v2.23.1 | 2026-03-10 | Fix BUG-11: replaced all 5 `SELECT changes()` SQLite-only function calls with DuckDB-compatible patterns (COUNT queries, existence checks, pre-insert dedup); affected endpoints: mark-reviewed, mark-all-reviewed, patch transaction, unsplit, load.py row insert; critical fix — bulk operations were silently failing |
+| v2.23.2 | 2026-03-10 | Fix BUG-12: backup/restore now uses explicit column list for `transactions_norm` (26 columns) via `_TABLE_COLUMNS` dict instead of `SELECT *`; restore INSERT updated to include `category_override`; prevents silent data loss when migration columns are added |
+| v2.24.0 | 2026-03-10 | Category override + shared category picker + inline editing sprint; new `category_override` BOOLEAN column on `transactions_norm` (migration); `apply_category_rules()` skips override rows; shared `openCategoryPicker()` component replaces all previous category edit implementations; transaction row inline category edit with override badge ("edited" pill), click-to-reset, "Fix for All?" merchant prompt; Utilities Merchant List bulk select with Assign Category / Remove Category actions; Merchants tab "Show categorized merchants too" toggle with inline edit; `GET /merchant-categories` and `DELETE /merchant-categories/{merchant}` now used by frontend; 9 new tests (3 files); 294 total tests |
 
 ### Version Increment Rules
 
@@ -983,6 +1003,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/transactions/unreviewed-count` | transactions | Count of all unreviewed transactions | 🟢 Called |
 | `POST` | `/transactions/mark-reviewed` | transactions | Mark specific transactions as reviewed (by fingerprint) | 🟢 Called |
 | `POST` | `/transactions/mark-all-reviewed` | transactions | Mark all filtered transactions as reviewed | 🟢 Called |
+| `PATCH` | `/transactions/{fingerprint}` | transactions | Update transaction fields: `notes`, `category_normalized`, `category_parent`, `category_override`, `excluded` | 🟢 Called |
 | `PATCH` | `/transactions/bulk-assign-merchant` | transactions | Assign merchant to multiple transactions; auto-applies category if mapping exists | 🟢 Called |
 | `GET` | `/merchants/search` | merchant | Search distinct merchants by name (type-ahead, frequency-ordered) | 🟢 Called |
 | `GET` | `/reports` | reports | List available analytics CSV reports | 🟢 Called |
@@ -1001,13 +1022,13 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `DELETE` | `/merchant-rules/{id}` | merchant | Delete a merchant rule | 🟢 Called |
 | `POST` | `/merchant-rules/test` | merchant | Test a rule against live descriptions | 🟢 Called |
 | `GET` | `/merchant-rules/suggestions` | merchant | Suggest rules from unmatched descriptions | 🟢 Called |
-| `GET` | `/merchant-categories` | merchant | List all merchant→category mappings | 🟡 Exists but unused by frontend |
+| `GET` | `/merchant-categories` | merchant | List all merchant→category mappings | 🟢 Called (Merchants tab "Show categorized" toggle) |
 | `GET` | `/merchant-categories/uncategorized` | merchant | List merchants without a category | 🟢 Called |
 | `GET` | `/merchant-categories/suggestions` | merchant | Keyword-heuristic category suggestions for merchants | 🟢 Called |
 | `POST` | `/merchant-categories` | merchant | Assign category to merchant | 🟢 Called |
-| `DELETE` | `/merchant-categories/{merchant}` | merchant | Remove merchant category mapping | 🟡 Exists but unused by frontend |
+| `DELETE` | `/merchant-categories/{merchant}` | merchant | Remove merchant category mapping | 🟢 Called (Utilities bulk remove, categorized merchant edit) |
 | `POST` | `/normalize/apply` | merchant | Start batch merchant re-normalization job | 🟢 Called |
-| `GET` | `/normalize/{job_id}` | merchant | Poll normalization job status | 🟢 Called (merchant); 🔴 Category uses wrong path |
+| `GET` | `/normalize/{job_id}` | merchant | Poll normalization job status | 🟢 Called (merchant + category) |
 | `GET` | `/category-rules` | categories | List all category rules | 🟢 Called |
 | `POST` | `/category-rules` | categories | Create or update a category rule | 🟢 Called |
 | `PUT` | `/category-rules/{id}` | categories | Update a category rule | 🟢 Called |
@@ -1056,7 +1077,4 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/` | ui | Serve web UI (index.html) | 🟢 Entry point |
 | `GET` | `/docs` | (FastAPI auto) | Interactive API documentation | 🟢 Auto-generated |
 
-**Frontend calls with no backend endpoint:**
-| Method | Path | Called from | Issue |
-|---|---|---|---|
-| `GET` | `/category-normalize/{jobId}` | `app.js:3174` (`_pollCatNorm`) | 🔴 Endpoint does not exist — should be `/normalize/{jobId}` |
+~~**Frontend calls with no backend endpoint:** None — all previously broken references fixed.~~

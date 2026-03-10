@@ -282,3 +282,60 @@ def test_duplicate_task_releases_connection(tmp_path: Path):
     row = conn2.execute("SELECT COUNT(*) FROM transactions_norm").fetchone()
     conn2.close()
     assert row[0] == 2
+
+
+# ---------------------------------------------------------------------------
+# 9. category_override survives backup/restore roundtrip
+# ---------------------------------------------------------------------------
+
+def test_category_override_survives_backup_restore(tmp_path: Path):
+    """category_override=TRUE and category_normalized are preserved through export/restore."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    # Seed a transaction with category_override=TRUE
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO transactions_norm "
+        "(transaction_fingerprint, transaction_date, description, amount, "
+        "bank_name, account_name, account_id, source_file, source_row, file_hash, "
+        "category_normalized, category_parent, category_override) "
+        "VALUES ('fp_override', '2024-06-01', 'test', -50, "
+        "'Bank', 'Acct', 'a1', 'f.csv', 1, 'h1', "
+        "'ManualCat', 'Food & Dining', TRUE)"
+    )
+    conn.close()
+
+    # Export
+    resp = client.get("/backup/export")
+    assert resp.status_code == 200
+    backup_bytes = resp.content
+
+    # Verify export contains category_override
+    payload = json.loads(backup_bytes)
+    txns = payload["data"]["transactions_norm"]
+    assert len(txns) == 1
+    assert txns[0]["category_override"] == True
+    assert txns[0]["category_normalized"] == "ManualCat"
+
+    # Restore
+    resp2 = client.post(
+        "/backup/restore",
+        files={"file": ("backup.json", io.BytesIO(backup_bytes), "application/json")},
+    )
+    assert resp2.status_code == 200
+
+    # Verify category_override survived
+    conn2 = get_connection(db_path, read_only=True)
+    row = conn2.execute(
+        "SELECT category_normalized, category_parent, category_override "
+        "FROM transactions_norm WHERE transaction_fingerprint = 'fp_override'"
+    ).fetchone()
+    conn2.close()
+    assert row[0] == "ManualCat"
+    assert row[1] == "Food & Dining"
+    assert row[2] == True
