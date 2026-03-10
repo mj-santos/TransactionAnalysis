@@ -151,6 +151,7 @@ TransactionAnalysis/
     │   └── standard_headers.csv
     ├── smoke_test_wizard.py    ← smoke test for wizard profile matching
     ├── test_backup_restore.py  ← v2 backup migration, roundtrip, rotation tests
+    ├── test_csv_upload_hardening.py ← 6-case upload pipeline tests (encoding, BOM, CRLF, delimiters, Excel, extension)
     ├── test_dates.py
     ├── test_fingerprint.py
     ├── test_golden_pipeline.py
@@ -583,7 +584,7 @@ Single-row table seeded with `1` on first migration run.
 - **Budget form** (`bf-parent`) uses a free-text `<input>`, NOT a select. No validation against the taxonomy.
 - **`min_transactions = 3`** in `analyze_descriptions()` is hardcoded. No UI control.
 - **`LARGE_TRANSACTION_THRESHOLD = Decimal("10000.00")`** in `validate.py` is hardcoded.
-- **Encoding sample sizes differ**: `csv_sniff.py` reads 65,536 bytes; `csv_preprocess.py` reads 32,768 bytes. Should be standardized.
+- ~~**Encoding sample sizes** — standardised to 65,536 bytes in `detect_encoding()` (v2.3.1).~~
 
 ### Duplicate Logic
 
@@ -679,7 +680,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.3.0
+**Current Version:** v2.3.1
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -693,6 +694,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.1.3 | 2026-03-10 | Fix BUG-3: ui_settings now persist to `data/ui_settings.json` across restarts |
 | v2.2.0 | 2026-03-10 | Quick wins: fix BUG-4 (backup restore now includes `imported_file`), fix BUG-5 (delete run deletes transactions_norm by `run_id` directly), add `imported_file` to base DDL, remove dead code (`resolve_category`, `get_unmapped_categories`, `get_category_suggestions`), remove unused config files (`rules.yaml`, `canonical_schema.yaml`) |
 | v2.3.0 | 2026-03-10 | Renamed app to Spendly; sidebar version display now dynamic via `GET /version` endpoint |
+| v2.3.1 | 2026-03-10 | Hardened CSV upload pipeline: encoding detection, BOM stripping, line ending normalisation, delimiter sniffing fallback, Excel magic-byte rejection, extension validation |
 
 ### Version Increment Rules
 
