@@ -197,9 +197,10 @@ TransactionAnalysis/
 - Month navigation (prev/next arrows) — `dashboardPrevMonth()`, `dashboardNextMonth()`
 - Top categories bar chart (horizontal, CSS-rendered)
 - Budget tracker with inline add/edit/delete form — `openBudgetForm()`, `saveBudget()`, `deleteBudget()`
+- Budget rebalance suggestions — `loadRebalanceSuggestions()`, `applyRebalance()`: analyses avg monthly spend vs budget, suggests adjustments for categories >=15% over/under, user selects and confirms before applying
 - Recent transactions table (last 10) with unreviewed dot indicators
 - Unreviewed count badge on sidebar Dashboard nav link
-- API: `GET /dashboard/summary?year=&month=`
+- API: `GET /dashboard/summary?year=&month=`, `GET /budgets/rebalance`, `POST /budgets/rebalance/apply`
 
 **Import (`#page-import`)**
 - Drag-and-drop CSV upload zone; multi-file supported
@@ -692,7 +693,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.4.0
+**Current Version:** v2.5.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -708,6 +709,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.3.0 | 2026-03-10 | Renamed app to Spendly; sidebar version display now dynamic via `GET /version` endpoint |
 | v2.3.1 | 2026-03-10 | Hardened CSV upload pipeline: encoding detection, BOM stripping, line ending normalisation, delimiter sniffing fallback, Excel magic-byte rejection, extension validation |
 | v2.4.0 | 2026-03-10 | Sprint 3 — Cash Flow View: new page with income/spending/net KPIs, monthly bar chart, category breakdown, MoM delta, time filters, transfer toggle; new `GET /cashflow/summary` endpoint |
+| v2.5.0 | 2026-03-10 | Sprint 4 — Smart Budget Rebalancing: suggestion engine compares avg monthly actuals vs budgets, generates over/under suggestions with editable amounts, user-confirmed apply; new `GET /budgets/rebalance` and `POST /budgets/rebalance/apply` endpoints |
 
 ### Version Increment Rules
 
@@ -788,6 +790,8 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/budgets` | budgets | List all budget goals | 🟢 Called |
 | `POST` | `/budgets` | budgets | Create or update a budget goal | 🟢 Called |
 | `DELETE` | `/budgets/{id}` | budgets | Delete a budget goal | 🟢 Called |
+| `GET` | `/budgets/rebalance` | budgets | Analyse avg spend vs budget, generate rebalance suggestions | 🟢 Called |
+| `POST` | `/budgets/rebalance/apply` | budgets | Apply user-selected budget adjustments | 🟢 Called |
 | `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions | 🟢 Called |
 | `GET` | `/cashflow/summary` | cashflow | Income vs spending vs net, monthly breakdown, category breakdown, MoM delta | 🟢 Called |
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |

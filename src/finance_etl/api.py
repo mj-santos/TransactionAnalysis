@@ -2413,6 +2413,162 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {"status": "deleted"}
 
     # -----------------------------------------------------------------------
+    # Budget rebalancing
+    # -----------------------------------------------------------------------
+
+    @app.get("/budgets/rebalance", tags=["budgets"],
+             summary="Generate budget rebalance suggestions")
+    def get_rebalance_suggestions():
+        """
+        Analyse average monthly spend per budget category over the last 3+ months
+        and suggest adjustments for categories that are consistently over or under
+        their budgeted amount.  Requires at least 30 days of transaction history.
+        """
+        import datetime as _dt
+
+        conn = get_connection(db_path, read_only=True)
+        try:
+            # Check we have 30+ days of data
+            span_row = conn.execute(
+                "SELECT MIN(transaction_date), MAX(transaction_date) FROM transactions_norm"
+            ).fetchone()
+            if not span_row or not span_row[0] or not span_row[1]:
+                return {"suggestions": [], "message": "No transaction data found."}
+
+            min_date, max_date = span_row
+            if hasattr(min_date, "date"):
+                min_date = min_date.date()
+            if hasattr(max_date, "date"):
+                max_date = max_date.date()
+            if not isinstance(min_date, _dt.date):
+                min_date = _dt.date.fromisoformat(str(min_date))
+            if not isinstance(max_date, _dt.date):
+                max_date = _dt.date.fromisoformat(str(max_date))
+
+            days_span = (max_date - min_date).days
+            if days_span < 30:
+                return {
+                    "suggestions": [],
+                    "message": f"Need at least 30 days of data (currently {days_span} days).",
+                }
+
+            # Get all budget goals
+            budget_rows = conn.execute(
+                "SELECT id, parent, category, monthly_amount "
+                "FROM budget_goals ORDER BY parent, category"
+            ).fetchall()
+            if not budget_rows:
+                return {"suggestions": [], "message": "No budgets defined yet."}
+
+            # Compute months spanned (for averaging)
+            months_spanned = max(days_span / 30.44, 1.0)
+
+            suggestions = []
+            for bid, parent, category, monthly_amount in budget_rows:
+                monthly_f = float(monthly_amount)
+                if monthly_f <= 0:
+                    continue
+
+                # Compute total actual spend for this category across all time
+                if category:
+                    actual_row = conn.execute(
+                        """
+                        SELECT COALESCE(SUM(resolved_amount), 0)
+                        FROM transactions_norm
+                        WHERE transaction_subtype = 'spending'
+                          AND category_parent = ?
+                          AND category_normalized = ?
+                        """,
+                        [parent, category],
+                    ).fetchone()
+                else:
+                    actual_row = conn.execute(
+                        """
+                        SELECT COALESCE(SUM(resolved_amount), 0)
+                        FROM transactions_norm
+                        WHERE transaction_subtype = 'spending'
+                          AND category_parent = ?
+                        """,
+                        [parent],
+                    ).fetchone()
+
+                total_actual = float(actual_row[0]) if actual_row else 0.0
+                avg_monthly = round(total_actual / months_spanned, 2)
+
+                # Determine if this is significantly over or under
+                diff = avg_monthly - monthly_f
+                diff_pct = round(diff / monthly_f * 100, 1) if monthly_f else 0.0
+
+                # Only suggest if >=15% deviation
+                if abs(diff_pct) < 15:
+                    continue
+
+                direction = "over" if diff > 0 else "under"
+                # Suggest rounding to nearest $5
+                suggested = round(avg_monthly / 5) * 5
+                if suggested <= 0:
+                    suggested = 5.0
+
+                suggestions.append({
+                    "budget_id": bid,
+                    "parent": parent,
+                    "category": category,
+                    "current_budget": monthly_f,
+                    "avg_monthly_actual": avg_monthly,
+                    "suggested_budget": float(suggested),
+                    "diff": round(diff, 2),
+                    "diff_pct": diff_pct,
+                    "direction": direction,
+                    "months_analysed": round(months_spanned, 1),
+                })
+
+            # Sort: over-budget first (most urgent), then by magnitude
+            suggestions.sort(key=lambda s: (-1 if s["direction"] == "over" else 1, -abs(s["diff_pct"])))
+
+        finally:
+            conn.close()
+
+        return {
+            "suggestions": suggestions,
+            "data_span_days": days_span,
+            "months_analysed": round(months_spanned, 1),
+            "message": None,
+        }
+
+    @app.post("/budgets/rebalance/apply", tags=["budgets"],
+              summary="Apply selected rebalance suggestions")
+    def apply_rebalance(payload: dict):
+        """
+        Accept a list of budget adjustments and update monthly_amount for each.
+        Payload: {"adjustments": [{"budget_id": int, "new_amount": float}, ...]}
+        Does NOT auto-apply — caller must explicitly send selected adjustments.
+        """
+        adjustments = payload.get("adjustments", [])
+        if not adjustments:
+            raise HTTPException(status_code=400, detail="No adjustments provided.")
+
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        updated = 0
+        try:
+            for adj in adjustments:
+                bid = adj.get("budget_id")
+                new_amount = adj.get("new_amount")
+                if bid is None or new_amount is None or float(new_amount) <= 0:
+                    continue
+                conn.execute(
+                    "UPDATE budget_goals SET monthly_amount=?, updated_at=? WHERE id=?",
+                    [float(new_amount), now, int(bid)],
+                )
+                updated += 1
+        finally:
+            conn.close()
+
+        return {"status": "applied", "updated": updated}
+
+    # -----------------------------------------------------------------------
     # Dashboard summary
     # -----------------------------------------------------------------------
 
