@@ -750,6 +750,18 @@ Single-row table seeded with `1` on first migration run.
 - Impact: Low severity — user must re-enable verbose logs after every restart. Not data-losing, but annoying.
 - Fix: Persist settings to a `user_settings` DB table or a JSON file in `data/`.
 
+**BUG-14: Data Health "Uncategorized transactions" link hardcodes bank-transactions tab**
+- File: `app.js`, Line: ~6825
+- Description: Data Health metric "Uncategorized transactions" navigates to `bank-transactions` but uncategorized transactions can exist in both CC and bank tabs. The health API (`GET /utilities/health`) returns only a count, not per-statement_type breakdown, so `resolveTransactionTab()` cannot be applied without fetching transaction data first.
+- Impact: Low — user may not see uncategorized CC transactions when clicking the link.
+- Fix: Either split the health metric into CC/bank counts, or fetch a sample of uncategorized transactions to resolve the tab.
+
+**BUG-15: Data Health "Unreviewed transactions" link hardcodes bank-transactions tab**
+- File: `app.js`, Line: ~6829
+- Description: Same issue as BUG-14 but for unreviewed transactions. Navigates to `bank-transactions` but unreviewed transactions span both tabs.
+- Impact: Low — user may not see unreviewed CC transactions when clicking the link.
+- Fix: Same approach as BUG-14.
+
 ### Previously Fixed Bugs
 
 **BUG-6/7/8 (FIXED): Income classification — CC payments/refunds counted as income**
@@ -883,6 +895,7 @@ Single-row table seeded with `1` on first migration run.
 - **Rule table search**: Merchant and Category rule tables have inline search bars. JS-only filtering (`filterMerchantRules()`, `filterCatRules()`) against cached `_allMerchantRules`/`_allCatRules` arrays. Case-insensitive match across all visible columns. Shows "X of N rules" count. Escape key clears filter. Search does NOT steal focus on load.
 - **`openCategoryPicker(targetElement, options)`** is the single shared inline category picker used by all category-editing surfaces. Options: `{ currentCategory, onSave(category), onRemove(), allowRemove, placeholder }`. Internally uses `_ensureCategoryTaxonomy()` to cache the full category list from `GET /utilities/categories`. Renders a type-ahead dropdown at the target element position with "Parent > Subcategory" format. Escape key and click-outside cancel. Consumers: transaction row inline edit (`inlineCategoryEdit`), Utilities Merchant List inline edit (`_utilMerchCatClick`), Utilities bulk assign (`_utilMerchBulkAssignCat`), categorized merchant edit (`_editCategorizedMerchant`). All other inline-edit / category-pick implementations have been removed — this is the ONLY category picker.
 - **`category_override` pattern**: When a user manually edits a transaction's category (via inline edit), the `category_override` flag is set to TRUE. The batch `apply_category_rules()` job filters with `WHERE COALESCE(category_override, FALSE) = FALSE`, skipping overridden rows. Users can reset the override via the "edited" badge, which sets `category_override=FALSE` and makes the row eligible for normalization again.
+- **`resolveTransactionTab(transactions)`** derives the correct destination tab (`'credit_card'` or `'bank'`) from the `statement_type` field of fetched transaction data. Use for all navigation from mixed-context views (dashboard drill-down, reports, utilities). Never hardcode destination tab where transaction data is available. Majority wins; tie defaults to `'credit_card'`. When both CC and bank transactions exist, show an info toast telling the user to switch tabs for the rest. Tab-specific contexts (CC filter bar, bank pagination) may hardcode their own tab.
 - **Backup explicit column list policy**: `_TABLE_COLUMNS` in `api.py` maps table names to explicit SELECT column lists for backup export. Only `transactions_norm` currently needs this (26 columns, 11 from migrations). Other tables without migration-added columns continue using `SELECT *`. When adding migration columns to `transactions_norm`, update both `_TABLE_COLUMNS` and the restore INSERT statement.
 - **Docker BuildKit cache corruption**: If Docker build fails with `parent snapshot does not exist` or similar layer cache errors, run `docker builder prune --all --force` before investigating code. Cache corruption from failed builds is a known Docker BuildKit issue and is not always a code problem.
 - **Dark mode implementation**: Uses `[data-theme="dark"]` attribute on `<html>`, toggled via `toggleTheme()` in sidebar header. Persisted to `localStorage('spendly-theme')`. Initialized on page load via IIFE `_initTheme()` before first render. 11 of 19 root CSS variables have dark overrides. Accent colors (`--primary`, `--success`, `--danger`, `--warning`, `--staged`) intentionally keep their light-mode values (readable on dark backgrounds). Approximately 15 hardcoded color values remain in minor elements (file chip states, run status badges, alert banners) — these have dark-specific overrides via `[data-theme="dark"] .class` rules. Remaining hardcoded inline styles in app.js (e.g., inline `style="color:#22c55e"` for status colors) are impractical to convert to CSS variables without major refactoring — a future sprint could address these via data attributes or class-based styling.
@@ -917,7 +930,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.24.1
+**Current Version:** v2.24.2
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -962,6 +975,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.23.2 | 2026-03-10 | Fix BUG-12: backup/restore now uses explicit column list for `transactions_norm` (26 columns) via `_TABLE_COLUMNS` dict instead of `SELECT *`; restore INSERT updated to include `category_override`; prevents silent data loss when migration columns are added |
 | v2.24.0 | 2026-03-10 | Category override + shared category picker + inline editing sprint; new `category_override` BOOLEAN column on `transactions_norm` (migration); `apply_category_rules()` skips override rows; shared `openCategoryPicker()` component replaces all previous category edit implementations; transaction row inline category edit with override badge ("edited" pill), click-to-reset, "Fix for All?" merchant prompt; Utilities Merchant List bulk select with Assign Category / Remove Category actions; Merchants tab "Show categorized merchants too" toggle with inline edit; `GET /merchant-categories` and `DELETE /merchant-categories/{merchant}` now used by frontend; 9 new tests (3 files); 294 total tests |
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
+| v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 
 ### Version Increment Rules
 

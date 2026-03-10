@@ -166,7 +166,7 @@ function _gsClickResult(el) {
   const type = el.dataset.type;
   const date = el.dataset.date;
   _closeGlobalSearch();
-  // Navigate to the correct tab
+  // Navigate to the correct tab — derived from per-result statement_type
   const page = type === 'credit_card' ? 'credit-cards' : 'bank-transactions';
   navigate(page);
   // Pre-filter to the transaction's date range and highlight it
@@ -5553,6 +5553,17 @@ function closeMonthlySummary() {
 let _drillCategory = '';
 let _drillDateFrom = '';
 let _drillDateTo = '';
+let _drillRows = [];
+
+/** Derive the correct transaction tab from statement_type data.
+ *  Tie defaults to credit_card. */
+function resolveTransactionTab(transactions) {
+  const cc = transactions.filter(t => t.statement_type === 'credit_card').length;
+  const bank = transactions.filter(t => t.statement_type === 'bank').length;
+  if (cc > 0 && bank === 0) return 'credit_card';
+  if (bank > 0 && cc === 0) return 'bank';
+  return cc >= bank ? 'credit_card' : 'bank';
+}
 
 async function openCategoryDrilldown(categoryParent, dateFrom, dateTo) {
   _drillCategory = categoryParent;
@@ -5587,6 +5598,7 @@ async function openCategoryDrilldown(categoryParent, dateFrom, dateTo) {
       `/transactions?category_parent=${encodeURIComponent(categoryParent)}&date_from=${dateFrom}&date_to=${dateTo}&limit=500&sort_by=amount&sort_dir=asc`
     );
     const rows = data.rows || [];
+    _drillRows = rows;
     if (!rows.length) {
       document.getElementById('cat-drill-body').innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">No transactions found.</div>';
       return;
@@ -5623,16 +5635,26 @@ function closeCategoryDrilldown() {
 }
 
 function categoryDrilldownViewAll() {
+  const tab = resolveTransactionTab(_drillRows);
+  const isMixed = _drillRows.some(r => r.statement_type === 'credit_card') &&
+                  _drillRows.some(r => r.statement_type === 'bank');
   closeCategoryDrilldown();
-  navigate('bank-transactions');
+  const page = tab === 'credit_card' ? 'credit-cards' : 'bank-transactions';
+  const prefix = tab === 'credit_card' ? 'cc' : 'bk';
+  navigate(page);
   setTimeout(() => {
-    const fromEl = document.getElementById('bk-date-from');
-    const toEl   = document.getElementById('bk-date-to');
+    const fromEl = document.getElementById(prefix + '-date-from');
+    const toEl   = document.getElementById(prefix + '-date-to');
     if (fromEl) fromEl.value = _drillDateFrom;
     if (toEl)   toEl.value   = _drillDateTo;
-    const catEl = document.getElementById('bk-category');
+    const catEl = document.getElementById(prefix + '-category');
     if (catEl) catEl.value = _drillCategory;
-    loadTxnTab('bank');
+    loadTxnTab(tab);
+    if (isMixed) {
+      const majorityCount = _drillRows.filter(r => r.statement_type === tab).length;
+      toast('Showing ' + majorityCount + ' of ' + _drillRows.length +
+        ' transactions — this category spans both credit card and bank. Switch tabs to see the rest.', 'info', 6000);
+    }
   }, 100);
 }
 
