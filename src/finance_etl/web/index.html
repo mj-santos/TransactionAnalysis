@@ -502,9 +502,18 @@
             <option value="">All Tags</option>
           </select>
         </div>
+        <span style="font-size:11px; color:var(--text-muted); margin-bottom:2px; align-self:center;">Show only:</span>
         <label class="toggle-row" style="margin-bottom:2px;">
           <input type="checkbox" id="cc-unreviewed-only" onchange="loadTxnTab('credit_card')" />
-          Unreviewed Only
+          Unreviewed
+        </label>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="cc-no-merchant" onchange="loadTxnTab('credit_card')" />
+          No Merchant
+        </label>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="cc-no-category" onchange="loadTxnTab('credit_card')" />
+          No Category
         </label>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('credit_card')">✕ Clear</button>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('credit_card')">↻ Refresh</button>
@@ -618,9 +627,18 @@
             <option value="">All Tags</option>
           </select>
         </div>
+        <span style="font-size:11px; color:var(--text-muted); margin-bottom:2px; align-self:center;">Show only:</span>
         <label class="toggle-row" style="margin-bottom:2px;">
           <input type="checkbox" id="bk-unreviewed-only" onchange="loadTxnTab('bank')" />
-          Unreviewed Only
+          Unreviewed
+        </label>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="bk-no-merchant" onchange="loadTxnTab('bank')" />
+          No Merchant
+        </label>
+        <label class="toggle-row" style="margin-bottom:2px;">
+          <input type="checkbox" id="bk-no-category" onchange="loadTxnTab('bank')" />
+          No Category
         </label>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('bank')">✕ Clear</button>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('bank')">↻ Refresh</button>
@@ -954,13 +972,13 @@
     </div>
 
     <!-- Restore preview modal (hidden by default) -->
-    <div id="restore-preview-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
-      <div style="background:var(--bg-card); border-radius:8px; padding:24px; max-width:500px; width:90%; max-height:80vh; overflow-y:auto;">
-        <div style="font-size:16px; font-weight:600; margin-bottom:12px;">Restore Preview</div>
-        <div id="restore-preview-body" style="font-size:13px; margin-bottom:16px;"></div>
-        <div style="display:flex; gap:10px; justify-content:flex-end;">
+    <div id="restore-preview-modal" class="restore-modal-backdrop" style="display:none;">
+      <div class="restore-modal-container">
+        <div style="font-size:18px; font-weight:700; margin-bottom:16px;">Restore Preview</div>
+        <div id="restore-preview-body" style="font-size:13px; margin-bottom:20px;"></div>
+        <div style="border-top:1px solid var(--border); padding-top:16px; display:flex; gap:10px; justify-content:flex-end;">
           <button class="btn btn-secondary btn-sm" onclick="cancelRestore()">Cancel</button>
-          <button class="btn btn-primary btn-sm" onclick="confirmRestore()" style="background:#e74c3c; border-color:#e74c3c;">Replace All Data</button>
+          <button class="btn btn-sm" onclick="confirmRestore()" style="background:var(--danger); color:#fff; border-color:var(--danger);">Replace All Data</button>
         </div>
       </div>
     </div>

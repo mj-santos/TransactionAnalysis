@@ -1449,6 +1449,7 @@ No cloud services, no external dependencies — all data stays on your machine.
     def _build_txn_where(
         type, date_from, date_to, account, category, merchant, source, subtype=None,
         unreviewed_only=False, tag=None, category_parent=None,
+        no_merchant=False, no_category=False,
     ) -> tuple[list, list]:
         """Build shared WHERE clause + params for /transactions and /transactions/totals."""
         where, params = [], []
@@ -1480,6 +1481,12 @@ No cloud services, no external dependencies — all data stays on your machine.
         # COALESCE handles pre-migration rows where unreviewed is NULL (treated as unreviewed)
         if unreviewed_only:
             where.append("COALESCE(unreviewed, TRUE) = TRUE")
+        # empty merchant filter
+        if no_merchant:
+            where.append("(merchant IS NULL OR merchant = '')")
+        # empty category filter
+        if no_category:
+            where.append("(category_normalized IS NULL OR category_normalized = '')")
         # tag filter: only transactions with a specific tag
         if tag:
             where.append(
@@ -1508,6 +1515,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         sort_by:   str           = Query("transaction_date", description="Column to sort by"),
         sort_dir:  str           = Query("desc",          description="'asc' or 'desc'"),
         unreviewed_only: bool    = Query(False,           description="Show only unreviewed transactions"),
+        no_merchant: bool        = Query(False,           description="Show only transactions with no merchant"),
+        no_category: bool        = Query(False,           description="Show only transactions with no category"),
         tag:       Optional[int] = Query(None,            description="Filter by tag ID"),
     ):
         """
@@ -1518,7 +1527,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Pass `source=<run_id>` to filter by a specific import; omit or pass `source=all`
         to show all rows for the given type.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, category_parent=category_parent)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, category_parent=category_parent, no_merchant=no_merchant, no_category=no_category)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         group_fields = [f.strip() for f in (group_by or "").split(",")
@@ -1690,6 +1699,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         subtype:   Optional[str] = Query(None, description="transaction_subtype filter: spending|payment|adjustment"),
         source:    Optional[str] = Query(None,  description="run_id to filter by import source; 'all' = no filter"),
         unreviewed_only: bool    = Query(False, description="Show only unreviewed transactions"),
+        no_merchant: bool        = Query(False, description="Show only transactions with no merchant"),
+        no_category: bool        = Query(False, description="Show only transactions with no category"),
         tag:       Optional[int] = Query(None,  description="Filter by tag ID"),
     ):
         """
@@ -1704,7 +1715,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
         source: specific run_id to scope to one import; omit or 'all' for all rows.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, no_merchant=no_merchant, no_category=no_category)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"
