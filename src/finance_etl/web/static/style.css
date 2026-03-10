@@ -1335,8 +1335,22 @@ tr.unreviewed-row {
   font-size: 13px;
   font-weight: 500;
 }
-.bulk-bar button { color: #fff; border-color: rgba(255,255,255,.3); }
+.bulk-bar .btn {
+  background: rgba(255,255,255,.15);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.4);
+}
+.bulk-bar .btn:hover { background: rgba(255,255,255,.25); }
 .bulk-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary); }
+tr.bulk-selected > td {
+  background: rgba(59, 130, 246, 0.06);
+}
+tr.bulk-selected > td:first-child {
+  border-left: 3px solid var(--primary);
+}
+[data-theme="dark"] tr.bulk-selected > td {
+  background: rgba(59, 130, 246, 0.12);
+}
 
 /* ── Inline Category Edit ──────────────────────────────────── */
 .inline-cat-input {

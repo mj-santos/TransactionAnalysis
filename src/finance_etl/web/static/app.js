@@ -6024,14 +6024,19 @@ function _focusSearchField() {
 
 const _bulkSelected = { credit_card: new Set(), bank: new Set() };
 
+function _updateRowHighlight(cb) {
+  const tr = cb.closest('tr');
+  if (!tr) return;
+  if (cb.checked) tr.classList.add('bulk-selected');
+  else tr.classList.remove('bulk-selected');
+}
+
 function bulkToggleRow(cb) {
   const fp = cb.dataset.fp;
   const type = _getActiveTxnType();
-  if (cb.checked) {
-    _bulkSelected[type].add(fp);
-  } else {
-    _bulkSelected[type].delete(fp);
-  }
+  if (cb.checked) _bulkSelected[type].add(fp);
+  else _bulkSelected[type].delete(fp);
+  _updateRowHighlight(cb);
   _updateBulkBar(type);
 }
 
@@ -6044,6 +6049,7 @@ function bulkToggleAll(type, checked) {
     const fp = cb.dataset.fp;
     if (checked) _bulkSelected[type].add(fp);
     else _bulkSelected[type].delete(fp);
+    _updateRowHighlight(cb);
   });
   _updateBulkBar(type);
 }
@@ -6055,13 +6061,20 @@ function _updateBulkBar(type) {
   const n = _bulkSelected[type].size;
   if (bar) bar.style.display = n > 0 ? '' : 'none';
   if (count) count.textContent = `${n} selected`;
+  // Hide merchant panel if no selection
+  if (n === 0) {
+    const mp = document.getElementById(`${p}-bulk-merchant-panel`);
+    if (mp) mp.style.display = 'none';
+  }
 }
 
 function bulkClearSelection(type) {
   _bulkSelected[type].clear();
   const p = type === 'credit_card' ? 'cc' : 'bk';
   const tbody = document.getElementById(`${p}-tbody`);
-  if (tbody) tbody.querySelectorAll('.bulk-check').forEach(cb => cb.checked = false);
+  if (tbody) {
+    tbody.querySelectorAll('.bulk-check').forEach(cb => { cb.checked = false; _updateRowHighlight(cb); });
+  }
   const thead = document.getElementById(`${p}-thead`);
   if (thead) { const cb = thead.querySelector('.bulk-check'); if (cb) cb.checked = false; }
   _updateBulkBar(type);
@@ -6090,13 +6103,29 @@ async function bulkMarkReviewed(type) {
 async function bulkAssignCategory(type) {
   const fps = Array.from(_bulkSelected[type]);
   if (!fps.length) return;
-  const cat = prompt('Enter category to assign:');
+  const cat = prompt('Enter category to assign to selected transactions:');
   if (!cat) return;
   try {
     for (const fp of fps) {
-      await api('POST', '/merchant-categories', { merchant: fp, category: cat });
+      await api('PATCH', `/transactions/${encodeURIComponent(fp)}`, { category_normalized: cat });
     }
     toast(`Category "${cat}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
+    bulkClearSelection(type);
+    loadTxnTab(type);
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+  }
+}
+
+async function bulkExclude(type) {
+  const fps = Array.from(_bulkSelected[type]);
+  if (!fps.length) return;
+  if (!confirm(`Exclude ${fps.length} transaction${fps.length !== 1 ? 's' : ''} from totals?`)) return;
+  try {
+    for (const fp of fps) {
+      await api('PATCH', `/transactions/${encodeURIComponent(fp)}`, { excluded: true });
+    }
+    toast(`${fps.length} transaction${fps.length !== 1 ? 's' : ''} excluded.`, 'success');
     bulkClearSelection(type);
     loadTxnTab(type);
   } catch (err) {
@@ -6107,7 +6136,6 @@ async function bulkAssignCategory(type) {
 async function bulkAssignTag(type) {
   const fps = Array.from(_bulkSelected[type]);
   if (!fps.length) return;
-  // Get available tags
   try {
     const data = await api('GET', '/tags');
     const tags = data.tags || [];
@@ -6118,9 +6146,84 @@ async function bulkAssignTag(type) {
     const tag = tags.find(t => t.name.toLowerCase() === tagName.toLowerCase());
     if (!tag) { toast(`Tag "${tagName}" not found.`, 'error'); return; }
     for (const fp of fps) {
-      await api('POST', '/transactions/tags', { fingerprint: fp, tag_id: tag.id });
+      await api('POST', '/transactions/tags', { fingerprint: fp, tag_ids: [tag.id] });
     }
     toast(`Tag "${tag.name}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
+    bulkClearSelection(type);
+    loadTxnTab(type);
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+  }
+}
+
+// ── Bulk Assign Merchant ──────────────────────────────────────
+
+let _merchantSearchTimer = null;
+
+function bulkAssignMerchant(type) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const panel = document.getElementById(`${p}-bulk-merchant-panel`);
+  const n = _bulkSelected[type].size;
+  if (!panel || !n) return;
+  panel.style.display = '';
+  document.getElementById(`${p}-bulk-merchant-n`).textContent = n;
+  document.getElementById(`${p}-bulk-merchant-input`).value = '';
+  document.getElementById(`${p}-bulk-merchant-dropdown`).style.display = 'none';
+  document.getElementById(`${p}-bulk-merchant-input`).focus();
+}
+
+function bulkAssignMerchantCancel(type) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const panel = document.getElementById(`${p}-bulk-merchant-panel`);
+  if (panel) panel.style.display = 'none';
+}
+
+function _debounceSearchMerchants(input, type) {
+  clearTimeout(_merchantSearchTimer);
+  _merchantSearchTimer = setTimeout(() => _searchMerchants(input, type), 300);
+}
+
+async function _searchMerchants(input, type) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const dd = document.getElementById(`${p}-bulk-merchant-dropdown`);
+  const q = input.value.trim();
+  if (!q || q.length < 1) { dd.style.display = 'none'; return; }
+  try {
+    const data = await api('GET', `/merchants/search?q=${encodeURIComponent(q)}&limit=10`);
+    const merchants = data.merchants || [];
+    if (!merchants.length) { dd.style.display = 'none'; return; }
+    dd.innerHTML = merchants.map(m =>
+      `<div style="padding:6px 10px; cursor:pointer; font-size:13px;" onmouseenter="this.style.background='var(--bg-alt)'" onmouseleave="this.style.background=''" onclick="_selectBulkMerchant('${p}', this.textContent)">${esc(m.merchant)} <span style="color:var(--text-muted); font-size:11px;">(${m.count})</span></div>`
+    ).join('');
+    dd.style.display = '';
+  } catch {
+    dd.style.display = 'none';
+  }
+}
+
+function _selectBulkMerchant(prefix, text) {
+  // Strip the count suffix
+  const merchant = text.replace(/\s*\(\d+\)\s*$/, '');
+  const input = document.getElementById(`${prefix}-bulk-merchant-input`);
+  if (input) input.value = merchant;
+  document.getElementById(`${prefix}-bulk-merchant-dropdown`).style.display = 'none';
+}
+
+async function bulkAssignMerchantConfirm(type) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const input = document.getElementById(`${p}-bulk-merchant-input`);
+  const merchant = input ? input.value.trim() : '';
+  if (!merchant) { toast('Enter a merchant name.', 'error'); return; }
+  const fps = Array.from(_bulkSelected[type]);
+  if (!fps.length) return;
+  try {
+    const data = await api('PATCH', '/transactions/bulk-assign-merchant', {
+      fingerprints: fps, merchant_normalized: merchant
+    });
+    let msg = `${data.updated} transaction${data.updated !== 1 ? 's' : ''} assigned to "${merchant}"`;
+    if (data.categorized > 0) msg += ` (${data.categorized} auto-categorized)`;
+    toast(msg, 'success');
+    bulkAssignMerchantCancel(type);
     bulkClearSelection(type);
     loadTxnTab(type);
   } catch (err) {

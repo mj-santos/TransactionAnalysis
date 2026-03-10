@@ -513,11 +513,27 @@
     </div>
     <!-- Bulk action bar (hidden by default) -->
     <div id="cc-bulk-bar" class="bulk-bar" style="display:none;">
-      <span id="cc-bulk-count">0 selected</span>
-      <button class="btn btn-secondary btn-sm" onclick="bulkMarkReviewed('credit_card')">Mark Reviewed</button>
-      <button class="btn btn-secondary btn-sm" onclick="bulkAssignCategory('credit_card')">Assign Category</button>
-      <button class="btn btn-secondary btn-sm" onclick="bulkAssignTag('credit_card')">Assign Tag</button>
-      <button class="btn btn-secondary btn-sm" onclick="bulkClearSelection('credit_card')" style="margin-left:auto;">Clear</button>
+      <span id="cc-bulk-count" style="font-weight:600;">0 selected</span>
+      <button class="btn btn-sm" onclick="bulkAssignCategory('credit_card')">Assign Category</button>
+      <button class="btn btn-sm" onclick="bulkMarkReviewed('credit_card')">Mark Reviewed</button>
+      <button class="btn btn-sm" onclick="bulkExclude('credit_card')">Exclude</button>
+      <button class="btn btn-sm" onclick="bulkAssignMerchant('credit_card')">Assign Merchant</button>
+      <button class="btn btn-sm" onclick="bulkAssignTag('credit_card')">Assign Tag</button>
+      <button class="btn btn-sm" onclick="bulkClearSelection('credit_card')" style="margin-left:auto;">Clear Selection &times;</button>
+    </div>
+    <!-- Bulk assign merchant inline panel -->
+    <div id="cc-bulk-merchant-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px;">
+      <div style="font-size:13px; margin-bottom:8px;">Assign merchant to <strong id="cc-bulk-merchant-n">0</strong> selected transactions</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div style="position:relative; flex:1;">
+          <input id="cc-bulk-merchant-input" type="text" placeholder="Search or type merchant name…" autocomplete="off"
+                 oninput="_debounceSearchMerchants(this, 'credit_card')"
+                 style="width:100%; padding:6px 10px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+          <div id="cc-bulk-merchant-dropdown" style="display:none; position:absolute; left:0; right:0; top:100%; margin-top:2px; background:var(--card-bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.1); z-index:50; max-height:200px; overflow-y:auto;"></div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="bulkAssignMerchantConfirm('credit_card')">Assign</button>
+        <button class="btn btn-secondary btn-sm" onclick="bulkAssignMerchantCancel('credit_card')">Cancel</button>
+      </div>
     </div>
     <!-- Transaction table -->
     <div class="card" style="padding:0; overflow:hidden;">
@@ -613,11 +629,27 @@
     </div>
     <!-- Bulk action bar (hidden by default) -->
     <div id="bk-bulk-bar" class="bulk-bar" style="display:none;">
-      <span id="bk-bulk-count">0 selected</span>
-      <button class="btn btn-secondary btn-sm" onclick="bulkMarkReviewed('bank')">Mark Reviewed</button>
-      <button class="btn btn-secondary btn-sm" onclick="bulkAssignCategory('bank')">Assign Category</button>
-      <button class="btn btn-secondary btn-sm" onclick="bulkAssignTag('bank')">Assign Tag</button>
-      <button class="btn btn-secondary btn-sm" onclick="bulkClearSelection('bank')" style="margin-left:auto;">Clear</button>
+      <span id="bk-bulk-count" style="font-weight:600;">0 selected</span>
+      <button class="btn btn-sm" onclick="bulkAssignCategory('bank')">Assign Category</button>
+      <button class="btn btn-sm" onclick="bulkMarkReviewed('bank')">Mark Reviewed</button>
+      <button class="btn btn-sm" onclick="bulkExclude('bank')">Exclude</button>
+      <button class="btn btn-sm" onclick="bulkAssignMerchant('bank')">Assign Merchant</button>
+      <button class="btn btn-sm" onclick="bulkAssignTag('bank')">Assign Tag</button>
+      <button class="btn btn-sm" onclick="bulkClearSelection('bank')" style="margin-left:auto;">Clear Selection &times;</button>
+    </div>
+    <!-- Bulk assign merchant inline panel -->
+    <div id="bk-bulk-merchant-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px;">
+      <div style="font-size:13px; margin-bottom:8px;">Assign merchant to <strong id="bk-bulk-merchant-n">0</strong> selected transactions</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div style="position:relative; flex:1;">
+          <input id="bk-bulk-merchant-input" type="text" placeholder="Search or type merchant name…" autocomplete="off"
+                 oninput="_debounceSearchMerchants(this, 'bank')"
+                 style="width:100%; padding:6px 10px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+          <div id="bk-bulk-merchant-dropdown" style="display:none; position:absolute; left:0; right:0; top:100%; margin-top:2px; background:var(--card-bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.1); z-index:50; max-height:200px; overflow-y:auto;"></div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="bulkAssignMerchantConfirm('bank')">Assign</button>
+        <button class="btn btn-secondary btn-sm" onclick="bulkAssignMerchantCancel('bank')">Cancel</button>
+      </div>
     </div>
     <!-- Transaction table -->
     <div class="card" style="padding:0; overflow:hidden;">

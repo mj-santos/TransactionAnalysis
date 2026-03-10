@@ -1809,6 +1809,80 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
         return {"updated": updated}
 
+    # ── Bulk assign merchant ────────────────────────────────────────────────
+    @app.patch(
+        "/transactions/bulk-assign-merchant",
+        tags=["transactions"],
+        summary="Assign a merchant to multiple transactions by fingerprint",
+    )
+    def bulk_assign_merchant(body: dict):
+        """
+        Update merchant_normalized on selected transactions.
+        If a merchant→category mapping exists, also update category columns.
+
+        Body: {"fingerprints": [...], "merchant_normalized": str}
+        Returns: {"updated": N, "categorized": N}
+        """
+        fingerprints = body.get("fingerprints", [])
+        merchant = body.get("merchant_normalized", "").strip()
+        if not fingerprints or not merchant:
+            raise HTTPException(status_code=400, detail="fingerprints and merchant_normalized required")
+        try:
+            conn = get_connection(db_path)
+            placeholders = ", ".join(["?"] * len(fingerprints))
+            conn.execute(
+                f"UPDATE transactions_norm SET merchant = ? "
+                f"WHERE transaction_fingerprint IN ({placeholders})",
+                [merchant] + fingerprints,
+            )
+            # Count how many actually existed
+            count_row = conn.execute(
+                f"SELECT COUNT(*) FROM transactions_norm "
+                f"WHERE transaction_fingerprint IN ({placeholders})",
+                fingerprints,
+            ).fetchone()
+            updated = int(count_row[0]) if count_row else 0
+            # Check if merchant has a category mapping
+            categorized = 0
+            cat_row = conn.execute(
+                "SELECT category FROM merchant_category_map WHERE merchant = ?",
+                [merchant],
+            ).fetchone()
+            if cat_row:
+                category = cat_row[0]
+                conn.execute(
+                    f"UPDATE transactions_norm SET category = ? "
+                    f"WHERE transaction_fingerprint IN ({placeholders})",
+                    [category] + fingerprints,
+                )
+                categorized = updated
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
+        return {"updated": updated, "categorized": categorized}
+
+    # ── Merchant search (type-ahead) ────────────────────────────────────────
+    @app.get("/merchants/search", tags=["merchant"],
+             summary="Search distinct merchants by name for type-ahead")
+    def search_merchants(
+        q: str = Query("", description="Search query (case-insensitive contains)"),
+        limit: int = Query(10, description="Max results"),
+    ):
+        """Return distinct merchant values ordered by transaction frequency."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT merchant, COUNT(*) as cnt "
+                "FROM transactions_norm "
+                "WHERE merchant IS NOT NULL AND LOWER(merchant) LIKE ? "
+                "GROUP BY merchant ORDER BY cnt DESC LIMIT ?",
+                [f"%{q.lower()}%", limit],
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"merchants": []}
+        return {"merchants": [{"merchant": r[0], "count": r[1]} for r in rows]}
+
     # ── PATCH a single transaction (notes, future fields) ──────────────────
     @app.patch(
         "/transactions/{fingerprint}",
@@ -1819,9 +1893,9 @@ No cloud services, no external dependencies — all data stays on your machine.
         """
         Update mutable fields on one transaction identified by its fingerprint.
 
-        Supported fields: notes (TEXT | null)
+        Supported fields: notes (TEXT | null), category_normalized (TEXT), excluded (BOOL)
         """
-        allowed = {"notes"}
+        allowed = {"notes", "category_normalized", "excluded"}
         updates = {k: v for k, v in body.items() if k in allowed}
         if not updates:
             raise HTTPException(status_code=400, detail=f"No valid fields. Allowed: {sorted(allowed)}")
