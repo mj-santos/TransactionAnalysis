@@ -198,9 +198,10 @@ TransactionAnalysis/
 - Top categories bar chart (horizontal, CSS-rendered)
 - Budget tracker with inline add/edit/delete form — `openBudgetForm()`, `saveBudget()`, `deleteBudget()`
 - Budget rebalance suggestions — `loadRebalanceSuggestions()`, `applyRebalance()`: analyses avg monthly spend vs budget, suggests adjustments for categories >=15% over/under, user selects and confirms before applying
+- **Savings Goals** widget: progress bars for each goal, inline create/edit/delete, manual progress updates (set or add mode), auto-calculated monthly savings needed to hit target by deadline, suggested monthly amount from avg net cash flow
 - Recent transactions table (last 10) with unreviewed dot indicators
 - Unreviewed count badge on sidebar Dashboard nav link
-- API: `GET /dashboard/summary?year=&month=`, `GET /budgets/rebalance`, `POST /budgets/rebalance/apply`
+- API: `GET /dashboard/summary?year=&month=`, `GET /budgets/rebalance`, `POST /budgets/rebalance/apply`, `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions`
 
 **Import (`#page-import`)**
 - Drag-and-drop CSV upload zone; multi-file supported
@@ -557,6 +558,21 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 
 ---
 
+### `savings_goals` — user savings targets with progress tracking
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-seq |
+| `name` | TEXT NOT NULL | Goal display name (e.g. "Emergency Fund") |
+| `target_amount` | DECIMAL(18,2) NOT NULL | Target savings amount |
+| `current_amount` | DECIMAL(18,2) DEFAULT 0 | Current amount saved (manual updates) |
+| `target_date` | TEXT | Optional ISO date deadline |
+| `linked_account` | TEXT | Optional account name for reference |
+| `created_at` | TEXT | ISO timestamp |
+| `updated_at` | TEXT | ISO timestamp |
+
+---
+
 ### `schema_version` — DuckDB schema version tracking
 
 | Column | Type | Notes |
@@ -725,7 +741,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.6.0
+**Current Version:** v2.7.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -743,6 +759,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.4.0 | 2026-03-10 | Sprint 3 — Cash Flow View: new page with income/spending/net KPIs, monthly bar chart, category breakdown, MoM delta, time filters, transfer toggle; new `GET /cashflow/summary` endpoint |
 | v2.5.0 | 2026-03-10 | Sprint 4 — Smart Budget Rebalancing: suggestion engine compares avg monthly actuals vs budgets, generates over/under suggestions with editable amounts, user-confirmed apply; new `GET /budgets/rebalance` and `POST /budgets/rebalance/apply` endpoints |
 | v2.6.0 | 2026-03-10 | Sprint 5 — Transaction Tagging: custom tags with name/color, many-to-many tag assignment per transaction, tag filtering in CC/Bank views, per-tag totals in Settings, tag popup UI, backup/restore support for tags; new `tags`, `transaction_tags` tables; new `GET/POST/PUT/DELETE /tags`, `POST/DELETE /transactions/tags`, `GET /transactions/{fp}/tags`, `GET /tags/totals` endpoints |
+| v2.7.0 | 2026-03-10 | Sprint 6 — Savings Goals Tracker: create goals with name/target/date/account, progress bar UI, manual progress updates (set or add), auto-calculated monthly savings needed, suggested monthly savings from avg net cash flow, dashboard widget with inline CRUD; new `savings_goals` table; new `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions` endpoints; backup/restore support |
 
 ### Version Increment Rules
 

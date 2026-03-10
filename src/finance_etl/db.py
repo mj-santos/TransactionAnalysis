@@ -272,6 +272,21 @@ CREATE TABLE IF NOT EXISTS transaction_tags (
   UNIQUE(transaction_fingerprint, tag_id)
 )
 """,
+
+    # ── Savings Goals ──────────────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_savings_goals_id",
+    """
+CREATE TABLE IF NOT EXISTS savings_goals (
+  id              BIGINT DEFAULT nextval('seq_savings_goals_id') PRIMARY KEY,
+  name            TEXT    NOT NULL,
+  target_amount   DECIMAL(18,2) NOT NULL,
+  current_amount  DECIMAL(18,2) NOT NULL DEFAULT 0,
+  target_date     TEXT,
+  linked_account  TEXT,
+  created_at      TEXT    NOT NULL,
+  updated_at      TEXT    NOT NULL
+)
+""",
 ]
 
 
