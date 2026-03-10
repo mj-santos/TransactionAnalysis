@@ -750,8 +750,9 @@ async function loadSettings() {
   } catch (err) {
     document.getElementById('settings-status').textContent = `Failed to load settings: ${err.message}`;
   }
-  // Load backup status in parallel (non-blocking)
+  // Load backup status and tags in parallel (non-blocking)
   loadBackupStatus();
+  loadTags();
 }
 
 async function saveSettings() {
@@ -1029,6 +1030,224 @@ async function loadBackupStatus() {
   } catch (err) {
     // Non-fatal — backup status is informational
   }
+}
+
+// ── Tag Management ────────────────────────────────────────────
+
+let _allTags = [];  // cached tag list [{id, name, color, ...}]
+let _editingTagId = null;
+
+async function loadTags() {
+  try {
+    const data = await api('GET', '/tags');
+    _allTags = data.tags || [];
+    _renderTagsList();
+    _populateTagDropdowns();
+    loadTagTotals();
+  } catch (err) {
+    console.error('Failed to load tags:', err.message);
+  }
+}
+
+function _renderTagsList() {
+  const el = document.getElementById('tags-list');
+  if (!el) return;
+  if (!_allTags.length) {
+    el.innerHTML = '<span class="text-muted" style="font-size:13px;">No tags created yet.</span>';
+    return;
+  }
+  el.innerHTML = _allTags.map(t => `
+    <span class="tag-badge" style="background:${esc(t.color)}20; color:${esc(t.color)}; border:1px solid ${esc(t.color)}60;">
+      <span class="tag-dot" style="background:${esc(t.color)};"></span>
+      ${esc(t.name)}
+      <button class="tag-edit-btn" onclick="_editTag(${t.id})" title="Edit">\u270E</button>
+      <button class="tag-del-btn" onclick="deleteTag(${t.id})" title="Delete">&times;</button>
+    </span>
+  `).join('');
+}
+
+function _populateTagDropdowns() {
+  ['cc-tag', 'bk-tag'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">All Tags</option>' +
+      _allTags.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+    sel.value = current;  // preserve selection
+  });
+}
+
+function openTagForm() {
+  _editingTagId = null;
+  document.getElementById('tf-name').value = '';
+  document.getElementById('tf-color').value = '#3b82f6';
+  document.getElementById('tag-form').style.display = 'block';
+  document.getElementById('tf-name').focus();
+}
+
+function _editTag(id) {
+  const tag = _allTags.find(t => t.id === id);
+  if (!tag) return;
+  _editingTagId = id;
+  document.getElementById('tf-name').value = tag.name;
+  document.getElementById('tf-color').value = tag.color;
+  document.getElementById('tag-form').style.display = 'block';
+  document.getElementById('tf-name').focus();
+}
+
+function closeTagForm() {
+  document.getElementById('tag-form').style.display = 'none';
+  _editingTagId = null;
+}
+
+async function saveTag() {
+  const name = document.getElementById('tf-name').value.trim();
+  const color = document.getElementById('tf-color').value;
+  if (!name) { toast('Tag name is required', 'error'); return; }
+  try {
+    if (_editingTagId) {
+      await api('PUT', `/tags/${_editingTagId}`, { name, color });
+      toast('Tag updated', 'success');
+    } else {
+      await api('POST', '/tags', { name, color });
+      toast('Tag created', 'success');
+    }
+    closeTagForm();
+    await loadTags();
+  } catch (err) {
+    toast('Failed to save tag: ' + err.message, 'error');
+  }
+}
+
+async function deleteTag(id) {
+  if (!confirm('Delete this tag? It will be removed from all transactions.')) return;
+  try {
+    await api('DELETE', `/tags/${id}`);
+    toast('Tag deleted', 'success');
+    await loadTags();
+  } catch (err) {
+    toast('Failed to delete tag: ' + err.message, 'error');
+  }
+}
+
+async function loadTagTotals() {
+  const panel = document.getElementById('tag-totals-panel');
+  const list = document.getElementById('tag-totals-list');
+  if (!panel || !list) return;
+  try {
+    const data = await api('GET', '/tags/totals');
+    const totals = data.totals || [];
+    if (!totals.length) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    list.innerHTML = totals.map(t => `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 8px; background:var(--bg-alt,#f8f9fa); border-radius:4px;">
+        <span>
+          <span class="tag-dot" style="background:${esc(t.color || '#3b82f6')};"></span>
+          ${esc(t.name)}
+          <span class="text-muted" style="font-size:11px;">(${t.transaction_count} txns)</span>
+        </span>
+        <span class="mono" style="font-size:13px;">${Number(t.total_amount || 0).toLocaleString('en-US', {style:'currency',currency:'USD'})}</span>
+      </div>
+    `).join('');
+  } catch (err) {
+    panel.style.display = 'none';
+  }
+}
+
+// ── Tag Popup (assign/remove tags on a transaction) ───────────
+
+let _tagPopupFp = null;
+
+function openTagPopup(fingerprint) {
+  _tagPopupFp = fingerprint;
+  // Remove any existing popup
+  const old = document.getElementById('tag-popup');
+  if (old) old.remove();
+
+  const popup = document.createElement('div');
+  popup.id = 'tag-popup';
+  popup.className = 'tag-popup-overlay';
+  popup.innerHTML = `
+    <div class="tag-popup-box">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <strong style="font-size:13px;">Assign Tags</strong>
+        <button onclick="closeTagPopup()" style="background:none; border:none; cursor:pointer; font-size:16px; color:var(--text-muted);">&times;</button>
+      </div>
+      <div id="tag-popup-list" style="display:flex; flex-direction:column; gap:4px; max-height:200px; overflow-y:auto;">
+        Loading...
+      </div>
+    </div>
+  `;
+  document.body.appendChild(popup);
+  popup.addEventListener('click', e => { if (e.target === popup) closeTagPopup(); });
+  _loadTagPopupState(fingerprint);
+}
+
+async function _loadTagPopupState(fingerprint) {
+  const list = document.getElementById('tag-popup-list');
+  if (!list) return;
+  try {
+    const data = await api('GET', `/transactions/${encodeURIComponent(fingerprint)}/tags`);
+    const assigned = new Set((data.tags || []).map(t => t.id));
+    if (!_allTags.length) {
+      list.innerHTML = '<span class="text-muted" style="font-size:12px;">No tags created. Go to Settings to add tags.</span>';
+      return;
+    }
+    list.innerHTML = _allTags.map(t => {
+      const checked = assigned.has(t.id) ? 'checked' : '';
+      return `<label style="display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:4px; cursor:pointer; font-size:13px;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
+        <input type="checkbox" ${checked} onchange="_toggleTag('${esc(fingerprint)}', ${t.id}, this.checked)" style="accent-color:${esc(t.color)};">
+        <span class="tag-dot" style="background:${esc(t.color)};"></span>
+        ${esc(t.name)}
+      </label>`;
+    }).join('');
+  } catch (err) {
+    list.innerHTML = '<span class="text-muted">Failed to load tags</span>';
+  }
+}
+
+async function _toggleTag(fingerprint, tagId, add) {
+  try {
+    if (add) {
+      await api('POST', '/transactions/tags', { transaction_fingerprint: fingerprint, tag_id: tagId });
+    } else {
+      await api('DELETE', `/transactions/tags?transaction_fingerprint=${encodeURIComponent(fingerprint)}&tag_id=${tagId}`);
+    }
+    _loadTagChips(fingerprint);
+  } catch (err) {
+    toast('Failed to update tag: ' + err.message, 'error');
+  }
+}
+
+function closeTagPopup() {
+  const el = document.getElementById('tag-popup');
+  if (el) el.remove();
+  _tagPopupFp = null;
+}
+
+// ── Tag Chips (inline per-row display) ────────────────────────
+
+async function _loadTagChips(fingerprint) {
+  const el = document.getElementById(`tags-${fingerprint}`);
+  if (!el) return;
+  try {
+    const data = await api('GET', `/transactions/${encodeURIComponent(fingerprint)}/tags`);
+    const tags = data.tags || [];
+    el.innerHTML = tags.map(t =>
+      `<span class="tag-chip" style="background:${esc(t.color)}20; color:${esc(t.color)}; border-color:${esc(t.color)}60;">${esc(t.name)}</span>`
+    ).join('');
+  } catch {
+    // non-critical
+  }
+}
+
+function _loadVisibleTagChips() {
+  document.querySelectorAll('.tag-chips').forEach(el => {
+    const id = el.id;  // "tags-<fingerprint>"
+    if (!id || !id.startsWith('tags-')) return;
+    const fp = id.substring(5);
+    if (fp) _loadTagChips(fp);
+  });
 }
 
 // ── Utilities ─────────────────────────────────────────────────
@@ -1903,6 +2122,7 @@ function _txnFilters(type) {
     subtype:         document.getElementById(`${p}-subtype`)?.value   || '',  // CC only
     group_by:        document.getElementById(`${p}-group-by`)?.value  || '',
     unreviewed_only: document.getElementById(`${p}-unreviewed-only`)?.checked || false,
+    tag:             document.getElementById(`${p}-tag`)?.value       || '',
   };
 }
 
@@ -1935,6 +2155,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.group_by)  qs.set('group_by',  f.group_by);
   if (f.source && f.source !== 'all') qs.set('source', f.source);
   if (f.unreviewed_only) qs.set('unreviewed_only', 'true');
+  if (f.tag)       qs.set('tag', f.tag);
 
   // Totals endpoint uses the same filter params (no pagination or sort)
   const tqs = new URLSearchParams({ type });
@@ -1946,6 +2167,7 @@ async function loadTxnTab(type, reset = true) {
   if (f.subtype)   tqs.set('subtype',   f.subtype);
   if (f.source && f.source !== 'all') tqs.set('source', f.source);
   if (f.unreviewed_only) tqs.set('unreviewed_only', 'true');
+  if (f.tag)       tqs.set('tag', f.tag);
 
   if (reset) {
     document.getElementById(`${p}-tbody`).innerHTML =
@@ -1955,6 +2177,8 @@ async function loadTxnTab(type, reset = true) {
     document.getElementById(`${p}-load-more`).style.display = 'none';
     // Populate source dropdown (table_controls.js) on every tab switch
     await _srcCtrl[type].load();
+    // Ensure tag filter dropdown is populated
+    _populateTagDropdowns();
   }
 
   try {
@@ -1973,6 +2197,8 @@ async function loadTxnTab(type, reset = true) {
     } else {
       _renderTxnBody(p, rows, cols, true);   // append rows for Load more
     }
+    // Load tag chips for visible transaction rows
+    _loadVisibleTagChips();
 
     // Pinned tfoot always reflects the full filtered set, not just the current page.
     // renderTxnTotals is defined in table_controls.js (shared utility).
@@ -2016,7 +2242,7 @@ function debounceTxn(type) {
 function clearTxnFilters(type) {
   const p = _pfx(type);
   _srcCtrl[type].reset();   // reset radio-dropdown to "All Imports"
-  ['date-from', 'date-to', 'account', 'category', 'merchant'].forEach(id => {
+  ['date-from', 'date-to', 'account', 'category', 'merchant', 'tag'].forEach(id => {
     const el = document.getElementById(`${p}-${id}`);
     if (el) el.value = '';
   });
@@ -2048,7 +2274,7 @@ function _renderTxnHeaders(p, cols, type) {
     const isSorted = c === st.sortBy;
     const arrow    = isSorted ? (st.sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
     return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}</th>`;
-  }).join('') + '<th class="text-center" style="min-width:90px;">Review</th>';
+  }).join('') + '<th class="text-center" style="min-width:100px;">Tags</th><th class="text-center" style="min-width:90px;">Review</th>';
 }
 
 /**
@@ -2099,6 +2325,13 @@ function _renderTxnBody(p, rows, cols, append) {
       const cls = NUMERIC_COLS.has(c) ? ' class="mono text-right"' : '';
       return `<td${cls}>${esc(val)}</td>`;
     }).join('');
+    // Tag cell
+    const tagCell = fp
+      ? `<td class="text-center" style="white-space:nowrap;">
+          <span id="tags-${esc(fp)}" class="tag-chips"></span>
+          <button class="btn btn-secondary btn-sm" style="padding:1px 6px; font-size:10px;" onclick="openTagPopup('${esc(fp)}')">+tag</button>
+        </td>`
+      : '<td></td>';
     // Review status cell: dot indicator + button
     const reviewCell = fp
       ? `<td class="text-center" style="white-space:nowrap;">${
@@ -2107,7 +2340,7 @@ function _renderTxnBody(p, rows, cols, append) {
             : '<span style="color:var(--success); font-size:11px;">&#10003;</span>'
         }</td>`
       : '<td></td>';
-    return `<tr${rowCls}>${cells}${reviewCell}</tr>`;
+    return `<tr${rowCls}>${cells}${tagCell}${reviewCell}</tr>`;
   }).join('');
 
   if (append) {
