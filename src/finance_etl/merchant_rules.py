@@ -171,11 +171,13 @@ def learn_category(conn, merchant: str, category: str) -> None:
     # If source='user', leave untouched
 
 
-def assign_category(conn, merchant: str, category: str) -> None:
+def assign_category(conn, merchant: str, category: str, parent: str | None = None,
+                    source: str = "user") -> None:
     """
-    Assign a category to a merchant as source='user' (highest authority).
+    Assign a category to a merchant in merchant_category_map.
 
-    Always overwrites regardless of existing source.
+    Does NOT touch transactions_norm directly — callers should trigger
+    re-normalization via renormalize_merchant() after this call.
     """
     now = datetime.now(timezone.utc).isoformat()
     existing = conn.execute(
@@ -184,21 +186,114 @@ def assign_category(conn, merchant: str, category: str) -> None:
     if existing is None:
         conn.execute(
             "INSERT INTO merchant_category_map (merchant, category, source, updated_at) "
-            "VALUES (?, ?, 'user', ?)",
-            [merchant, category, now],
+            "VALUES (?, ?, ?, ?)",
+            [merchant, category, source, now],
         )
     else:
         conn.execute(
-            "UPDATE merchant_category_map SET category = ?, source = 'user', updated_at = ? "
+            "UPDATE merchant_category_map SET category = ?, source = ?, updated_at = ? "
             "WHERE merchant = ?",
-            [category, now, merchant],
+            [category, source, now, merchant],
         )
 
-    # Backfill category onto historical transactions for this merchant
-    conn.execute(
-        "UPDATE transactions_norm SET category = ? WHERE merchant = ?",
-        [category, merchant],
-    )
+
+def renormalize_merchant(db_path_or_conn, merchant: str) -> int:
+    """
+    Re-normalize all transactions for a single merchant.
+
+    Applies merchant rules + category map to update merchant, category_normalized,
+    and category_parent on transactions_norm rows. Respects category_override=TRUE.
+
+    Returns number of transactions updated.
+    """
+    from finance_etl.db import get_connection as _get_conn
+
+    own_conn = False
+    if isinstance(db_path_or_conn, str):
+        conn = _get_conn(db_path_or_conn)
+        own_conn = True
+    else:
+        conn = db_path_or_conn
+
+    try:
+        cat_map = load_category_map(conn)
+        cat_entry = cat_map.get(merchant.lower())
+
+        # Determine category_normalized and category_parent from merchant_category_map
+        if cat_entry:
+            # cat_map returns the category string; look up parent from DB
+            row = conn.execute(
+                "SELECT category, source FROM merchant_category_map WHERE LOWER(merchant) = LOWER(?)",
+                [merchant],
+            ).fetchone()
+            if row:
+                cat_normalized = row[0]
+                # Look up parent from category_rules or built-in map
+                parent_row = conn.execute(
+                    "SELECT parent FROM category_rules WHERE category = ? LIMIT 1",
+                    [cat_normalized],
+                ).fetchone()
+                if parent_row:
+                    cat_parent = parent_row[0]
+                else:
+                    from finance_etl.category_rules import BUILT_IN_CATEGORY_MAP
+                    cat_parent = None
+                    for raw, (norm, par) in BUILT_IN_CATEGORY_MAP.items():
+                        if norm == cat_normalized:
+                            cat_parent = par
+                            break
+                    if cat_parent is None:
+                        # Try merchant_category_map for parent stored alongside
+                        cat_parent = "Other"
+            else:
+                cat_normalized = cat_entry
+                cat_parent = "Other"
+        else:
+            cat_normalized = None
+            cat_parent = None
+
+        # Update non-overridden transactions for this merchant
+        if cat_normalized is not None:
+            conn.execute(
+                "UPDATE transactions_norm "
+                "SET category_normalized = ?, category_parent = ? "
+                "WHERE merchant = ? "
+                "AND COALESCE(category_override, FALSE) = FALSE",
+                [cat_normalized, cat_parent, merchant],
+            )
+        else:
+            # Category removed — let category rules engine re-assign
+            # For now, set to NULL so next full normalization picks them up
+            from finance_etl.category_rules import (
+                load_category_rules,
+                load_grouped_category_rules,
+                normalize_category,
+            )
+            user_rules = load_category_rules(conn)
+            grouped_rules = load_grouped_category_rules(conn)
+            rows = conn.execute(
+                "SELECT transaction_fingerprint, category FROM transactions_norm "
+                "WHERE merchant = ? AND COALESCE(category_override, FALSE) = FALSE",
+                [merchant],
+            ).fetchall()
+            for fp, raw_cat in rows:
+                cat_n, cat_p = normalize_category(raw_cat, user_rules, grouped_rules)
+                conn.execute(
+                    "UPDATE transactions_norm "
+                    "SET category_normalized = ?, category_parent = ? "
+                    "WHERE transaction_fingerprint = ?",
+                    [cat_n, cat_p, fp],
+                )
+
+        updated = conn.execute(
+            "SELECT COUNT(*) FROM transactions_norm "
+            "WHERE merchant = ? AND COALESCE(category_override, FALSE) = FALSE",
+            [merchant],
+        ).fetchone()[0]
+        return updated
+    finally:
+        if own_conn:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
