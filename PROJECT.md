@@ -118,6 +118,7 @@ TransactionAnalysis/
 │   ├── normalize.py            ← Stage 5: normalize staged rows (amounts, dates, CC subtype)
 │   ├── parquet.py              ← Stage 8: export transactions_norm → partitioned Parquet
 │   ├── pipeline.py             ← Orchestrator: run_with_options(), commit_run(), RunResult
+│   ├── recurring.py            ← Recurring transaction detection engine + monthly cost calculation
 │   ├── profile.py              ← Stage 2: detect encoding, delimiter, headers; write profile JSON
 │   ├── validate.py             ← Stage 6: validate normalized rows; flag errors/warnings
 │   ├── wizard_mapping.py       ← Wizard business logic: header inference, profile merge, YAML save
@@ -166,6 +167,7 @@ TransactionAnalysis/
     ├── test_models.py
     ├── test_money.py
     ├── test_backup_restore.py  ← v2 backup migration, roundtrip, rotation tests
+    ├── test_recurring.py       ← recurring detection engine tests (22 tests)
     ├── test_pipeline_api.py
     └── test_wizard_mapping.py
 ```
@@ -192,6 +194,7 @@ TransactionAnalysis/
 | 📊 Reports | `#page-reports` | `loadReports()` | ✅ Working |
 | 🏪 Merchants | `#page-merchant-rules` | `loadMerchantRules()`, `loadUncategorized()` | ✅ Working |
 | 🏷️ Categories | `#page-category-rules` | `loadCategoryRules()` | ✅ Working |
+| 🔄 Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ Working |
 | ⚙️ Settings | `#page-settings` | `loadSettings()` | ✅ Working |
 
 ### Feature Details
@@ -278,6 +281,20 @@ TransactionAnalysis/
   - Inline editor form with parent group dropdown (fixed list of 12 parents)
 - Apply Normalization button: `startCategoryNormalize()` → `POST /category-rules/apply` (background job, polled)
 - API: Full CRUD on `/category-rules`, `/category-rules/apply`, `/category-rules/suggestions`, `/merchant-categories/suggestions`
+
+**Recurring Transactions (`#page-recurring-transactions`)**
+- Auto-detection engine: groups by normalized merchant, analyses interval regularity + amount consistency
+- Confidence threshold: patterns flagged only with 3+ occurrences, <35% interval CV, <30% amount CV
+- Frequency classification: weekly, biweekly, monthly, quarterly, annual, irregular
+- Monthly Recurring Cost KPI card — total estimated monthly cost across all detected recurring charges
+- Recurring charges table: merchant, amount, frequency badge, last charged, next estimated date, hit count
+- Auto/manual badge per row distinguishing auto-detected vs user-overridden entries
+- Unmark button per row to exclude a merchant from the recurring list
+- Manual mark form: text input + button to force-mark any merchant as recurring
+- User overrides stored in `recurring_overrides` DB table; take precedence over auto-detection
+- Included in v2 backup/restore system
+- Detection engine: `src/finance_etl/recurring.py`
+- API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`
 
 **Settings (`#page-settings`)**
 - Verbose API error messages toggle
@@ -486,6 +503,20 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 
 ---
 
+### `recurring_overrides` — user manual recurring mark/unmark
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-seq |
+| `merchant_key` | TEXT NOT NULL UNIQUE | Normalized merchant name (matches `transactions_norm.merchant`) |
+| `is_recurring` | BOOLEAN NOT NULL | `TRUE` = force-mark, `FALSE` = force-unmark |
+| `created_at` | TEXT | ISO timestamp |
+| `updated_at` | TEXT | ISO timestamp |
+
+User overrides take precedence over auto-detection. Setting `is_recurring = FALSE` hides an auto-detected pattern; setting `TRUE` adds a merchant even if it doesn't meet the auto-detection threshold.
+
+---
+
 ### `schema_version` — DuckDB schema version tracking
 
 | Column | Type | Notes |
@@ -576,7 +607,7 @@ Single-row table seeded with `1` on first migration run. Used by the backup syst
 
 ### Architectural Decisions
 
-- **Single HTML file for the entire UI**: No build step, no framework, no module bundler. All 9 pages are `<section class="page">` elements toggled with CSS `.active`. This was chosen for simplicity and portability (the file is served directly by FastAPI).
+- **Single HTML file for the entire UI**: No build step, no framework, no module bundler. All 10 pages are `<section class="page">` elements toggled with CSS `.active`. This was chosen for simplicity and portability (the file is served directly by FastAPI).
 - **DuckDB over SQLite**: DuckDB handles OLAP queries (GROUP BY, date_trunc, window functions) natively, which SQLite cannot do without extensions. It also supports Parquet read/write natively.
 - **Preview-then-commit workflow**: Every import run goes through a `staged` state where the user reviews rows before they hit the ledger. This prevents bad data from being permanently loaded. The "Commit" step is a separate API call.
 - **Deterministic fingerprinting**: Each transaction row gets a `transaction_fingerprint` built from hash(date + description + amount + account). This is the dedup key — re-importing the same CSV is safe.
@@ -677,7 +708,10 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `POST` | `/budgets` | budgets | Create or update a budget goal |
 | `DELETE` | `/budgets/{id}` | budgets | Delete a budget goal |
 | `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions |
-| `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 8 tables + wizard profiles) |
+| `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total |
+| `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) |
+| `DELETE` | `/recurring/override/{merchant}` | recurring | Remove a recurring override (revert to auto-detection) |
+| `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 9 tables + wizard profiles) |
 | `POST` | `/backup/restore` | backup | Restore from v1 or v2 JSON backup (auto-migrates, auto-snapshots) |
 | `GET` | `/backup/status` | backup | Backup system status: last export, auto-backups list, table counts |
 | `GET` | `/` | ui | Serve web UI (index.html) |

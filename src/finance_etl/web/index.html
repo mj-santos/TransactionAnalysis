@@ -40,6 +40,9 @@
     <a href="#" data-page="category-rules">
       <span class="icon">🏷️</span> Categories
     </a>
+    <a href="#" data-page="recurring-transactions">
+      <span class="icon">🔄</span> Recurring
+    </a>
     <a href="#" data-page="settings">
       <span class="icon">⚙️</span> Settings
     </a>
@@ -899,6 +902,45 @@
         <span id="cat-norm-status" style="font-size:12px; color:var(--text-muted);"></span>
       </div>
     </div>
+  </section>
+
+  <!-- ─── RECURRING TRANSACTIONS PAGE ─── -->
+  <section id="page-recurring-transactions" class="page">
+
+    <!-- Monthly total KPI -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:14px; margin-bottom:20px;">
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Monthly Recurring Cost</div>
+        <div id="recurring-monthly-total" style="font-size:28px; font-weight:700; margin-top:4px; color:var(--danger);">—</div>
+        <div id="recurring-count-label" style="font-size:12px; color:var(--text-muted); margin-top:4px;"></div>
+      </div>
+    </div>
+
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" onclick="loadRecurringTransactions()">↻ Refresh</button>
+      <span id="recurring-status" style="font-size:12px; color:var(--text-muted);"></span>
+    </div>
+
+    <!-- Recurring list -->
+    <div class="card">
+      <div class="card-title">Detected Recurring Charges</div>
+      <div id="recurring-list" style="font-size:13px;">
+        <p style="color:var(--text-muted);">Loading…</p>
+      </div>
+    </div>
+
+    <!-- Manual add -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-title">Mark Merchant as Recurring</div>
+      <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+        If a subscription wasn't auto-detected, you can manually mark any merchant as recurring.
+      </p>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input type="text" id="recurring-manual-merchant" placeholder="Merchant name" style="font-size:13px; padding:6px 10px; border:1px solid var(--border); border-radius:4px; width:240px;" />
+        <button class="btn btn-primary btn-sm" onclick="manualMarkRecurring()">Mark as Recurring</button>
+      </div>
+    </div>
+
   </section>
 
 </div><!-- .content -->

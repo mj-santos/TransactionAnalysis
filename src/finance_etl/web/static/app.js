@@ -48,6 +48,7 @@ function navigate(page) {
     reports:            'Analytics Reports',
     'merchant-rules':   'Merchant Rules & Categories',
     'category-rules':   'Category Rules',
+    'recurring-transactions': 'Recurring Transactions',
     settings:           'Settings & Logs',
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
@@ -59,6 +60,7 @@ function navigate(page) {
   if (page === 'bank-transactions')  loadTxnTab('bank');
   if (page === 'merchant-rules')     { loadMerchantRules(); loadUncategorized(); _clearSuggestions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
+  if (page === 'recurring-transactions') { loadRecurringTransactions(); }
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -790,6 +792,97 @@ async function maybeShowLogsOnError() {
   navigate('settings');
   document.getElementById('logs-panel').style.display = 'block';
   await refreshLogs();
+}
+
+// ── Recurring Transactions ─────────────────────────────────────
+
+async function loadRecurringTransactions() {
+  const statusEl = document.getElementById('recurring-status');
+  const listEl = document.getElementById('recurring-list');
+  const totalEl = document.getElementById('recurring-monthly-total');
+  const countEl = document.getElementById('recurring-count-label');
+
+  if (statusEl) statusEl.textContent = 'Analyzing…';
+  try {
+    const data = await api('GET', '/recurring');
+    if (statusEl) statusEl.textContent = '';
+
+    // KPI
+    totalEl.textContent = '$' + Number(data.monthly_total).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    countEl.textContent = `${data.count} recurring charge${data.count !== 1 ? 's' : ''} detected`;
+
+    if (!data.patterns || data.patterns.length === 0) {
+      listEl.innerHTML = '<p style="color:var(--text-muted);">No recurring transactions detected. Import more data or manually mark merchants below.</p>';
+      return;
+    }
+
+    _renderRecurringList(data.patterns, listEl);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Error: ${err.message}`;
+    listEl.innerHTML = `<p style="color:var(--danger);">Failed to load: ${esc(err.message)}</p>`;
+  }
+}
+
+function _renderRecurringList(patterns, container) {
+  const freqColors = {
+    weekly: '#3b82f6', biweekly: '#6366f1', monthly: '#8b5cf6',
+    quarterly: '#f59e0b', annual: '#22c55e', irregular: '#94a3b8',
+  };
+
+  let html = '<table style="width:100%; border-collapse:collapse;">';
+  html += `<thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
+    <th style="padding:8px 10px;">Merchant</th>
+    <th style="padding:8px 10px;">Amount</th>
+    <th style="padding:8px 10px;">Frequency</th>
+    <th style="padding:8px 10px;">Last Charged</th>
+    <th style="padding:8px 10px;">Next Estimated</th>
+    <th style="padding:8px 10px;">Hits</th>
+    <th style="padding:8px 10px;"></th>
+  </tr></thead><tbody>`;
+
+  for (const p of patterns) {
+    const color = freqColors[p.frequency] || '#94a3b8';
+    const badge = p.is_auto
+      ? '<span style="font-size:10px; background:#e2e8f0; color:#64748b; padding:1px 6px; border-radius:3px; margin-left:6px;">auto</span>'
+      : '<span style="font-size:10px; background:#dbeafe; color:#3b82f6; padding:1px 6px; border-radius:3px; margin-left:6px;">manual</span>';
+
+    html += `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}${badge}</td>
+      <td style="padding:8px 10px; font-weight:600;">$${Number(p.median_amount).toFixed(2)}</td>
+      <td style="padding:8px 10px;">
+        <span style="background:${color}; color:#fff; font-size:11px; padding:2px 8px; border-radius:4px;">${esc(p.frequency)}</span>
+      </td>
+      <td style="padding:8px 10px;">${esc(p.last_date)}</td>
+      <td style="padding:8px 10px;">${p.next_estimated ? esc(p.next_estimated) : '—'}</td>
+      <td style="padding:8px 10px; text-align:center;">${p.occurrences}</td>
+      <td style="padding:8px 10px;">
+        <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 8px;"
+          onclick="toggleRecurring('${esc(p.merchant)}', false)">Unmark</button>
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+/** Mark a merchant as recurring (or not) via the override API. */
+async function toggleRecurring(merchant, isRecurring) {
+  try {
+    await api('POST', '/recurring/override', { merchant, is_recurring: isRecurring });
+    toast(isRecurring ? `Marked "${merchant}" as recurring` : `Unmarked "${merchant}"`, 'success', 2500);
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Override failed: ${err.message}`, 'error');
+  }
+}
+
+/** Manual add from the input field at the bottom of the page. */
+async function manualMarkRecurring() {
+  const input = document.getElementById('recurring-manual-merchant');
+  const merchant = (input.value || '').trim();
+  if (!merchant) { toast('Enter a merchant name', 'error', 2000); return; }
+  await toggleRecurring(merchant, true);
+  input.value = '';
 }
 
 // ── Backup & Restore (v2) ─────────────────────────────────────

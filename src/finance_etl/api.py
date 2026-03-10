@@ -2535,6 +2535,98 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
+    # Recurring Transactions
+    # -----------------------------------------------------------------------
+
+    @app.get("/recurring", tags=["recurring"],
+             summary="Detect recurring transactions")
+    def get_recurring():
+        """
+        Analyse transaction history and return detected recurring charges.
+        User overrides (mark/unmark) are merged into the results.
+        Returns the pattern list and an estimated monthly total.
+        """
+        from finance_etl.recurring import detect_recurring, compute_monthly_recurring_total
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path, read_only=True)
+            patterns = detect_recurring(conn)
+            monthly_total = compute_monthly_recurring_total(patterns)
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Recurring detection failed: {exc}") from exc
+
+        return {
+            "patterns": patterns,
+            "monthly_total": monthly_total,
+            "count": len(patterns),
+        }
+
+    @app.post("/recurring/override", tags=["recurring"],
+              summary="Mark or unmark a merchant as recurring")
+    def set_recurring_override(body: dict):
+        """
+        Set a manual override for a merchant's recurring status.
+
+        Body: ``{"merchant": "Netflix", "is_recurring": true}``
+
+        Setting ``is_recurring: true`` forces the merchant into the recurring
+        list even if auto-detection didn't flag it.  Setting ``false`` removes
+        it from the list even if auto-detected.
+        """
+        import datetime as _dt
+        from finance_etl.db import get_connection as _gc
+
+        merchant = body.get("merchant", "").strip()
+        is_recurring = body.get("is_recurring")
+        if not merchant or is_recurring is None:
+            raise HTTPException(status_code=400,
+                                detail="merchant and is_recurring are required.")
+
+        now = _dt.datetime.utcnow().isoformat()
+        try:
+            conn = _gc(db_path)
+            # Upsert: DuckDB doesn't support ON CONFLICT on all versions,
+            # so delete-then-insert pattern is safest.
+            conn.execute(
+                "DELETE FROM recurring_overrides WHERE merchant_key = ?",
+                [merchant],
+            )
+            conn.execute(
+                """INSERT INTO recurring_overrides
+                   (merchant_key, is_recurring, created_at, updated_at)
+                   VALUES (?, ?, ?, ?)""",
+                [merchant, bool(is_recurring), now, now],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Override failed: {exc}") from exc
+
+        return {"status": "ok", "merchant": merchant, "is_recurring": is_recurring}
+
+    @app.delete("/recurring/override/{merchant}", tags=["recurring"],
+                summary="Remove a recurring override")
+    def delete_recurring_override(merchant: str):
+        """Remove a user override, reverting to auto-detection for this merchant."""
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path)
+            conn.execute(
+                "DELETE FROM recurring_overrides WHERE merchant_key = ?",
+                [merchant],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Delete override failed: {exc}") from exc
+
+        return {"status": "ok", "merchant": merchant}
+
+    # -----------------------------------------------------------------------
     # Backup & Restore  (v2 — comprehensive full-state backup)
     # -----------------------------------------------------------------------
 
@@ -2545,6 +2637,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         "merchant_category_map",
         "category_rules",
         "budget_goals",
+        "recurring_overrides",
         "normalization_jobs",
         "transactions_stage",
         "transactions_norm",
@@ -2754,7 +2847,18 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("created_at", now), r.get("updated_at", now)],
                 )
 
-            # 6. normalization_jobs
+            # 6. recurring_overrides
+            conn.execute("DELETE FROM recurring_overrides")
+            for r in data.get("recurring_overrides", []):
+                conn.execute(
+                    """INSERT INTO recurring_overrides
+                       (merchant_key, is_recurring, created_at, updated_at)
+                       VALUES (?,?,?,?)""",
+                    [r["merchant_key"], r.get("is_recurring", True),
+                     r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # 7. normalization_jobs
             conn.execute("DELETE FROM normalization_jobs")
             for r in data.get("normalization_jobs", []):
                 conn.execute(
@@ -2768,7 +2872,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("created_at", now)],
                 )
 
-            # 7. transactions_stage
+            # 8. transactions_stage
             conn.execute("DELETE FROM transactions_stage")
             for r in data.get("transactions_stage", []):
                 conn.execute(
@@ -2790,7 +2894,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("amount_credit_raw")],
                 )
 
-            # 8. transactions_norm — full replace (not upsert) for v2
+            # 9. transactions_norm — full replace (not upsert) for v2
             conn.execute("DELETE FROM transactions_norm")
             tx_count = 0
             for r in data.get("transactions_norm", []):
@@ -2847,6 +2951,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             ),
             "category_rules_restored": len(data.get("category_rules", [])),
             "budget_goals_restored": len(data.get("budget_goals", [])),
+            "recurring_overrides_restored": len(data.get("recurring_overrides", [])),
             "normalization_jobs_restored": len(data.get("normalization_jobs", [])),
             "transactions_stage_restored": len(data.get("transactions_stage", [])),
             "transactions_norm_restored": tx_count,

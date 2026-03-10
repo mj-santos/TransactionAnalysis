@@ -237,6 +237,20 @@ CREATE TABLE IF NOT EXISTS budget_goals (
     "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
     # Seed with version 1 if table is empty (first migration)
     "INSERT INTO schema_version SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version)",
+
+    # ── Recurring transaction overrides ──────────────────────────────────
+    # Stores user manual overrides (mark/unmark) for recurring detection.
+    # merchant_key is the normalized merchant name used as the grouping key.
+    "CREATE SEQUENCE IF NOT EXISTS seq_recurring_overrides_id",
+    """
+CREATE TABLE IF NOT EXISTS recurring_overrides (
+  id           BIGINT DEFAULT nextval('seq_recurring_overrides_id') PRIMARY KEY,
+  merchant_key TEXT   NOT NULL UNIQUE,
+  is_recurring BOOLEAN NOT NULL,
+  created_at   TEXT   NOT NULL,
+  updated_at   TEXT   NOT NULL
+)
+""",
 ]
 
 
