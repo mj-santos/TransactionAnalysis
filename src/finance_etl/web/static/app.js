@@ -3132,33 +3132,82 @@ function _rulePatternSummary(r) {
   return `<span class="mono">${esc(r.pattern)}</span>`;
 }
 
+let _allMerchantRules = []; // cached for search filtering
+
 async function loadMerchantRules() {
   const tbody = document.getElementById('merchant-rules-tbody');
   if (!tbody) return;
   tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px">Loading…</td></tr>';
   try {
     const data = await api('GET', '/merchant-rules');
-    if (!data.rules.length) {
+    _allMerchantRules = data.rules || [];
+    if (!_allMerchantRules.length) {
       tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px">No rules yet. Click "+ Add Rule" to create one.</td></tr>';
       _updateBadge('merchant-rules-count', 0);
+      _updateMerchantRuleSearchCount();
       return;
     }
-    _updateBadge('merchant-rules-count', data.rules.length);
-    tbody.innerHTML = data.rules.map(r => `<tr>
-      <td class="text-right">${esc(String(r.priority))}</td>
-      <td><span class="badge badge-running" style="font-size:11px;">${esc(r.match_type)}</span></td>
-      <td style="font-size:12px;">${_rulePatternSummary(r)}</td>
-      <td>${esc(r.merchant)}</td>
-      <td>
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-secondary btn-sm" onclick="openRuleForm(${r.id})">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteRule(${r.id})">Delete</button>
-        </div>
-      </td>
-    </tr>`).join('');
+    _updateBadge('merchant-rules-count', _allMerchantRules.length);
+    _renderMerchantRuleRows(_allMerchantRules);
+    _updateMerchantRuleSearchCount();
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
   }
+}
+
+function _renderMerchantRuleRows(rules) {
+  const tbody = document.getElementById('merchant-rules-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rules.map(r => `<tr>
+    <td class="text-right">${esc(String(r.priority))}</td>
+    <td><span class="badge badge-running" style="font-size:11px;">${esc(r.match_type)}</span></td>
+    <td style="font-size:12px;">${_rulePatternSummary(r)}</td>
+    <td>${esc(r.merchant)}</td>
+    <td>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="openRuleForm(${r.id})">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteRule(${r.id})">Delete</button>
+      </div>
+    </td>
+  </tr>`).join('');
+}
+
+function filterMerchantRules() {
+  const input = document.getElementById('merchant-rules-search');
+  const clearBtn = document.getElementById('merchant-rules-search-clear');
+  const query = (input?.value || '').toLowerCase();
+  clearBtn.style.display = query ? '' : 'none';
+  if (!query) {
+    _renderMerchantRuleRows(_allMerchantRules);
+    _updateMerchantRuleSearchCount();
+    return;
+  }
+  const filtered = _allMerchantRules.filter(r => {
+    const pattern = (r.pattern || '').toLowerCase();
+    const merchant = (r.merchant || '').toLowerCase();
+    const matchType = (r.match_type || '').toLowerCase();
+    // Also search inside grouped conditions
+    let condText = '';
+    if (r.conditions && r.conditions.groups) {
+      condText = r.conditions.groups.flatMap(g => (g.conditions || []).map(c => c.pattern || '')).join(' ').toLowerCase();
+    }
+    return pattern.includes(query) || merchant.includes(query) || matchType.includes(query) || condText.includes(query);
+  });
+  if (filtered.length) {
+    _renderMerchantRuleRows(filtered);
+  } else {
+    document.getElementById('merchant-rules-tbody').innerHTML =
+      `<tr><td colspan="5" class="text-center text-muted" style="padding:24px">No rules match '${esc(query)}'</td></tr>`;
+  }
+  _updateMerchantRuleSearchCount(filtered.length);
+}
+
+function _updateMerchantRuleSearchCount(shown) {
+  const el = document.getElementById('merchant-rules-search-count');
+  if (!el) return;
+  const query = (document.getElementById('merchant-rules-search')?.value || '').trim();
+  if (!query || !_allMerchantRules.length) { el.textContent = ''; return; }
+  el.textContent = `${shown ?? _allMerchantRules.length} of ${_allMerchantRules.length} rules`;
 }
 
 function openRuleForm(ruleId) {
@@ -4414,6 +4463,170 @@ async function applyRebalance() {
 
 let _editingCatRuleId = null;
 let _catSuggestionsData = [];
+let _allCatRules = []; // cached for search filtering
+
+// ── Category Rule condition builder helpers ───────────────────
+
+function _makeCatConditionRow(pattern, matchType, negate) {
+  const row = document.createElement('div');
+  row.className = 'crf-condition-row';
+  row.style.cssText = 'display:flex; align-items:center; gap:8px; background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:6px 10px;';
+  const sel = document.createElement('select');
+  sel.className = 'crf-cond-type';
+  sel.style.cssText = 'width:auto; flex-shrink:0; padding:4px 6px; border-radius:5px; border:1px solid var(--border); font-size:12px;';
+  ['exact', 'contains', 'starts_with'].forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t; opt.textContent = t; opt.selected = (t === matchType);
+    sel.appendChild(opt);
+  });
+  const inp = document.createElement('input');
+  inp.type = 'text'; inp.className = 'crf-cond-pattern';
+  inp.placeholder = 'e.g. Restaurant-Restaurant';
+  inp.value = pattern || '';
+  inp.style.cssText = 'flex:1; min-width:80px; width:auto; padding:4px 8px; border-radius:5px; border:1px solid var(--border); font-size:12px; font-family:monospace; background:var(--card-bg,#fff); color:var(--text,#222);';
+  const label = document.createElement('label');
+  label.style.cssText = 'display:flex; align-items:center; gap:4px; font-size:12px; white-space:nowrap; cursor:pointer; flex-shrink:0;';
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.className = 'crf-cond-negate'; cb.checked = !!negate; cb.style.cursor = 'pointer';
+  label.appendChild(cb); label.appendChild(document.createTextNode(' NOT'));
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'btn btn-secondary btn-sm crf-cond-remove';
+  btn.textContent = '\u2715'; btn.title = 'Remove condition';
+  btn.style.cssText = 'font-size:12px; padding:2px 8px; flex-shrink:0;';
+  btn.addEventListener('click', function() { _removeCatConditionRow(this); });
+  row.appendChild(sel); row.appendChild(inp); row.appendChild(label); row.appendChild(btn);
+  return row;
+}
+
+function _addCatConditionToGroup(groupBlock) {
+  const container = groupBlock.querySelector('.crf-group-conditions');
+  if (!container) return;
+  container.appendChild(_makeCatConditionRow('', 'exact', false));
+  _updateCatGroupUI();
+}
+
+function _removeCatConditionRow(btn) {
+  const groupBlock = btn.closest('.crf-group-block');
+  const rows = groupBlock.querySelectorAll('.crf-condition-row');
+  if (rows.length <= 1) return;
+  btn.closest('.crf-condition-row').remove();
+  _updateCatGroupUI();
+}
+
+function _makeCatGroupBlock(groupLogic, conditions) {
+  const block = document.createElement('div');
+  block.className = 'crf-group-block';
+  block.style.cssText = 'border:1px solid var(--border); border-radius:8px; padding:10px 12px;';
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;';
+  const lbl = document.createElement('span');
+  lbl.style.cssText = 'font-size:13px; font-weight:600;'; lbl.textContent = 'Match Conditions';
+  const right = document.createElement('div');
+  right.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:13px;';
+  const logicLabel = document.createElement('span');
+  logicLabel.style.cssText = 'color:var(--text-muted);'; logicLabel.textContent = 'Combine with:';
+  const logicSel = document.createElement('select');
+  logicSel.className = 'crf-group-logic';
+  logicSel.style.cssText = 'width:auto; padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;';
+  [['AND', 'AND — all must match'], ['OR', 'OR — any must match']].forEach(([val, text]) => {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = text; opt.selected = (val === groupLogic);
+    logicSel.appendChild(opt);
+  });
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button'; removeBtn.className = 'btn btn-secondary btn-sm crf-group-remove';
+  removeBtn.textContent = 'Remove Group';
+  removeBtn.style.cssText = 'font-size:11px; padding:2px 8px; margin-left:8px;';
+  removeBtn.addEventListener('click', function() { _removeCatGroup(this); });
+  right.appendChild(logicLabel); right.appendChild(logicSel); right.appendChild(removeBtn);
+  header.appendChild(lbl); header.appendChild(right); block.appendChild(header);
+  const condContainer = document.createElement('div');
+  condContainer.className = 'crf-group-conditions';
+  condContainer.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-bottom:8px;';
+  block.appendChild(condContainer);
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button'; addBtn.className = 'btn btn-secondary btn-sm';
+  addBtn.textContent = '+ Add Condition'; addBtn.style.cssText = 'font-size:12px;';
+  addBtn.addEventListener('click', function() { _addCatConditionToGroup(this.closest('.crf-group-block')); });
+  block.appendChild(addBtn);
+  if (conditions && conditions.length) {
+    conditions.forEach(c => { condContainer.appendChild(_makeCatConditionRow(c.pattern, c.match_type || 'exact', !!c.negate)); });
+  } else {
+    condContainer.appendChild(_makeCatConditionRow('', 'exact', false));
+  }
+  _updateCatGroupUI();
+  return block;
+}
+
+function _removeCatGroup(btn) {
+  const groups = document.querySelectorAll('#crf-groups .crf-group-block');
+  if (groups.length <= 1) return;
+  btn.closest('.crf-group-block').remove();
+  _updateCatGroupUI();
+}
+
+function _updateCatGroupUI() {
+  const groups = document.querySelectorAll('#crf-groups .crf-group-block');
+  groups.forEach(g => {
+    const removeBtn = g.querySelector('.crf-group-remove');
+    if (removeBtn) removeBtn.style.display = groups.length > 1 ? '' : 'none';
+    const rows = g.querySelectorAll('.crf-condition-row');
+    const logicSel = g.querySelector('.crf-group-logic');
+    const logicLbl = logicSel ? logicSel.previousElementSibling : null;
+    if (logicSel) logicSel.style.display = rows.length >= 2 ? '' : 'none';
+    if (logicLbl) logicLbl.style.display = rows.length >= 2 ? '' : 'none';
+    g.querySelectorAll('.crf-cond-remove').forEach(b => { b.style.visibility = rows.length > 1 ? 'visible' : 'hidden'; });
+  });
+}
+
+function addCatConditionGroup(groupLogic = 'AND', conditions = null) {
+  const container = document.getElementById('crf-groups');
+  if (!container) return;
+  container.appendChild(_makeCatGroupBlock(groupLogic, conditions));
+  _updateCatGroupUI();
+}
+
+function _setCatRuleConditions(conditionsData) {
+  const container = document.getElementById('crf-groups');
+  if (!container) return;
+  container.innerHTML = '';
+  if (conditionsData && conditionsData.groups) {
+    conditionsData.groups.forEach(g => { addCatConditionGroup(g.group_logic || 'AND', g.conditions); });
+  } else {
+    addCatConditionGroup('AND', null);
+  }
+  _updateCatGroupUI();
+}
+
+function _getCatRuleConditions() {
+  const groups = document.querySelectorAll('#crf-groups .crf-group-block');
+  const result = [];
+  groups.forEach(g => {
+    const logicSel = g.querySelector('.crf-group-logic');
+    const groupLogic = logicSel ? logicSel.value : 'AND';
+    const rows = g.querySelectorAll('.crf-condition-row');
+    const conditions = Array.from(rows).map(row => ({
+      pattern:    row.querySelector('.crf-cond-pattern').value.trim(),
+      match_type: row.querySelector('.crf-cond-type').value,
+      negate:     row.querySelector('.crf-cond-negate').checked,
+    }));
+    result.push({ group_logic: groupLogic, conditions });
+  });
+  return { groups: result };
+}
+
+function _catRulePatternSummary(r) {
+  if (r.conditions && r.conditions.groups) {
+    return r.conditions.groups.map(g => {
+      const parts = (g.conditions || []).map(c => `${c.negate ? 'NOT ' : ''}${esc(c.match_type)} "${esc(c.pattern)}"`);
+      const inner = parts.join(` <span style="color:var(--text-muted);font-size:10px;">${esc(g.group_logic || 'AND')}</span> `);
+      return r.conditions.groups.length > 1 ? `(${inner})` : inner;
+    }).join(' <span style="color:var(--text-muted);font-size:10px;">AND</span> ');
+  }
+  return `<span class="mono">${esc(r.raw_category)}</span>`;
+}
+
+// ── Category Rules CRUD ───────────────────────────────────────
 
 async function loadCategoryRules() {
   const tbody = document.getElementById('category-rules-tbody');
@@ -4421,26 +4634,35 @@ async function loadCategoryRules() {
   tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:24px">Loading…</td></tr>';
   try {
     const data = await api('GET', '/category-rules');
-    if (!data.rules.length) {
+    _allCatRules = data.rules || [];
+    if (!_allCatRules.length) {
       tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:24px">No rules yet. Click "+ Add Rule" or use "Analyze My Data" to create them.</td></tr>';
       _updateBadge('cat-rules-count', 0);
+      _updateCatRuleSearchCount();
       return;
     }
-    _updateBadge('cat-rules-count', data.rules.length);
-    tbody.innerHTML = data.rules.map(r => `<tr>
-      <td class="mono" style="font-size:12px;">${esc(r.raw_category)}</td>
-      <td>${esc(r.category)}</td>
-      <td><span class="badge badge-running" style="font-size:11px;">${esc(r.parent)}</span></td>
-      <td>
-        <div style="display:flex; gap:6px;">
-          <button class="btn btn-secondary btn-sm" onclick="openCatRuleForm(${r.id})">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteCatRule(${r.id})">Delete</button>
-        </div>
-      </td>
-    </tr>`).join('');
+    _updateBadge('cat-rules-count', _allCatRules.length);
+    _renderCatRuleRows(_allCatRules);
+    _updateCatRuleSearchCount();
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
   }
+}
+
+function _renderCatRuleRows(rules) {
+  const tbody = document.getElementById('category-rules-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rules.map(r => `<tr>
+    <td class="mono" style="font-size:12px;">${_catRulePatternSummary(r)}</td>
+    <td>${esc(r.category)}</td>
+    <td><span class="badge badge-running" style="font-size:11px;">${esc(r.parent)}</span></td>
+    <td>
+      <div style="display:flex; gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="openCatRuleForm(${r.id})">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteCatRule(${r.id})">Delete</button>
+      </div>
+    </td>
+  </tr>`).join('');
 }
 
 function openCatRuleForm(ruleId) {
@@ -4451,8 +4673,10 @@ function openCatRuleForm(ruleId) {
   card.style.display = '';
   document.getElementById('crf-status').textContent = '';
   if (!ruleId) {
-    ['crf-raw','crf-category'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    document.getElementById('crf-raw').value = '';
+    document.getElementById('crf-category').value = '';
     document.getElementById('crf-parent').value = '';
+    _setCatRuleConditions(null);
     return;
   }
   api('GET', '/category-rules').then(data => {
@@ -4461,6 +4685,12 @@ function openCatRuleForm(ruleId) {
     document.getElementById('crf-raw').value      = rule.raw_category;
     document.getElementById('crf-category').value = rule.category;
     document.getElementById('crf-parent').value   = rule.parent;
+    if (rule.conditions && rule.conditions.groups) {
+      _setCatRuleConditions(rule.conditions);
+    } else {
+      // Legacy exact-match: wrap as single condition
+      _setCatRuleConditions({groups: [{group_logic: 'AND', conditions: [{pattern: rule.raw_category, match_type: 'exact', negate: false}]}]});
+    }
   });
 }
 
@@ -4470,13 +4700,35 @@ function closeCatRuleForm() {
 }
 
 async function saveCatRule() {
-  const raw      = document.getElementById('crf-raw').value.trim();
   const category = document.getElementById('crf-category').value.trim();
   const parent   = document.getElementById('crf-parent').value;
-  if (!raw || !category || !parent) {
-    toast('All fields are required.', 'error'); return;
+  if (!category || !parent) {
+    toast('Category and Parent Group are required.', 'error'); return;
   }
-  const body = { raw_category: raw, category, parent };
+  // Get grouped conditions and strip empty patterns
+  const grouped = _getCatRuleConditions();
+  grouped.groups = grouped.groups.map(g => ({
+    ...g,
+    conditions: g.conditions.filter(c => c.pattern),
+  })).filter(g => g.conditions.length > 0);
+  if (!grouped.groups.length) {
+    toast('At least one condition pattern is required.', 'error'); return;
+  }
+  // Backward compat: single group + single condition + exact → store as legacy
+  let rawCategory, conditions;
+  const isSingle = grouped.groups.length === 1
+    && grouped.groups[0].conditions.length === 1
+    && grouped.groups[0].conditions[0].match_type === 'exact'
+    && !grouped.groups[0].conditions[0].negate;
+  if (isSingle) {
+    rawCategory = grouped.groups[0].conditions[0].pattern;
+    conditions = null; // legacy exact-match
+  } else {
+    // Use first pattern as raw_category label
+    rawCategory = grouped.groups[0].conditions[0].pattern;
+    conditions = grouped;
+  }
+  const body = { raw_category: rawCategory, category, parent, conditions };
   try {
     if (_editingCatRuleId) {
       await api('PUT', `/category-rules/${_editingCatRuleId}`, body);
@@ -4501,6 +4753,43 @@ async function deleteCatRule(id) {
   } catch (err) {
     toast(`Failed: ${err.message}`, 'error');
   }
+}
+
+function filterCatRules() {
+  const input = document.getElementById('cat-rules-search');
+  const clearBtn = document.getElementById('cat-rules-search-clear');
+  const query = (input?.value || '').toLowerCase();
+  clearBtn.style.display = query ? '' : 'none';
+  if (!query) {
+    _renderCatRuleRows(_allCatRules);
+    _updateCatRuleSearchCount();
+    return;
+  }
+  const filtered = _allCatRules.filter(r => {
+    const raw = (r.raw_category || '').toLowerCase();
+    const cat = (r.category || '').toLowerCase();
+    const parent = (r.parent || '').toLowerCase();
+    let condText = '';
+    if (r.conditions && r.conditions.groups) {
+      condText = r.conditions.groups.flatMap(g => (g.conditions || []).map(c => c.pattern || '')).join(' ').toLowerCase();
+    }
+    return raw.includes(query) || cat.includes(query) || parent.includes(query) || condText.includes(query);
+  });
+  if (filtered.length) {
+    _renderCatRuleRows(filtered);
+  } else {
+    document.getElementById('category-rules-tbody').innerHTML =
+      `<tr><td colspan="4" class="text-center text-muted" style="padding:24px">No rules match '${esc(query)}'</td></tr>`;
+  }
+  _updateCatRuleSearchCount(filtered.length);
+}
+
+function _updateCatRuleSearchCount(shown) {
+  const el = document.getElementById('cat-rules-search-count');
+  if (!el) return;
+  const query = (document.getElementById('cat-rules-search')?.value || '').trim();
+  if (!query || !_allCatRules.length) { el.textContent = ''; return; }
+  el.textContent = `${shown ?? _allCatRules.length} of ${_allCatRules.length} rules`;
 }
 
 // ── Category Suggestions ─────────────────────────────────────

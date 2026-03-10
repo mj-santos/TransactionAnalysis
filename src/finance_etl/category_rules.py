@@ -6,7 +6,8 @@ Maps raw bank-provided category strings to a normalized two-tier taxonomy:
   parent    — top-level group       (e.g. "Travel")
 
 Two sources of mappings (in priority order):
-  1. user-defined rules in the `category_rules` DB table (exact match, case-insensitive)
+  1. user-defined rules in the `category_rules` DB table
+     (exact match legacy OR grouped conditions with exact/contains/starts_with)
   2. built-in fallback map (BUILT_IN_CATEGORY_MAP)
 
 apply_category_rules() walks all transactions_norm rows and writes
@@ -14,11 +15,13 @@ category_normalized + category_parent, tracking progress in normalization_jobs.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from finance_etl.utils.log import get_logger
+from finance_etl.utils.query_helpers import evaluate_rule_groups
 
 log = get_logger(__name__)
 
@@ -149,35 +152,84 @@ _BUILT_IN_LOWER: dict[str, tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 def normalize_category(raw: str | None,
-                        user_rules: dict[str, tuple[str, str]]) -> tuple[str | None, str | None]:
+                        user_rules: dict[str, tuple[str, str]],
+                        grouped_rules: list[dict] | None = None) -> tuple[str | None, str | None]:
     """
     Return (category_normalized, category_parent) for a raw bank category string.
-    user_rules takes priority over the built-in map.
+    Checks grouped rules first (if any), then exact-match user_rules, then built-in map.
     Returns (None, None) if raw is None/empty.
     """
     if not raw:
         return None, None
+
+    # 1. Grouped condition rules (evaluated in order)
+    if grouped_rules:
+        for rule in grouped_rules:
+            groups = rule.get("groups")
+            if groups and evaluate_rule_groups(groups, raw):
+                return rule["category"], rule["parent"]
+
+    # 2. Legacy exact-match user rules
     key = raw.lower()
     if key in user_rules:
         return user_rules[key]
+
+    # 3. Built-in fallback
     if key in _BUILT_IN_LOWER:
         return _BUILT_IN_LOWER[key]
     return raw, "Other"   # fallback: keep original, assign Other parent
 
 
 # ---------------------------------------------------------------------------
-# Load user rules from DB → {lower(raw_category): (category, parent)}
+# Load user rules from DB
 # ---------------------------------------------------------------------------
 
 def load_category_rules(conn) -> dict[str, tuple[str, str]]:
-    """Return user-defined category rules as {lower(raw_category): (category, parent)}."""
+    """Return user-defined category rules as {lower(raw_category): (category, parent)}.
+    Only returns legacy exact-match rules (no conditions column)."""
     try:
         rows = conn.execute(
-            "SELECT raw_category, category, parent FROM category_rules"
+            "SELECT raw_category, category, parent, conditions FROM category_rules"
         ).fetchall()
     except Exception:
-        return {}
-    return {r[0].lower(): (r[1], r[2]) for r in rows}
+        # Fallback for older schema without conditions column
+        try:
+            rows = conn.execute(
+                "SELECT raw_category, category, parent FROM category_rules"
+            ).fetchall()
+            return {r[0].lower(): (r[1], r[2]) for r in rows}
+        except Exception:
+            return {}
+    exact_rules = {}
+    for r in rows:
+        conditions_raw = r[3] if len(r) > 3 else None
+        if not conditions_raw:
+            # Legacy exact-match rule
+            exact_rules[r[0].lower()] = (r[1], r[2])
+    return exact_rules
+
+
+def load_grouped_category_rules(conn) -> list[dict]:
+    """Return category rules that use grouped conditions.
+    Each entry: {groups: [...], category: str, parent: str}."""
+    try:
+        rows = conn.execute(
+            "SELECT raw_category, category, parent, conditions FROM category_rules"
+        ).fetchall()
+    except Exception:
+        return []
+    result = []
+    for r in rows:
+        conditions_raw = r[3] if len(r) > 3 else None
+        if not conditions_raw:
+            continue
+        try:
+            cond = json.loads(conditions_raw) if isinstance(conditions_raw, str) else conditions_raw
+        except Exception:
+            continue
+        if isinstance(cond, dict) and "groups" in cond:
+            result.append({"groups": cond["groups"], "category": r[1], "parent": r[2]})
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +265,7 @@ def apply_category_rules(db_path: str, job_id: str) -> None:
             [now, job_id],
         )
         user_rules = load_category_rules(conn)
+        grouped_rules = load_grouped_category_rules(conn)
         rows = conn.execute(
             "SELECT transaction_fingerprint, category FROM transactions_norm"
         ).fetchall()
@@ -222,7 +275,7 @@ def apply_category_rules(db_path: str, job_id: str) -> None:
         updates: list[tuple[str | None, str | None, str]] = []
 
         for fingerprint, raw_cat in rows:
-            cat_n, cat_p = normalize_category(raw_cat, user_rules)
+            cat_n, cat_p = normalize_category(raw_cat, user_rules, grouped_rules)
             updates.append((cat_n, cat_p, fingerprint))
             done += 1
             if len(updates) >= BATCH:

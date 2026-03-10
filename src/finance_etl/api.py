@@ -222,9 +222,10 @@ try:
         category:  str = Field(..., description="Category to assign")
 
     class CategoryRuleRequest(BaseModel):
-        raw_category: str = Field(..., description="Exact raw category string from bank")
+        raw_category: str = Field(..., description="Exact raw category string from bank (or label for grouped rules)")
         category:     str = Field(..., description="Normalized subcategory")
         parent:       str = Field(..., description="Parent group (e.g. 'Food & Dining')")
+        conditions:   Any = Field(None, description="Grouped conditions {groups: [...]} or null for exact match")
 
     class BudgetGoalRequest(BaseModel):
         parent:         str           = Field(..., description="Parent category group")
@@ -3040,23 +3041,38 @@ No cloud services, no external dependencies — all data stays on your machine.
     @app.get("/category-rules", tags=["categories"], summary="List all category rules")
     def get_category_rules():
         """Return all entries in category_rules ordered by parent, category."""
+        import json as _json
         try:
             conn = get_connection(db_path, read_only=True)
             rows = conn.execute(
-                "SELECT id, raw_category, category, parent, created_at, updated_at "
+                "SELECT id, raw_category, category, parent, created_at, updated_at, conditions "
                 "FROM category_rules ORDER BY parent ASC, category ASC"
             ).fetchall()
             conn.close()
         except Exception:
             return {"rules": []}
-        cols = ["id", "raw_category", "category", "parent", "created_at", "updated_at"]
-        return {"rules": [dict(zip(cols, r)) for r in rows]}
+        result = []
+        for r in rows:
+            d = {"id": r[0], "raw_category": r[1], "category": r[2],
+                 "parent": r[3], "created_at": r[4], "updated_at": r[5]}
+            cond_raw = r[6] if len(r) > 6 else None
+            if cond_raw:
+                try:
+                    d["conditions"] = _json.loads(cond_raw) if isinstance(cond_raw, str) else cond_raw
+                except Exception:
+                    d["conditions"] = None
+            else:
+                d["conditions"] = None
+            result.append(d)
+        return {"rules": result}
 
     @app.post("/category-rules", tags=["categories"], summary="Create or update a category rule",
               status_code=201)
     def create_category_rule(payload: CategoryRuleRequest):
         """Insert a category rule; on UNIQUE conflict update existing entry."""
+        import json as _json
         now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conditions_str = _json.dumps(payload.conditions) if payload.conditions else None
         conn = get_connection(db_path)
         try:
             existing = conn.execute(
@@ -3065,9 +3081,9 @@ No cloud services, no external dependencies — all data stays on your machine.
             ).fetchone()
             if existing is None:
                 conn.execute(
-                    "INSERT INTO category_rules (raw_category, category, parent, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    [payload.raw_category, payload.category, payload.parent, now, now],
+                    "INSERT INTO category_rules (raw_category, category, parent, conditions, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [payload.raw_category, payload.category, payload.parent, conditions_str, now, now],
                 )
                 row_id = conn.execute(
                     "SELECT id FROM category_rules WHERE raw_category=?",
@@ -3076,8 +3092,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                 status = "created"
             else:
                 conn.execute(
-                    "UPDATE category_rules SET category=?, parent=?, updated_at=? WHERE raw_category=?",
-                    [payload.category, payload.parent, now, payload.raw_category],
+                    "UPDATE category_rules SET category=?, parent=?, conditions=?, updated_at=? WHERE raw_category=?",
+                    [payload.category, payload.parent, conditions_str, now, payload.raw_category],
                 )
                 row_id = existing[0]
                 status = "updated"
@@ -3088,12 +3104,14 @@ No cloud services, no external dependencies — all data stays on your machine.
     @app.put("/category-rules/{rule_id}", tags=["categories"], summary="Update a category rule")
     def update_category_rule(rule_id: int, payload: CategoryRuleRequest):
         """Update an existing category rule by ID."""
+        import json as _json
         now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        conditions_str = _json.dumps(payload.conditions) if payload.conditions else None
         conn = get_connection(db_path)
         try:
             conn.execute(
-                "UPDATE category_rules SET raw_category=?, category=?, parent=?, updated_at=? WHERE id=?",
-                [payload.raw_category, payload.category, payload.parent, now, rule_id],
+                "UPDATE category_rules SET raw_category=?, category=?, parent=?, conditions=?, updated_at=? WHERE id=?",
+                [payload.raw_category, payload.category, payload.parent, conditions_str, now, rule_id],
             )
         finally:
             conn.close()
@@ -5322,9 +5340,10 @@ No cloud services, no external dependencies — all data stays on your machine.
             for r in data.get("category_rules", []):
                 conn.execute(
                     """INSERT INTO category_rules
-                       (raw_category, category, parent, created_at, updated_at)
-                       VALUES (?,?,?,?,?)""",
+                       (raw_category, category, parent, conditions, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?)""",
                     [r["raw_category"], r["category"], r["parent"],
+                     r.get("conditions"),
                      r.get("created_at", now), r.get("updated_at", now)],
                 )
 

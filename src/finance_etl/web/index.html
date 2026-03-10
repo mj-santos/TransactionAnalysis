@@ -1049,6 +1049,16 @@
         <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
           Rules map transaction descriptions to normalized merchant names. Applied in priority order (highest first) during import and re-normalization.
         </p>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+          <div style="position:relative; flex:1; max-width:320px;">
+            <input id="merchant-rules-search" type="text" placeholder="Search rules…"
+              oninput="filterMerchantRules()" onkeydown="if(event.key==='Escape'){this.value='';filterMerchantRules();}"
+              style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+            <button id="merchant-rules-search-clear" onclick="document.getElementById('merchant-rules-search').value='';filterMerchantRules();"
+              style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">×</button>
+          </div>
+          <span id="merchant-rules-search-count" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
         <div class="table-wrap rules-table-scroll">
           <table>
             <thead>
@@ -1201,6 +1211,16 @@
         <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
           Maps raw bank categories to your normalized taxonomy. After saving rules, click "Apply Normalization" to update all transactions.
         </p>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+          <div style="position:relative; flex:1; max-width:320px;">
+            <input id="cat-rules-search" type="text" placeholder="Search rules…"
+              oninput="filterCatRules()" onkeydown="if(event.key==='Escape'){this.value='';filterCatRules();}"
+              style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+            <button id="cat-rules-search-clear" onclick="document.getElementById('cat-rules-search').value='';filterCatRules();"
+              style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">×</button>
+          </div>
+          <span id="cat-rules-search-count" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
         <div class="table-wrap rules-table-scroll">
           <table>
             <thead>
@@ -1222,11 +1242,22 @@
     <!-- Category Rule editor form -->
     <div id="cat-rule-form-card" class="card" style="display:none; margin-bottom:20px;">
       <div class="card-title" id="cat-rule-form-title">Add Category Rule</div>
-      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:12px;">
-        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
-          Raw Bank Category (exact)
-          <input id="crf-raw" type="text" placeholder="e.g. Restaurant-Restaurant" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
-        </label>
+
+      <!-- Condition Groups builder -->
+      <div style="margin-bottom:12px;">
+        <div id="crf-groups" style="display:flex; flex-direction:column; gap:12px; margin-bottom:8px;">
+          <!-- Group blocks injected by JS -->
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="addCatConditionGroup()" style="font-size:12px;">+ Add Group</button>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:6px; margin-bottom:0;">
+          Each group is combined with AND — all groups must pass. Use <strong>NOT</strong> to exclude patterns.
+        </p>
+      </div>
+
+      <!-- Hidden raw_category field (auto-computed for backward compat) -->
+      <input id="crf-raw" type="hidden" />
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
         <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
           → Normalized Category
           <input id="crf-category" type="text" placeholder="e.g. Restaurants" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
