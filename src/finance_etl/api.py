@@ -570,14 +570,84 @@ No cloud services, no external dependencies — all data stays on your machine.
         except Exception as exc:
             _async_runs[run_id] = {"status": "failed", "run_id": run_id, "error": str(exc)}
 
+    def _detect_duplicates(run_id: str):
+        """Background task: detect near-duplicate transactions after import."""
+        try:
+            conn = get_connection(db_path)
+            now = conn.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0]
+            now_str = _isoformat(now)
+            # Find new transactions from this run
+            new_rows = conn.execute(
+                """SELECT transaction_fingerprint, COALESCE(merchant, description) AS match_key,
+                          amount, transaction_date
+                   FROM transactions_norm WHERE run_id = ?""",
+                [run_id],
+            ).fetchall()
+            if not new_rows:
+                conn.close()
+                return 0
+            inserted = 0
+            for fp_b, match_key_b, amt_b, date_b in new_rows:
+                if not match_key_b or amt_b is None or date_b is None:
+                    continue
+                amt_b_f = float(amt_b)
+                threshold = abs(amt_b_f) * 0.01 if amt_b_f != 0 else 0.01
+                # Find existing transactions with same merchant/desc, similar amount, close date
+                candidates = conn.execute(
+                    """SELECT transaction_fingerprint, COALESCE(merchant, description) AS match_key,
+                              amount, transaction_date
+                       FROM transactions_norm
+                       WHERE transaction_fingerprint != ?
+                         AND run_id != ?
+                         AND COALESCE(is_split, FALSE) = FALSE
+                         AND LOWER(COALESCE(merchant, description, '')) = LOWER(?)
+                         AND ABS(CAST(amount AS DOUBLE) - ?) <= ?
+                         AND ABS(DATEDIFF('day', transaction_date, CAST(? AS DATE))) <= 3""",
+                    [fp_b, run_id, match_key_b, amt_b_f, threshold, str(date_b)],
+                ).fetchall()
+                for fp_a, _, amt_a, date_a in candidates:
+                    # Check not already detected
+                    existing = conn.execute(
+                        """SELECT 1 FROM duplicate_candidates
+                           WHERE (fingerprint_a = ? AND fingerprint_b = ?)
+                              OR (fingerprint_a = ? AND fingerprint_b = ?)""",
+                        [fp_a, fp_b, fp_b, fp_a],
+                    ).fetchone()
+                    if existing:
+                        continue
+                    # Compute similarity score (1.0 = exact match on all 3 criteria)
+                    amt_diff_pct = abs(float(amt_a) - amt_b_f) / max(abs(amt_b_f), 0.01) if amt_b_f != 0 else 0
+                    day_diff = abs((date_b - date_a).days) if hasattr(date_b, '__sub__') else 0
+                    score = round(1.0 - (amt_diff_pct * 0.5) - (day_diff / 3.0 * 0.3), 2)
+                    score = max(0.0, min(1.0, score))
+                    reason = f"same merchant, amount within {amt_diff_pct*100:.0f}%, date within {day_diff} day(s)"
+                    conn.execute(
+                        """INSERT INTO duplicate_candidates
+                           (fingerprint_a, fingerprint_b, similarity_score, reason, status, detected_at)
+                           VALUES (?, ?, ?, ?, 'pending', ?)""",
+                        [fp_a, fp_b, score, reason, now_str],
+                    )
+                    inserted += 1
+            conn.close()
+            return inserted
+        except Exception:
+            return 0
+
     def _commit_bg(run_id: str):
         _async_runs[run_id] = {"status": "committing", "run_id": run_id}
         try:
             result = commit_run(run_id)
+            # Run duplicate detection after successful commit (non-blocking)
+            dup_count = 0
+            try:
+                dup_count = _detect_duplicates(run_id)
+            except Exception:
+                pass
             _async_runs[run_id] = {
                 "status": "success",
                 "run_id": result.run_id,
                 "counts": result.counts,
+                "duplicate_count": dup_count,
             }
             # Auto-backup after successful commit (non-fatal on failure)
             try:
@@ -1904,6 +1974,264 @@ No cloud services, no external dependencies — all data stays on your machine.
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Bulk update failed: {exc}") from exc
         return {"updated": updated}
+
+    # -----------------------------------------------------------------------
+    # Duplicates
+    # -----------------------------------------------------------------------
+
+    @app.get("/duplicates", tags=["duplicates"], summary="List pending duplicate candidates")
+    def list_duplicates(status: Optional[str] = Query("pending", description="Filter by status")):
+        """Return duplicate candidates with joined transaction details."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            where = "WHERE dc.status = ?" if status else ""
+            params = [status] if status else []
+            rows = conn.execute(
+                f"""SELECT dc.id, dc.fingerprint_a, dc.fingerprint_b,
+                           dc.similarity_score, dc.reason, dc.status,
+                           dc.detected_at, dc.resolved_at,
+                           a.transaction_date AS date_a, a.description AS desc_a,
+                           a.merchant AS merchant_a, a.amount AS amount_a,
+                           a.account_name AS account_a,
+                           b.transaction_date AS date_b, b.description AS desc_b,
+                           b.merchant AS merchant_b, b.amount AS amount_b,
+                           b.account_name AS account_b
+                    FROM duplicate_candidates dc
+                    LEFT JOIN transactions_norm a ON a.transaction_fingerprint = dc.fingerprint_a
+                    LEFT JOIN transactions_norm b ON b.transaction_fingerprint = dc.fingerprint_b
+                    {where}
+                    ORDER BY dc.detected_at DESC""",
+                params,
+            ).fetchall()
+            cols = [d[0] for d in conn.description]
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Query error: {exc}") from exc
+        result = []
+        for r in rows:
+            d = {}
+            for i, c in enumerate(cols):
+                v = r[i]
+                d[c] = _isoformat(v) if hasattr(v, "isoformat") else v
+            result.append(d)
+        return {"rows": result, "count": len(result)}
+
+    @app.post("/duplicates/{dup_id}/resolve", tags=["duplicates"],
+              summary="Resolve a duplicate candidate")
+    def resolve_duplicate(dup_id: int, body: dict):
+        """
+        Resolve a duplicate candidate.
+
+        Body: {"action": "keep_both" | "delete_b" | "not_duplicate"}
+        """
+        action = body.get("action", "")
+        if action not in ("keep_both", "delete_b", "not_duplicate"):
+            raise HTTPException(status_code=400, detail="action must be 'keep_both', 'delete_b', or 'not_duplicate'")
+        try:
+            conn = get_connection(db_path)
+            now = _isoformat(conn.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0])
+            candidate = conn.execute(
+                "SELECT fingerprint_b, status FROM duplicate_candidates WHERE id = ?", [dup_id]
+            ).fetchone()
+            if not candidate:
+                conn.close()
+                raise HTTPException(status_code=404, detail="Duplicate candidate not found")
+            if candidate[1] != "pending":
+                conn.close()
+                raise HTTPException(status_code=400, detail="Already resolved")
+            new_status = "not_duplicate" if action == "not_duplicate" else "confirmed_duplicate" if action == "delete_b" else "not_duplicate"
+            if action == "delete_b":
+                fp_b = candidate[0]
+                conn.execute(
+                    "DELETE FROM transactions_norm WHERE transaction_fingerprint = ?", [fp_b]
+                )
+            conn.execute(
+                "UPDATE duplicate_candidates SET status = ?, resolved_at = ? WHERE id = ?",
+                [new_status, now, dup_id],
+            )
+            conn.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Resolve failed: {exc}") from exc
+        return {"id": dup_id, "action": action, "status": new_status}
+
+    # -----------------------------------------------------------------------
+    # Utilities
+    # -----------------------------------------------------------------------
+
+    @app.get("/utilities/categories", tags=["utilities"],
+             summary="Full category taxonomy with transaction counts")
+    def utilities_categories():
+        """Return built-in + user categories grouped by parent, with counts."""
+        from finance_etl.category_rules import BUILT_IN_CATEGORY_MAP
+        # Build taxonomy from built-in map: parent -> set of subcategories
+        taxonomy = {}
+        for _, (subcat, parent) in BUILT_IN_CATEGORY_MAP.items():
+            taxonomy.setdefault(parent, set()).add(subcat)
+        try:
+            conn = get_connection(db_path, read_only=True)
+            # Also include any user-created categories from category_rules table
+            user_rules = conn.execute(
+                "SELECT DISTINCT normalized_category, parent_category FROM category_rules"
+            ).fetchall()
+            for norm, parent in user_rules:
+                if parent and norm:
+                    taxonomy.setdefault(parent, set()).add(norm)
+            # Get transaction counts per normalized category
+            counts_raw = conn.execute(
+                """SELECT COALESCE(category_normalized, category, 'Uncategorized') AS cat,
+                          COUNT(*) AS cnt
+                   FROM transactions_norm
+                   WHERE COALESCE(is_split, FALSE) = FALSE
+                   GROUP BY cat"""
+            ).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        counts = {r[0]: r[1] for r in counts_raw}
+        result = []
+        for parent in sorted(taxonomy):
+            subcats = []
+            for sub in sorted(taxonomy[parent]):
+                subcats.append({"name": sub, "count": counts.get(sub, 0)})
+            parent_count = sum(s["count"] for s in subcats)
+            result.append({"parent": parent, "count": parent_count, "subcategories": subcats})
+        return {"categories": result}
+
+    @app.get("/utilities/merchants", tags=["utilities"],
+             summary="Merchant summary list with counts and categories")
+    def utilities_merchants():
+        """Return all merchants with their transaction counts, categories, and last seen date."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """SELECT COALESCE(merchant, description) AS normalized_name,
+                          description AS raw_name,
+                          COUNT(*) AS txn_count,
+                          COALESCE(category_normalized, category, '') AS assigned_category,
+                          MAX(transaction_date) AS last_seen
+                   FROM transactions_norm
+                   WHERE COALESCE(is_split, FALSE) = FALSE
+                   GROUP BY normalized_name, raw_name, assigned_category
+                   ORDER BY txn_count DESC"""
+            ).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        merchants = []
+        for r in rows:
+            merchants.append({
+                "normalized_name": r[0] or "",
+                "raw_name": r[1] or "",
+                "txn_count": r[2],
+                "assigned_category": r[3],
+                "last_seen": _isoformat(r[4]) if hasattr(r[4], "isoformat") else r[4],
+            })
+        return {"merchants": merchants, "count": len(merchants)}
+
+    @app.post("/utilities/test-rule", tags=["utilities"],
+              summary="Test how a transaction description would be classified")
+    def utilities_test_rule(body: dict):
+        """
+        Given a raw transaction description, show the full classification trace:
+        raw → merchant rule match → normalized merchant → category rule → parent.
+        """
+        description = body.get("description", "").strip()
+        if not description:
+            raise HTTPException(status_code=400, detail="'description' is required")
+        from finance_etl.merchant_rules import load_rules, apply_rules
+        from finance_etl.category_rules import BUILT_IN_CATEGORY_MAP, _BUILT_IN_LOWER
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rules = load_rules(conn)
+            conn.close()
+        except Exception:
+            rules = []
+        # Find matching merchant rule
+        merchant_name = apply_rules(description, rules)
+        rule_info = None
+        if merchant_name:
+            # Find which rule matched (re-check for display)
+            for rule in rules:
+                if rule.matches(description):
+                    rule_info = {
+                        "pattern": rule.pattern,
+                        "match_type": rule.match_type,
+                        "merchant": rule.merchant,
+                    }
+                    break
+        # Find category mapping
+        category = None
+        parent = None
+        if merchant_name:
+            # Check merchant_category_map in DB
+            try:
+                conn = get_connection(db_path, read_only=True)
+                cat_row = conn.execute(
+                    "SELECT category FROM merchant_category_map WHERE merchant = ?",
+                    [merchant_name],
+                ).fetchone()
+                conn.close()
+                if cat_row and cat_row[0]:
+                    lookup = cat_row[0].lower()
+                    if lookup in _BUILT_IN_LOWER:
+                        category, parent = _BUILT_IN_LOWER[lookup]
+                    else:
+                        category = cat_row[0]
+            except Exception:
+                pass
+        # Also try direct category lookup from description
+        if not category:
+            lookup = description.lower()
+            if lookup in _BUILT_IN_LOWER:
+                category, parent = _BUILT_IN_LOWER[lookup]
+        return {
+            "description": description,
+            "merchant_rule": rule_info,
+            "merchant": merchant_name,
+            "category": category,
+            "parent": parent,
+        }
+
+    @app.get("/utilities/health", tags=["utilities"],
+             summary="Data quality health metrics")
+    def utilities_health():
+        """Return aggregate data health counts."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            r = conn.execute("""
+                SELECT
+                  COUNT(CASE WHEN (category_normalized IS NULL OR category_normalized = '')
+                              AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS uncategorized,
+                  COUNT(CASE WHEN COALESCE(unreviewed, TRUE) = TRUE
+                              AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS unreviewed,
+                  COUNT(CASE WHEN (merchant IS NULL OR merchant = '')
+                              AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS no_merchant
+                FROM transactions_norm
+            """).fetchone()
+            # Merchants without a category
+            merchants_no_cat = conn.execute("""
+                SELECT COUNT(DISTINCT COALESCE(merchant, description))
+                FROM transactions_norm
+                WHERE COALESCE(is_split, FALSE) = FALSE
+                  AND merchant IS NOT NULL AND merchant != ''
+                  AND (category_normalized IS NULL OR category_normalized = '')
+            """).fetchone()
+            # Pending duplicates
+            pending_dups = conn.execute(
+                "SELECT COUNT(*) FROM duplicate_candidates WHERE status = 'pending'"
+            ).fetchone()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {
+            "uncategorized_transactions": r[0] or 0,
+            "unreviewed_transactions": r[1] or 0,
+            "merchants_without_category": merchants_no_cat[0] if merchants_no_cat else 0,
+            "no_merchant_match": r[2] or 0,
+            "pending_duplicates": pending_dups[0] if pending_dups else 0,
+        }
 
     # -----------------------------------------------------------------------
     # Reports
@@ -4671,6 +4999,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         "nw_accounts",
         "nw_snapshots",
         "annual_reports",
+        "duplicate_candidates",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
@@ -5036,6 +5365,20 @@ No cloud services, no external dependencies — all data stays on your machine.
                     [r["year"], r.get("report_json", "{}"),
                      r.get("narrative", ""),
                      r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # 17. duplicate_candidates
+            conn.execute("DELETE FROM duplicate_candidates")
+            for r in data.get("duplicate_candidates", []):
+                conn.execute(
+                    """INSERT INTO duplicate_candidates
+                       (fingerprint_a, fingerprint_b, similarity_score, reason,
+                        status, detected_at, resolved_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    [r.get("fingerprint_a"), r.get("fingerprint_b"),
+                     r.get("similarity_score"), r.get("reason"),
+                     r.get("status", "pending"), r.get("detected_at", now),
+                     r.get("resolved_at")],
                 )
 
             conn.close()

@@ -192,6 +192,7 @@ TransactionAnalysis/
 | Merchants | `#page-merchant-rules` | `loadMerchantRules()`, `loadUncategorized()` | ✅ Working |
 | Categories | `#page-category-rules` | `loadCategoryRules()` | ✅ Working (BUG-1 fixed) |
 | Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ Working |
+| Utilities | `#page-utilities` | `loadUtilCategories()` + `loadUtilMerchants()` + `loadUtilDuplicates()` + `loadUtilHealth()` | ✅ Working |
 | Settings | `#page-settings` | `loadSettings()` | ✅ Working (BUG-3 fixed) |
 
 ### Global Features (visible on all pages)
@@ -331,6 +332,18 @@ TransactionAnalysis/
 - Detection engine: `src/finance_etl/recurring.py`
 - API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`
 
+**Utilities (`#page-utilities`)**
+- Sidebar nav item with pending-duplicates badge (between Categories and Settings)
+- 5 collapsible card sections following standard collapsible panel pattern:
+  - **Category List**: Full searchable taxonomy from `BUILT_IN_CATEGORY_MAP` + user categories; grouped by parent with subcategories; transaction counts per category; real-time JS filter
+  - **Merchant List**: All merchants with normalized name, raw name, transaction count, assigned category, last seen date; sortable (count/name/last seen); inline category edit via double-click; search filter
+  - **Rule Tester**: Paste transaction description → shows full classification trace: raw → merchant rule match → normalized merchant → category → parent
+  - **Duplicate Review**: Lists pending `duplicate_candidates` with side-by-side transaction details; action buttons: Keep Both / Remove Newer / Not a Duplicate; empty state message when clean
+  - **Data Health**: Read-only dashboard with 5 metrics (uncategorized txns, unreviewed txns, merchants without category, no merchant match, pending duplicates); each metric links to relevant page
+- **Near-Duplicate Detection**: Runs automatically after every import commit as part of `_commit_bg`; flags transactions with same merchant, amount within 1%, date within 3 days; results stored in `duplicate_candidates` table; non-blocking banner shown on import page linking to Duplicate Review
+- **Structured Category Picker**: Uncategorized Merchants input replaced with type-ahead dropdown populated from category taxonomy; "Parent > Subcategory" format; [ Custom ] option for free-text entry
+- API: `GET /duplicates`, `POST /duplicates/{id}/resolve`, `GET /utilities/categories`, `GET /utilities/merchants`, `POST /utilities/test-rule`, `GET /utilities/health`
+
 **Settings (`#page-settings`)**
 - Verbose API error messages toggle
 - Show logs panel on error toggle
@@ -408,8 +421,27 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 - `category` → `category_rules.raw_category` (soft, not enforced)
 
 **⚠️ Schema notes:**
-- 7 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`
+- 10 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`, `notes`, `is_split`, `split_parent_fingerprint`
 - No explicit UNIQUE constraint on `transaction_fingerprint` in DDL — dedup relies on the separate CREATE UNIQUE INDEX statement
+
+---
+
+### `duplicate_candidates` — near-duplicate detection results
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-increment via `seq_duplicate_candidates_id` |
+| `fingerprint_a` | TEXT NOT NULL | Existing transaction fingerprint |
+| `fingerprint_b` | TEXT NOT NULL | Newly imported transaction fingerprint |
+| `similarity_score` | DECIMAL(3,2) | 0.0–1.0 similarity score |
+| `reason` | TEXT | Human-readable explanation (e.g. "same merchant, amount within 1%, date within 2 days") |
+| `status` | TEXT DEFAULT 'pending' | `'pending'`, `'confirmed_duplicate'`, `'not_duplicate'` |
+| `detected_at` | TEXT | ISO timestamp of detection |
+| `resolved_at` | TEXT | ISO timestamp of resolution (nullable) |
+
+**Key relationships:**
+- `fingerprint_a` → `transactions_norm.transaction_fingerprint`
+- `fingerprint_b` → `transactions_norm.transaction_fingerprint`
 
 ---
 
@@ -837,7 +869,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.16.0
+**Current Version:** v2.17.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -867,6 +899,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.14.0 | 2026-03-10 | Collapsible panels + scroll containers on Merchants and Categories pages; each card panel gets expand/collapse toggle with item count badges; suggestion lists and rule tables capped with `max-height` + `overflow-y: auto`; collapse state persisted in localStorage; auto-expand on form open; responsive breakpoint for narrow viewports |
 | v2.15.0 | 2026-03-10 | Global transaction search + dashboard category drill-down; new `GET /transactions/search` endpoint with text and amount operators (>, <, range); persistent search bar in topbar visible on all pages; `/` shortcut focuses search; floating results panel with keyboard nav (↑↓ Enter Esc); click result navigates to CC/Bank tab with date pre-filtered and transaction highlighted; dashboard top-categories bar chart rows are now clickable — opens drill-down modal showing all transactions for that category + month with subtotal; "View All in Transactions" navigates to Bank tab with category pre-filtered; new `category_parent` filter on `GET /transactions` |
 | v2.16.0 | 2026-03-10 | Transaction Notes + Split Transactions; per-transaction `notes` TEXT field with inline popup editor (pencil icon, auto-save on Enter); new `PATCH /transactions/{fingerprint}` endpoint for notes updates; split transactions: `POST /transactions/{fingerprint}/split` divides one transaction into N sub-rows with category/amount/description; amounts validated to sum to parent; parent marked `is_split=TRUE` and excluded from all totals/queries via `_build_txn_where`; `DELETE /transactions/{fingerprint}/split` unsplits (removes children, restores parent); split children show "split" badge on description; split modal UI with dynamic row editor and remaining-amount tracker; new columns: `notes`, `is_split`, `split_parent_fingerprint` on `transactions_norm`; backup/restore updated for all 3 new columns |
+| v2.17.0 | 2026-03-10 | Duplicate detection + Utilities tab + category picker fix; near-duplicate detection runs automatically after every import commit — flags transactions with same merchant, amount within 1%, date within 3 days; results stored in new `duplicate_candidates` table; non-blocking banner shown post-import linking to Duplicate Review; new Utilities tab with 5 collapsible sections: Category List (searchable taxonomy with counts), Merchant List (sortable with inline category edit), Rule Tester (full classification trace), Duplicate Review (side-by-side comparison with resolve actions), Data Health (5 quality metrics with navigation links); structured category picker replaces free-text input in Uncategorized Merchants with type-ahead dropdown from taxonomy + custom option; new `GET /duplicates`, `POST /duplicates/{id}/resolve`, `GET /utilities/categories`, `GET /utilities/merchants`, `POST /utilities/test-rule`, `GET /utilities/health` endpoints; backup/restore updated for `duplicate_candidates` table |
 
 ### Version Increment Rules
 

@@ -46,6 +46,10 @@
     <a href="#" data-page="recurring-transactions">
       <span class="icon">🔄</span> Recurring
     </a>
+    <a href="#" data-page="utilities">
+      <span class="icon">🔧</span> Utilities
+      <span id="nav-dup-badge" class="nav-badge"></span>
+    </a>
     <a href="#" data-page="settings">
       <span class="icon">⚙️</span> Settings
     </a>
@@ -1299,6 +1303,116 @@
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         <input type="text" id="recurring-manual-merchant" placeholder="Merchant name" style="font-size:13px; padding:6px 10px; border:1px solid var(--border); border-radius:4px; width:240px;" />
         <button class="btn btn-primary btn-sm" onclick="manualMarkRecurring()">Mark as Recurring</button>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ─── UTILITIES PAGE ─── -->
+  <section id="page-utilities" class="page">
+
+    <!-- Section 1: Category List -->
+    <div class="card" id="util-card-categories">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Category List</span>
+          <span class="badge-count" id="util-cat-count" style="display:none;"></span>
+        </div>
+        <span class="collapse-arrow">▾</span>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="card-body">
+          <input type="text" id="util-cat-search" placeholder="Search categories…"
+                 oninput="_filterUtilCategories()"
+                 style="width:100%; max-width:320px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; margin-bottom:12px;" />
+          <div id="util-cat-list" style="font-size:13px;">
+            <span style="color:var(--text-muted);">Loading…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 2: Merchant List -->
+    <div class="card" id="util-card-merchants">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Merchant List</span>
+          <span class="badge-count" id="util-merch-count" style="display:none;"></span>
+        </div>
+        <span class="collapse-arrow">▾</span>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="card-body">
+          <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+            <input type="text" id="util-merch-search" placeholder="Search merchants…"
+                   oninput="_filterUtilMerchants()"
+                   style="flex:1; min-width:180px; max-width:320px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+            <select id="util-merch-sort" onchange="loadUtilMerchants()"
+                    style="padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:12px;">
+              <option value="txn_count">Sort: Count</option>
+              <option value="normalized_name">Sort: Name</option>
+              <option value="last_seen">Sort: Last Seen</option>
+            </select>
+          </div>
+          <div id="util-merch-list" class="suggestions-scroll" style="font-size:13px; max-height:400px; overflow-y:auto;">
+            <span style="color:var(--text-muted);">Loading…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Rule Tester -->
+    <div class="card" id="util-card-rule-tester">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title"><span>Rule Tester</span></div>
+        <span class="collapse-arrow">▾</span>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="card-body">
+          <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+            Paste a transaction description to see how it would be classified.
+          </p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="text" id="util-rule-input" placeholder="e.g. AMAZON PRIME MEMBERSHIP"
+                   style="flex:1; min-width:250px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;"
+                   onkeydown="if(event.key==='Enter')testRuleUtil()" />
+            <button class="btn btn-primary btn-sm" onclick="testRuleUtil()">Test</button>
+          </div>
+          <div id="util-rule-result" style="margin-top:12px; display:none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 4: Duplicate Review -->
+    <div class="card" id="util-card-duplicates">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Duplicate Review</span>
+          <span class="badge-count" id="util-dup-count" style="display:none;"></span>
+        </div>
+        <span class="collapse-arrow">▾</span>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="card-body">
+          <div id="util-dup-list" style="font-size:13px;">
+            <span style="color:var(--text-muted);">Loading…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 5: Data Health -->
+    <div class="card" id="util-card-health">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title"><span>Data Health</span></div>
+        <span class="collapse-arrow">▾</span>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="card-body">
+          <div id="util-health-list" style="font-size:13px;">
+            <span style="color:var(--text-muted);">Loading…</span>
+          </div>
+        </div>
       </div>
     </div>
 

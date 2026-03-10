@@ -50,6 +50,7 @@ function navigate(page) {
     'merchant-rules':   'Merchant Rules & Categories',
     'category-rules':   'Category Rules',
     'recurring-transactions': 'Recurring Transactions',
+    utilities:          'Utilities',
     settings:           'Settings & Logs',
   };
   document.getElementById('topbar-title').textContent = titles[page] || page;
@@ -63,6 +64,7 @@ function navigate(page) {
   if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); loadUncategorized(); _clearSuggestions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
+  if (page === 'utilities')          { loadUtilCategories(); loadUtilMerchants(); loadUtilDuplicates(); loadUtilHealth(); }
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -386,10 +388,28 @@ function pollRun(runId, cb, interval = 1500) {
 function onRunComplete(run) {
   if (run.status === 'success') {
     toast('Import complete!', 'success');
+    // Show duplicate detection banner if any found
+    if (run.duplicate_count > 0) {
+      _showDuplicateBanner(run.duplicate_count);
+    }
+    refreshDupBadge();
   } else if (run.status === 'failed') {
     toast(`Import failed: ${run.error || '(unknown error)'}`, 'error');
     maybeShowLogsOnError();
   }
+}
+
+function _showDuplicateBanner(count) {
+  const existing = document.getElementById('dup-banner');
+  if (existing) existing.remove();
+  const banner = document.createElement('div');
+  banner.id = 'dup-banner';
+  banner.className = 'dup-banner';
+  banner.innerHTML = `⚠️ ${count} possible duplicate transaction${count !== 1 ? 's' : ''} detected.
+    <a href="#" onclick="event.preventDefault(); navigate('utilities'); ensureCardExpanded('util-card-duplicates');">Review them in Utilities → Duplicate Review.</a>
+    <button onclick="this.parentElement.remove()" style="background:none; border:none; cursor:pointer; font-size:16px; color:var(--text-muted); margin-left:8px;">×</button>`;
+  const statusCard = document.getElementById('run-status');
+  if (statusCard) statusCard.parentElement.insertBefore(banner, statusCard.nextSibling);
 }
 
 // ── Run status card ──────────────────────────────────────────
@@ -3196,6 +3216,8 @@ async function loadUncategorized() {
       return;
     }
     _updateBadge('uncategorized-count', data.merchants.length);
+    // Ensure taxonomy is loaded for picker
+    _ensureCategoryTaxonomy();
     container.innerHTML = data.merchants.map(m => {
       const safeId  = m.replace(/[^a-zA-Z0-9]/g, '_');
       // JSON.stringify wraps in double-quotes; escape them for the HTML attribute
@@ -3203,9 +3225,7 @@ async function loadUncategorized() {
       return `
         <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
           <span style="flex:1; font-size:13px;">${esc(m)}</span>
-          <input type="text" placeholder="Category…"
-                 id="cat-input-${safeId}"
-                 style="width:180px; padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;" />
+          ${_buildCategoryPickerHTML('cat-input-' + safeId, jsonArg)}
           <button class="btn btn-primary btn-sm" onclick="assignCategory(${jsonArg})">Assign</button>
         </div>`;
     }).join('');
@@ -5347,6 +5367,339 @@ function closeOnboarding() {
 function onboardingGo(page) {
   closeOnboarding();
   navigate(page);
+}
+
+// ── Utilities Tab ─────────────────────────────────────────────
+
+// -- Category List --
+let _utilCatData = [];
+async function loadUtilCategories() {
+  const el = document.getElementById('util-cat-list');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text-muted);">Loading…</span>';
+  try {
+    const data = await api('GET', '/utilities/categories');
+    _utilCatData = data.categories || [];
+    _renderUtilCategories(_utilCatData);
+    const total = _utilCatData.reduce((s, g) => s + g.subcategories.length, 0);
+    _updateBadge('util-cat-count', total);
+  } catch (err) {
+    el.innerHTML = `<span style="color:var(--text-muted);">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+function _renderUtilCategories(cats) {
+  const el = document.getElementById('util-cat-list');
+  if (!cats.length) { el.innerHTML = '<span style="color:var(--text-muted);">No categories found.</span>'; return; }
+  el.innerHTML = cats.map(g => {
+    const subs = g.subcategories.map(s =>
+      `<div style="display:flex; justify-content:space-between; padding:3px 0 3px 24px; border-bottom:1px solid var(--border);">
+        <span>${esc(s.name)}</span>
+        <span class="mono" style="color:var(--text-muted); font-size:11px;">${s.count}</span>
+      </div>`
+    ).join('');
+    return `<div style="margin-bottom:8px;">
+      <div style="font-weight:700; padding:6px 0; border-bottom:2px solid var(--border); display:flex; justify-content:space-between;">
+        <span>${esc(g.parent)}</span>
+        <span class="mono" style="font-size:11px; color:var(--text-muted);">${g.count}</span>
+      </div>${subs}</div>`;
+  }).join('');
+}
+
+function _filterUtilCategories() {
+  const q = (document.getElementById('util-cat-search')?.value || '').toLowerCase();
+  if (!q) { _renderUtilCategories(_utilCatData); return; }
+  const filtered = _utilCatData.map(g => {
+    const matchedSubs = g.subcategories.filter(s => s.name.toLowerCase().includes(q) || g.parent.toLowerCase().includes(q));
+    if (!matchedSubs.length) return null;
+    return { ...g, subcategories: matchedSubs, count: matchedSubs.reduce((s, x) => s + x.count, 0) };
+  }).filter(Boolean);
+  _renderUtilCategories(filtered);
+}
+
+// -- Merchant List --
+let _utilMerchData = [];
+async function loadUtilMerchants() {
+  const el = document.getElementById('util-merch-list');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text-muted);">Loading…</span>';
+  try {
+    const data = await api('GET', '/utilities/merchants');
+    _utilMerchData = data.merchants || [];
+    _sortAndRenderMerchants();
+    _updateBadge('util-merch-count', data.count || 0);
+  } catch (err) {
+    el.innerHTML = `<span style="color:var(--text-muted);">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+function _sortAndRenderMerchants() {
+  const sortBy = document.getElementById('util-merch-sort')?.value || 'txn_count';
+  const sorted = [..._utilMerchData].sort((a, b) => {
+    if (sortBy === 'normalized_name') return (a.normalized_name || '').localeCompare(b.normalized_name || '');
+    if (sortBy === 'last_seen') return (b.last_seen || '').localeCompare(a.last_seen || '');
+    return (b.txn_count || 0) - (a.txn_count || 0);
+  });
+  _renderUtilMerchants(sorted);
+}
+
+function _renderUtilMerchants(merchants) {
+  const el = document.getElementById('util-merch-list');
+  if (!merchants.length) { el.innerHTML = '<span style="color:var(--text-muted);">No merchants found.</span>'; return; }
+  el.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:12px;">
+    <thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
+      <th style="padding:4px 6px;">Merchant</th>
+      <th style="padding:4px 6px;">Raw Name</th>
+      <th style="padding:4px 6px; text-align:right;">Count</th>
+      <th style="padding:4px 6px;">Category</th>
+      <th style="padding:4px 6px;">Last Seen</th>
+    </tr></thead><tbody>` +
+    merchants.map(m => `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:4px 6px;">${esc(m.normalized_name)}</td>
+      <td style="padding:4px 6px; color:var(--text-muted);">${esc(m.raw_name)}</td>
+      <td style="padding:4px 6px; text-align:right;" class="mono">${m.txn_count}</td>
+      <td style="padding:4px 6px;" ondblclick="inlineUtilMerchCatEdit(this, '${esc(m.normalized_name)}')" title="Double-click to edit" class="util-cat-cell">${esc(m.assigned_category || '—')}</td>
+      <td style="padding:4px 6px; color:var(--text-muted);">${m.last_seen || '—'}</td>
+    </tr>`).join('') +
+    '</tbody></table>';
+}
+
+function _filterUtilMerchants() {
+  const q = (document.getElementById('util-merch-search')?.value || '').toLowerCase();
+  if (!q) { _sortAndRenderMerchants(); return; }
+  const filtered = _utilMerchData.filter(m =>
+    (m.normalized_name || '').toLowerCase().includes(q) ||
+    (m.raw_name || '').toLowerCase().includes(q) ||
+    (m.assigned_category || '').toLowerCase().includes(q)
+  );
+  _renderUtilMerchants(filtered);
+}
+
+function inlineUtilMerchCatEdit(td, merchant) {
+  const current = td.textContent.trim() === '—' ? '' : td.textContent.trim();
+  td.innerHTML = `<input type="text" value="${esc(current)}" style="width:100%; padding:2px 4px; font-size:12px; border:1px solid var(--primary); border-radius:3px;"
+    onblur="saveUtilMerchCat(this, '${esc(merchant)}')"
+    onkeydown="if(event.key==='Enter')this.blur(); if(event.key==='Escape'){this.value='${esc(current)}'; this.blur();}" />`;
+  td.querySelector('input').focus();
+}
+
+async function saveUtilMerchCat(input, merchant) {
+  const category = input.value.trim();
+  const td = input.closest('td');
+  if (!category) { td.textContent = '—'; return; }
+  try {
+    await api('POST', '/merchant-categories', { merchant, category });
+    td.textContent = category;
+    toast(`Category "${category}" assigned to "${merchant}".`, 'success');
+  } catch (err) {
+    td.textContent = '—';
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+// -- Rule Tester --
+async function testRuleUtil() {
+  const input = document.getElementById('util-rule-input');
+  const resultEl = document.getElementById('util-rule-result');
+  if (!input || !resultEl) return;
+  const desc = input.value.trim();
+  if (!desc) { toast('Enter a description first.', 'error'); return; }
+  resultEl.style.display = 'block';
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Testing…</span>';
+  try {
+    const data = await api('POST', '/utilities/test-rule', { description: desc });
+    let html = '<div style="background:var(--bg-secondary); border-radius:6px; padding:12px; font-size:13px;">';
+    html += `<div style="margin-bottom:6px;"><strong>Input:</strong> ${esc(data.description)}</div>`;
+    if (data.merchant_rule) {
+      html += `<div style="margin-bottom:6px;">
+        <strong>Merchant Rule:</strong> pattern="${esc(data.merchant_rule.pattern)}" (${esc(data.merchant_rule.match_type)})
+        → <strong>${esc(data.merchant_rule.merchant)}</strong></div>`;
+    } else {
+      html += '<div style="margin-bottom:6px; color:var(--text-muted);"><strong>Merchant Rule:</strong> No rule matched</div>';
+    }
+    html += `<div style="margin-bottom:6px;"><strong>Merchant:</strong> ${data.merchant ? esc(data.merchant) : '<span style="color:var(--text-muted);">none</span>'}</div>`;
+    html += `<div style="margin-bottom:6px;"><strong>Category:</strong> ${data.category ? esc(data.category) : '<span style="color:var(--text-muted);">none</span>'}</div>`;
+    html += `<div><strong>Parent:</strong> ${data.parent ? esc(data.parent) : '<span style="color:var(--text-muted);">none</span>'}</div>`;
+    html += '</div>';
+    resultEl.innerHTML = html;
+  } catch (err) {
+    resultEl.innerHTML = `<span style="color:var(--danger);">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+// -- Duplicate Review --
+async function loadUtilDuplicates() {
+  const el = document.getElementById('util-dup-list');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text-muted);">Loading…</span>';
+  try {
+    const data = await api('GET', '/duplicates?status=pending');
+    const rows = data.rows || [];
+    _updateBadge('util-dup-count', rows.length);
+    refreshDupBadge();
+    if (!rows.length) {
+      el.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted);">No duplicate candidates — your data looks clean ✓</div>';
+      return;
+    }
+    el.innerHTML = rows.map(r => `
+      <div class="dup-pair" style="border:1px solid var(--border); border-radius:6px; padding:12px; margin-bottom:10px;">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:12px; margin-bottom:8px;">
+          <div>
+            <div style="font-weight:700; margin-bottom:4px; color:var(--text-muted);">Existing Transaction</div>
+            <div>${r.date_a || '—'} · ${esc(r.desc_a || '')} · ${_fmt$(r.amount_a)} · ${esc(r.account_a || '')}</div>
+          </div>
+          <div>
+            <div style="font-weight:700; margin-bottom:4px; color:var(--text-muted);">New Transaction</div>
+            <div>${r.date_b || '—'} · ${esc(r.desc_b || '')} · ${_fmt$(r.amount_b)} · ${esc(r.account_b || '')}</div>
+          </div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Reason: ${esc(r.reason || '')} · Score: ${r.similarity_score}</div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="resolveDup(${r.id}, 'keep_both')">Keep Both</button>
+          <button class="btn btn-danger btn-sm" onclick="resolveDup(${r.id}, 'delete_b')">Remove Newer</button>
+          <button class="btn btn-secondary btn-sm" onclick="resolveDup(${r.id}, 'not_duplicate')">Not a Duplicate</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    el.innerHTML = `<span style="color:var(--text-muted);">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+async function resolveDup(id, action) {
+  try {
+    await api('POST', `/duplicates/${id}/resolve`, { action });
+    toast(`Duplicate resolved: ${action.replace('_', ' ')}`, 'success');
+    loadUtilDuplicates();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function refreshDupBadge() {
+  try {
+    const data = await api('GET', '/duplicates?status=pending');
+    const count = (data.rows || []).length;
+    const badge = document.getElementById('nav-dup-badge');
+    if (badge) badge.textContent = count > 0 ? count : '';
+  } catch { /* non-critical */ }
+}
+
+// -- Data Health --
+async function loadUtilHealth() {
+  const el = document.getElementById('util-health-list');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text-muted);">Loading…</span>';
+  try {
+    const h = await api('GET', '/utilities/health');
+    el.innerHTML = `
+      <div class="health-grid">
+        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('bank-transactions');">
+          <span class="health-label">Uncategorized transactions</span>
+          <span class="health-value${h.uncategorized_transactions > 0 ? ' health-warn' : ''}">${h.uncategorized_transactions}</span>
+        </a>
+        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('bank-transactions');">
+          <span class="health-label">Unreviewed transactions</span>
+          <span class="health-value${h.unreviewed_transactions > 0 ? ' health-warn' : ''}">${h.unreviewed_transactions}</span>
+        </a>
+        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('merchant-rules');">
+          <span class="health-label">Merchants without a category</span>
+          <span class="health-value${h.merchants_without_category > 0 ? ' health-warn' : ''}">${h.merchants_without_category}</span>
+        </a>
+        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('merchant-rules');">
+          <span class="health-label">Transactions with no merchant match</span>
+          <span class="health-value${h.no_merchant_match > 0 ? ' health-warn' : ''}">${h.no_merchant_match}</span>
+        </a>
+        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('utilities'); setTimeout(()=>ensureCardExpanded('util-card-duplicates'),100);">
+          <span class="health-label">Pending duplicate candidates</span>
+          <span class="health-value${h.pending_duplicates > 0 ? ' health-warn' : ''}">${h.pending_duplicates}</span>
+        </a>
+      </div>`;
+  } catch (err) {
+    el.innerHTML = `<span style="color:var(--text-muted);">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+// ── Category Picker (shared) ──────────────────────────────────
+// Cached taxonomy for category picker dropdowns
+let _categoryTaxonomy = null;
+
+async function _ensureCategoryTaxonomy() {
+  if (_categoryTaxonomy) return _categoryTaxonomy;
+  try {
+    const data = await api('GET', '/utilities/categories');
+    _categoryTaxonomy = data.categories || [];
+  } catch {
+    _categoryTaxonomy = [];
+  }
+  return _categoryTaxonomy;
+}
+
+function _buildCategoryPickerHTML(inputId, safeMerchantArg) {
+  return `<div class="cat-picker-wrap" style="position:relative; width:220px;">
+    <input type="text" id="${inputId}" placeholder="Search categories…"
+           class="cat-picker-input"
+           autocomplete="off"
+           onfocus="_openCatPicker(this)"
+           oninput="_filterCatPicker(this)" />
+    <div class="cat-picker-dropdown" style="display:none;"></div>
+  </div>`;
+}
+
+function _openCatPicker(input) {
+  const wrap = input.closest('.cat-picker-wrap');
+  const dd = wrap.querySelector('.cat-picker-dropdown');
+  _ensureCategoryTaxonomy().then(cats => {
+    _renderCatPickerOptions(dd, cats, '');
+    dd.style.display = 'block';
+  });
+  // Close on click outside
+  setTimeout(() => {
+    const closer = (e) => {
+      if (!wrap.contains(e.target)) { dd.style.display = 'none'; document.removeEventListener('click', closer); }
+    };
+    document.addEventListener('click', closer);
+  }, 0);
+}
+
+function _filterCatPicker(input) {
+  const wrap = input.closest('.cat-picker-wrap');
+  const dd = wrap.querySelector('.cat-picker-dropdown');
+  const q = input.value.toLowerCase();
+  _ensureCategoryTaxonomy().then(cats => {
+    _renderCatPickerOptions(dd, cats, q);
+    dd.style.display = 'block';
+  });
+}
+
+function _renderCatPickerOptions(dd, cats, query) {
+  let html = '';
+  for (const group of cats) {
+    for (const sub of group.subcategories) {
+      const label = `${group.parent} > ${sub.name}`;
+      if (query && !label.toLowerCase().includes(query)) continue;
+      html += `<div class="cat-picker-option" onclick="_selectCatOption(this, '${esc(sub.name)}')"
+                title="${esc(label)}">${esc(label)}</div>`;
+    }
+  }
+  html += `<div class="cat-picker-option cat-picker-custom" onclick="_selectCatCustom(this)">[ Custom ]</div>`;
+  dd.innerHTML = html || '<div style="padding:6px 8px; color:var(--text-muted); font-size:11px;">No matches</div>';
+}
+
+function _selectCatOption(optEl, value) {
+  const wrap = optEl.closest('.cat-picker-wrap');
+  const input = wrap.querySelector('.cat-picker-input');
+  input.value = value;
+  wrap.querySelector('.cat-picker-dropdown').style.display = 'none';
+}
+
+function _selectCatCustom(optEl) {
+  const wrap = optEl.closest('.cat-picker-wrap');
+  const input = wrap.querySelector('.cat-picker-input');
+  input.value = '';
+  input.placeholder = 'Type custom category…';
+  wrap.querySelector('.cat-picker-dropdown').style.display = 'none';
+  input.focus();
 }
 
 // Trigger onboarding check after initial load
