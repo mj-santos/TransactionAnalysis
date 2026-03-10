@@ -265,6 +265,14 @@ TransactionAnalysis/
 - API: `GET /reports`, `GET /reports/{name}`, `GET /charts/{name}`, `POST /reports/query`, `GET /metric-docs/{topic}`
 
 **Merchants (`#page-merchant-rules`)**
+- **Merchant Intelligence** panel: `loadMerchantAnalytics()` → `GET /merchant-analytics`
+  - Per-merchant: total spend all-time, monthly average, transaction frequency, months active, last transaction date
+  - 3-month trend indicator (increasing/decreasing/flat) with MoM percentage
+  - Accelerating spend flag (red badge) for >20% MoM increase
+  - Mini sparkline bars showing last 3 months of spend per merchant
+  - Sort by: total spend, frequency, recent activity, trend
+  - Search/filter by merchant name (debounced)
+  - KPI row: total merchants, accelerating count, shown count
 - Recommended Normalization Rules panel: `loadRuleSuggestions()` → `GET /merchant-rules/suggestions`
   - Analyzes raw descriptions; suggests pattern → merchant rules
   - Accept, Edit, Dismiss per suggestion; Accept All
@@ -276,7 +284,7 @@ TransactionAnalysis/
 - Uncategorized Merchants panel: `loadUncategorized()` → `GET /merchant-categories/uncategorized`
   - Inline category assignment dropdown + assign button per merchant
   - Backfills category onto all transactions for that merchant
-- API: Full CRUD on `/merchant-rules`, `/merchant-categories`, `/normalize/apply`, `/normalize/{job_id}`
+- API: Full CRUD on `/merchant-rules`, `/merchant-categories`, `/normalize/apply`, `/normalize/{job_id}`, `GET /merchant-analytics`
 
 **Categories (`#page-category-rules`)**
 - Suggested Category Mappings panel: `loadCatSuggestions()` → `GET /category-rules/suggestions`
@@ -757,7 +765,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.8.0
+**Current Version:** v2.9.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -777,6 +785,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.6.0 | 2026-03-10 | Sprint 5 — Transaction Tagging: custom tags with name/color, many-to-many tag assignment per transaction, tag filtering in CC/Bank views, per-tag totals in Settings, tag popup UI, backup/restore support for tags; new `tags`, `transaction_tags` tables; new `GET/POST/PUT/DELETE /tags`, `POST/DELETE /transactions/tags`, `GET /transactions/{fp}/tags`, `GET /tags/totals` endpoints |
 | v2.7.0 | 2026-03-10 | Sprint 6 — Savings Goals Tracker: create goals with name/target/date/account, progress bar UI, manual progress updates (set or add), auto-calculated monthly savings needed, suggested monthly savings from avg net cash flow, dashboard widget with inline CRUD; new `savings_goals` table; new `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions` endpoints; backup/restore support |
 | v2.8.0 | 2026-03-10 | Sprint 7 — Monthly Summary Engine: auto-generated plain-language monthly summaries with total spent/income/net, vs-prior-month delta, top 3 categories with deltas, top 3 merchants, biggest single transaction; modal viewer with month navigation, save/regenerate, browsable history of stored summaries; new `monthly_summaries` table; new `POST /monthly-summaries/generate`, `GET /monthly-summaries`, `GET /monthly-summaries/{year}/{month}`, `DELETE /monthly-summaries/{year}/{month}` endpoints; backup/restore support |
+| v2.9.0 | 2026-03-10 | Sprint 8 — Merchant Intelligence: per-merchant analytics with total spend, monthly avg, transaction frequency, months active, last transaction date; 3-month trend indicator (increasing/decreasing/flat) with MoM %; accelerating spend flag (>20% MoM); mini sparkline bars; sort by total spend/frequency/recent/trend; search filter; KPI summary (total merchants, accelerating count); new `GET /merchant-analytics` endpoint |
 
 ### Version Increment Rules
 
@@ -859,6 +868,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `DELETE` | `/budgets/{id}` | budgets | Delete a budget goal | 🟢 Called |
 | `GET` | `/budgets/rebalance` | budgets | Analyse avg spend vs budget, generate rebalance suggestions | 🟢 Called |
 | `POST` | `/budgets/rebalance/apply` | budgets | Apply user-selected budget adjustments | 🟢 Called |
+| `GET` | `/merchant-analytics` | merchant | Per-merchant spend, trends, frequency, acceleration flags | 🟢 Called |
 | `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions | 🟢 Called |
 | `GET` | `/cashflow/summary` | cashflow | Income vs spending vs net, monthly breakdown, category breakdown, MoM delta | 🟢 Called |
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
