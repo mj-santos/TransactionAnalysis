@@ -255,7 +255,9 @@ TransactionAnalysis/
 - Tag assignment popup: checkboxes for all tags, toggle to assign/remove per transaction
 - **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar appears when ≥1 selected; actions: mark reviewed, assign category, assign tag; selection count badge; clear selection button
 - **Inline Category Editing**: double-click category cell to edit in-place; Enter saves via `/merchant-categories`, Escape/blur cancels; no modal required
-- API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`
+- **Transaction Notes**: per-transaction notes via pencil icon; inline popup editor with textarea; auto-save on Enter or Save click; PATCH endpoint updates `notes` field
+- **Split Transactions**: split one transaction into N sub-rows across categories; parent marked `is_split=TRUE` and excluded from totals; children carry `split_parent_fingerprint`; "split" badge on child descriptions; unsplit restores parent and removes children
+- API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`, `PATCH /transactions/{fingerprint}`, `POST /transactions/{fingerprint}/split`, `DELETE /transactions/{fingerprint}/split`
 
 **Cash Flow (`#page-cashflow`)**
 - Summary KPI cards: Income (green), Spending (red), Net (color-coded), Month-over-Month delta
@@ -393,6 +395,9 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 | `category_normalized` | TEXT | Normalized category from category rules (added by migration) |
 | `category_parent` | TEXT | Parent group (e.g. "Food & Dining") from category rules (added by migration) |
 | `unreviewed` | BOOLEAN DEFAULT TRUE | Review tracking flag (added by migration) |
+| `notes` | TEXT | User-editable note per transaction (added by migration) |
+| `is_split` | BOOLEAN DEFAULT FALSE | TRUE = parent row that has been split; excluded from totals (added by migration) |
+| `split_parent_fingerprint` | TEXT | FK to parent's `transaction_fingerprint`; set on child split rows (added by migration) |
 
 **Index:** `UNIQUE INDEX idx_tx_fingerprint ON transactions_norm(transaction_fingerprint)`
 
@@ -832,7 +837,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.15.0
+**Current Version:** v2.16.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -861,6 +866,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.13.2 | 2026-03-10 | Centralized income filter constant (`INCOME_FILTER` in `utils/query_helpers.py`); replaced all 10 inline income conditions with constant reference; added custom report builder regression test and tripwire test for constant integrity; 264 total tests |
 | v2.14.0 | 2026-03-10 | Collapsible panels + scroll containers on Merchants and Categories pages; each card panel gets expand/collapse toggle with item count badges; suggestion lists and rule tables capped with `max-height` + `overflow-y: auto`; collapse state persisted in localStorage; auto-expand on form open; responsive breakpoint for narrow viewports |
 | v2.15.0 | 2026-03-10 | Global transaction search + dashboard category drill-down; new `GET /transactions/search` endpoint with text and amount operators (>, <, range); persistent search bar in topbar visible on all pages; `/` shortcut focuses search; floating results panel with keyboard nav (↑↓ Enter Esc); click result navigates to CC/Bank tab with date pre-filtered and transaction highlighted; dashboard top-categories bar chart rows are now clickable — opens drill-down modal showing all transactions for that category + month with subtotal; "View All in Transactions" navigates to Bank tab with category pre-filtered; new `category_parent` filter on `GET /transactions` |
+| v2.16.0 | 2026-03-10 | Transaction Notes + Split Transactions; per-transaction `notes` TEXT field with inline popup editor (pencil icon, auto-save on Enter); new `PATCH /transactions/{fingerprint}` endpoint for notes updates; split transactions: `POST /transactions/{fingerprint}/split` divides one transaction into N sub-rows with category/amount/description; amounts validated to sum to parent; parent marked `is_split=TRUE` and excluded from all totals/queries via `_build_txn_where`; `DELETE /transactions/{fingerprint}/split` unsplits (removes children, restores parent); split children show "split" badge on description; split modal UI with dynamic row editor and remaining-amount tracker; new columns: `notes`, `is_split`, `split_parent_fingerprint` on `transactions_norm`; backup/restore updated for all 3 new columns |
 
 ### Version Increment Rules
 

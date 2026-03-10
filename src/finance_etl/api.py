@@ -1410,6 +1410,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "SELECT transaction_fingerprint FROM transaction_tags WHERE tag_id = ?)"
             )
             params.append(int(tag))
+        # Exclude split parents from results (children represent the split)
+        where.append("COALESCE(is_split, FALSE) = FALSE")
         return where, params
 
     @app.get("/transactions", tags=["transactions"], summary="List transactions with filters")
@@ -1471,7 +1473,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                     "transaction_date", "description", "merchant", "category",
                     "amount", "currency", "bank_name", "account_name", "account_id",
                     "statement_type", "transaction_fingerprint",
-                    "unreviewed",
+                    "unreviewed", "notes",
+                    "is_split", "split_parent_fingerprint",
                 ]
                 sql = (f"SELECT {', '.join(col_names)} FROM transactions_norm{where_sql}"
                        f" ORDER BY {safe_sort} {safe_dir}"
@@ -1547,7 +1550,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         col_names = [
             "transaction_date", "description", "merchant", "amount",
             "category_normalized", "account_name", "statement_type",
-            "transaction_fingerprint",
+            "transaction_fingerprint", "notes",
         ]
         try:
             conn = get_connection(db_path)
@@ -1705,6 +1708,172 @@ No cloud services, no external dependencies — all data stays on your machine.
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
         return {"updated": updated}
+
+    # ── PATCH a single transaction (notes, future fields) ──────────────────
+    @app.patch(
+        "/transactions/{fingerprint}",
+        tags=["transactions"],
+        summary="Update mutable fields on a single transaction",
+    )
+    def patch_transaction(fingerprint: str, body: dict):
+        """
+        Update mutable fields on one transaction identified by its fingerprint.
+
+        Supported fields: notes (TEXT | null)
+        """
+        allowed = {"notes"}
+        updates = {k: v for k, v in body.items() if k in allowed}
+        if not updates:
+            raise HTTPException(status_code=400, detail=f"No valid fields. Allowed: {sorted(allowed)}")
+        set_parts = [f"{col} = ?" for col in updates]
+        vals = list(updates.values()) + [fingerprint]
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                f"UPDATE transactions_norm SET {', '.join(set_parts)} "
+                f"WHERE transaction_fingerprint = ?",
+                vals,
+            )
+            row = conn.execute("SELECT changes()").fetchone()
+            updated = int(row[0]) if row else 0
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
+        if updated == 0:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return {"updated": updated}
+
+    # ── Split a transaction into sub-transactions ────────────────────────────
+    @app.post(
+        "/transactions/{fingerprint}/split",
+        tags=["transactions"],
+        summary="Split a transaction into multiple sub-transactions",
+    )
+    def split_transaction(fingerprint: str, body: dict):
+        """
+        Split one transaction into N sub-transactions.
+
+        Body: {"splits": [{"category": "Groceries", "amount": -30.00, "description": "optional"}, ...]}
+
+        Rules:
+        - Sum of split amounts must equal the parent's amount.
+        - Parent row is marked is_split=TRUE and excluded from totals.
+        - Each child gets a derived fingerprint: parent_fp + '_split_' + index.
+        """
+        splits = body.get("splits", [])
+        if not splits or len(splits) < 2:
+            raise HTTPException(status_code=400, detail="At least 2 splits required.")
+        try:
+            conn = get_connection(db_path)
+            parent = conn.execute(
+                "SELECT * FROM transactions_norm WHERE transaction_fingerprint = ?",
+                [fingerprint],
+            ).fetchone()
+            if not parent:
+                conn.close()
+                raise HTTPException(status_code=404, detail="Transaction not found")
+            parent_cols = [desc[0] for desc in conn.description]
+            parent_dict = dict(zip(parent_cols, parent))
+
+            if parent_dict.get("is_split"):
+                conn.close()
+                raise HTTPException(status_code=400, detail="Transaction is already split.")
+            if parent_dict.get("split_parent_fingerprint"):
+                conn.close()
+                raise HTTPException(status_code=400, detail="Cannot split a child transaction.")
+
+            parent_amount = float(parent_dict["amount"])
+            split_total = sum(float(s["amount"]) for s in splits)
+            if abs(split_total - parent_amount) > 0.01:
+                conn.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Split amounts ({split_total:.2f}) must equal parent amount ({parent_amount:.2f}).",
+                )
+
+            # Mark parent as split
+            conn.execute(
+                "UPDATE transactions_norm SET is_split = TRUE WHERE transaction_fingerprint = ?",
+                [fingerprint],
+            )
+
+            # Insert child rows
+            now = _isoformat(conn.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0])
+            for idx, s in enumerate(splits):
+                child_fp = f"{fingerprint}_split_{idx}"
+                conn.execute(
+                    """INSERT INTO transactions_norm (
+                         transaction_date, posted_date, description, merchant,
+                         category, amount, currency, bank_name, account_name,
+                         account_id, source_file, source_row, file_hash,
+                         transaction_fingerprint, ingested_at, statement_type,
+                         run_id, transaction_subtype, resolved_amount,
+                         category_normalized, category_parent, unreviewed,
+                         notes, is_split, split_parent_fingerprint
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        parent_dict["transaction_date"], parent_dict.get("posted_date"),
+                        s.get("description", parent_dict["description"]),
+                        s.get("merchant", parent_dict.get("merchant")),
+                        s.get("category", parent_dict.get("category")),
+                        float(s["amount"]),
+                        parent_dict.get("currency", "USD"),
+                        parent_dict["bank_name"], parent_dict["account_name"],
+                        parent_dict["account_id"], parent_dict["source_file"],
+                        parent_dict["source_row"], parent_dict["file_hash"],
+                        child_fp, now, parent_dict.get("statement_type"),
+                        parent_dict.get("run_id"), parent_dict.get("transaction_subtype"),
+                        abs(float(s["amount"])),
+                        s.get("category_normalized", parent_dict.get("category_normalized")),
+                        s.get("category_parent", parent_dict.get("category_parent")),
+                        True, s.get("notes"), False, fingerprint,
+                    ],
+                )
+            conn.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Split failed: {exc}") from exc
+        return {"parent": fingerprint, "children": len(splits)}
+
+    # ── Unsplit: remove children, restore parent ─────────────────────────────
+    @app.delete(
+        "/transactions/{fingerprint}/split",
+        tags=["transactions"],
+        summary="Remove split children and restore the parent transaction",
+    )
+    def unsplit_transaction(fingerprint: str):
+        """Remove all split children and set is_split=FALSE on the parent."""
+        try:
+            conn = get_connection(db_path)
+            # Verify parent exists and is split
+            parent = conn.execute(
+                "SELECT is_split FROM transactions_norm WHERE transaction_fingerprint = ?",
+                [fingerprint],
+            ).fetchone()
+            if not parent:
+                conn.close()
+                raise HTTPException(status_code=404, detail="Transaction not found")
+            if not parent[0]:
+                conn.close()
+                raise HTTPException(status_code=400, detail="Transaction is not split.")
+            # Delete children
+            conn.execute(
+                "DELETE FROM transactions_norm WHERE split_parent_fingerprint = ?",
+                [fingerprint],
+            )
+            deleted = int(conn.execute("SELECT changes()").fetchone()[0])
+            # Restore parent
+            conn.execute(
+                "UPDATE transactions_norm SET is_split = FALSE WHERE transaction_fingerprint = ?",
+                [fingerprint],
+            )
+            conn.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Unsplit failed: {exc}") from exc
+        return {"parent": fingerprint, "children_removed": deleted}
 
     @app.post("/transactions/mark-all-reviewed", tags=["transactions"],
               summary="Mark all filtered transactions as reviewed")
@@ -4766,8 +4935,9 @@ No cloud services, no external dependencies — all data stays on your machine.
                          account_id, source_file, source_row, file_hash,
                          transaction_fingerprint, ingested_at, statement_type,
                          run_id, transaction_subtype, resolved_amount,
-                         category_normalized, category_parent, unreviewed
-                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         category_normalized, category_parent, unreviewed,
+                         notes, is_split, split_parent_fingerprint
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [
                         r.get("transaction_date"), r.get("posted_date"),
                         r.get("description", ""), r.get("merchant"),
@@ -4780,6 +4950,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                         r.get("run_id"), r.get("transaction_subtype"),
                         r.get("resolved_amount"), r.get("category_normalized"),
                         r.get("category_parent"), r.get("unreviewed", True),
+                        r.get("notes"), r.get("is_split", False),
+                        r.get("split_parent_fingerprint"),
                     ],
                 )
                 tx_count += 1
