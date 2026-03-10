@@ -206,6 +206,73 @@
       </div>
     </div>
 
+    <!-- Net Worth Tracker -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Net Worth</span>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="takeNwSnapshot()">Save Snapshot</button>
+          <button class="btn btn-secondary btn-sm" onclick="openNwForm()">+ Add Account</button>
+        </div>
+      </div>
+      <!-- Net worth KPI row -->
+      <div id="nw-kpi-row" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:8px; margin-bottom:12px;">
+        <div style="text-align:center;">
+          <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase;">Assets</div>
+          <div id="nw-assets" style="font-size:18px; font-weight:700; color:#22c55e;">$0</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase;">Liabilities</div>
+          <div id="nw-liabilities" style="font-size:18px; font-weight:700; color:#ef4444;">$0</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase;">Net Worth</div>
+          <div id="nw-total" style="font-size:18px; font-weight:700;">$0</div>
+          <div id="nw-trend" style="font-size:11px; color:var(--text-muted);"></div>
+        </div>
+      </div>
+      <!-- Account list -->
+      <div id="nw-accounts-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+      <!-- Snapshot history (collapsible) -->
+      <div id="nw-history-toggle" style="display:none; margin-top:12px;">
+        <button class="btn btn-secondary btn-sm" onclick="toggleNwHistory()" style="font-size:11px;">Show History</button>
+      </div>
+      <div id="nw-history-panel" style="display:none; margin-top:8px;">
+        <div style="font-size:12px; font-weight:600; margin-bottom:6px;">Net Worth History</div>
+        <div id="nw-chart" style="display:flex; align-items:flex-end; gap:2px; height:80px; margin-bottom:8px;"></div>
+        <div id="nw-history-list" style="max-height:200px; overflow-y:auto;"></div>
+      </div>
+      <!-- Add/Edit account form (hidden) -->
+      <div id="nw-form" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt,#f8f9fa); border-radius:8px;">
+        <input type="hidden" id="nw-edit-id" value="" />
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:8px;">
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Account Name
+            <input type="text" id="nw-name" placeholder="e.g. Chase Checking" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Type
+            <select id="nw-type" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
+              <option value="checking">Checking</option>
+              <option value="savings">Savings</option>
+              <option value="investment">Investment</option>
+              <option value="credit_card">Credit Card</option>
+              <option value="loan">Loan</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Balance ($)
+            <input type="number" id="nw-balance" placeholder="0" step="0.01" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+          </label>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary btn-sm" onclick="saveNwAccount()">Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="closeNwForm()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Recent transactions -->
     <div class="card">
       <div class="card-title">Recent Transactions</div>

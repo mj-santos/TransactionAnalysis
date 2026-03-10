@@ -301,6 +301,34 @@ CREATE TABLE IF NOT EXISTS monthly_summaries (
   UNIQUE(year, month)
 )
 """,
+
+    # ── Net Worth Accounts ─────────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_nw_accounts_id",
+    """
+CREATE TABLE IF NOT EXISTS nw_accounts (
+  id         BIGINT DEFAULT nextval('seq_nw_accounts_id') PRIMARY KEY,
+  name       TEXT    NOT NULL,
+  acct_type  TEXT    NOT NULL,
+  balance    DECIMAL(18,2) NOT NULL DEFAULT 0,
+  is_asset   BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL
+)
+""",
+
+    # ── Net Worth Snapshots ────────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_nw_snapshots_id",
+    """
+CREATE TABLE IF NOT EXISTS nw_snapshots (
+  id            BIGINT DEFAULT nextval('seq_nw_snapshots_id') PRIMARY KEY,
+  snapshot_date TEXT    NOT NULL,
+  total_assets  DECIMAL(18,2) NOT NULL DEFAULT 0,
+  total_liab    DECIMAL(18,2) NOT NULL DEFAULT 0,
+  net_worth     DECIMAL(18,2) NOT NULL DEFAULT 0,
+  detail_json   TEXT    NOT NULL,
+  created_at    TEXT    NOT NULL
+)
+""",
 ]
 # ---------------------------------------------------------------------------
 
