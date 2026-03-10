@@ -1006,6 +1006,71 @@ tr.unreviewed-row {
 }
 .nw-history-row:last-child { border-bottom: none; }
 
+/* ── Annual Report (Year-in-Review) ────────────────────────── */
+.ar-narrative {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: var(--bg-alt, #f8f9fa);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.ar-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.ar-kpi {
+  text-align: center;
+  padding: 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-alt, #f8f9fa);
+}
+.ar-kpi-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.ar-kpi-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+.ar-section {
+  margin-bottom: 16px;
+}
+.ar-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.ar-month-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 110px;
+}
+.ar-month-bar-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.ar-month-bar {
+  width: 100%;
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+}
+.ar-month-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
 /* ── Spending Alerts ────────────────────────────────────────── */
 .sa-banner {
   display: flex;

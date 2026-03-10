@@ -987,6 +987,7 @@ async function confirmRestore() {
     if (data.runs_restored) parts.push(`${data.runs_restored} runs`);
     if (data.nw_accounts_restored) parts.push(`${data.nw_accounts_restored} net worth accounts`);
     if (data.nw_snapshots_restored) parts.push(`${data.nw_snapshots_restored} net worth snapshots`);
+    if (data.annual_reports_restored) parts.push(`${data.annual_reports_restored} annual reports`);
     if (data.wizard_profiles_restored) parts.push(`${data.wizard_profiles_restored} wizard profiles`);
     const msg = `Restored: ${parts.join(', ')}.`;
     if (statusEl) statusEl.textContent = msg;
@@ -3239,6 +3240,221 @@ function _renderDashboard(data) {
     } else {
       tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px;">No transactions found.</td></tr>';
     }
+  }
+}
+
+// ── Year-in-Review Reports ──────────────────────────────────────
+
+let _arYear = new Date().getFullYear();
+
+function openAnnualReport() {
+  _arYear = _dashYear;
+  document.getElementById('annual-report-modal').classList.remove('hidden');
+  _loadAnnualReport();
+}
+function closeAnnualReport() {
+  document.getElementById('annual-report-modal').classList.add('hidden');
+}
+function annualReportPrevYear() { _arYear--; _loadAnnualReport(); }
+function annualReportNextYear() { _arYear++; _loadAnnualReport(); }
+
+async function _loadAnnualReport() {
+  const titleEl = document.getElementById('ar-title');
+  const bodyEl = document.getElementById('ar-body');
+  const badgeEl = document.getElementById('ar-stored-badge');
+  if (titleEl) titleEl.textContent = `${_arYear} Year in Review`;
+  if (bodyEl) bodyEl.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Loading…</div>';
+  if (badgeEl) badgeEl.textContent = '';
+
+  try {
+    const data = await api('GET', `/annual-reports/${_arYear}`);
+    if (badgeEl) badgeEl.textContent = data.stored ? 'Saved' : 'Preview';
+    _renderAnnualReport(data);
+  } catch (err) {
+    if (bodyEl) bodyEl.innerHTML = `<div style="text-align:center; padding:40px; color:var(--text-muted);">No data available for ${_arYear}.</div>`;
+  }
+}
+
+function _renderAnnualReport(data) {
+  const r = data.report || {};
+  const bodyEl = document.getElementById('ar-body');
+  if (!bodyEl) return;
+
+  const monthly = r.monthly || [];
+  const maxSpent = Math.max(...monthly.map(m => m.spent), 1);
+
+  // Month-by-month bar chart
+  const chartHtml = monthly.length ? `
+    <div class="ar-section">
+      <div class="ar-section-title">Month-by-Month Spending</div>
+      <div class="ar-month-chart">
+        ${monthly.map(m => {
+          const h = Math.max(Math.round(m.spent / maxSpent * 100), 2);
+          return `<div class="ar-month-bar-wrap">
+            <div class="ar-month-bar" style="height:${h}px; background:${m.net >= 0 ? '#22c55e' : '#ef4444'};" title="${m.month_name}: ${_fmt$(m.spent)}"></div>
+            <div class="ar-month-label">${m.month_name}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : '';
+
+  // Top categories
+  const cats = (r.top_categories || []);
+  const maxCat = Math.max(...cats.map(c => c.amount), 1);
+  const catsHtml = cats.length ? `
+    <div class="ar-section">
+      <div class="ar-section-title">Top 5 Categories</div>
+      ${cats.map(c => `<div style="margin-bottom:6px;">
+        <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;">
+          <span>${esc(c.name)}</span>
+          <span style="font-weight:600;">${_fmt$(c.amount)}</span>
+        </div>
+        <div style="background:var(--border); border-radius:4px; height:6px;">
+          <div style="background:var(--primary,#3b82f6); border-radius:4px; height:6px; width:${Math.round(c.amount / maxCat * 100)}%;"></div>
+        </div>
+      </div>`).join('')}
+    </div>` : '';
+
+  // Top merchants
+  const merchs = (r.top_merchants || []);
+  const merchsHtml = merchs.length ? `
+    <div class="ar-section">
+      <div class="ar-section-title">Top 5 Merchants</div>
+      ${merchs.map((m, i) => `<div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid var(--border); font-size:13px;">
+        <span>${i + 1}. ${esc(m.name)}</span>
+        <span style="font-weight:600;">${_fmt$(m.amount)}</span>
+      </div>`).join('')}
+    </div>` : '';
+
+  const netColor = (r.net_saved || 0) >= 0 ? '#22c55e' : '#ef4444';
+  const bigMonth = r.biggest_month || {};
+  const lightMonth = r.lightest_month || {};
+
+  bodyEl.innerHTML = `
+    <div id="ar-printable">
+      <div class="ar-narrative">${esc(data.narrative || '')}</div>
+      <div class="ar-kpi-grid">
+        <div class="ar-kpi">
+          <div class="ar-kpi-label">Total Income</div>
+          <div class="ar-kpi-value" style="color:#22c55e;">${_fmt$(r.total_income || 0)}</div>
+        </div>
+        <div class="ar-kpi">
+          <div class="ar-kpi-label">Total Spent</div>
+          <div class="ar-kpi-value" style="color:#ef4444;">${_fmt$(r.total_spent || 0)}</div>
+        </div>
+        <div class="ar-kpi">
+          <div class="ar-kpi-label">Net Saved</div>
+          <div class="ar-kpi-value" style="color:${netColor};">${(r.net_saved || 0) < 0 ? '-' : ''}${_fmt$(Math.abs(r.net_saved || 0))}</div>
+        </div>
+        <div class="ar-kpi">
+          <div class="ar-kpi-label">Transactions</div>
+          <div class="ar-kpi-value">${fmt(r.txn_count || 0)}</div>
+        </div>
+      </div>
+      <div class="ar-kpi-grid" style="grid-template-columns:1fr 1fr 1fr;">
+        <div class="ar-kpi">
+          <div class="ar-kpi-label">Biggest Month</div>
+          <div class="ar-kpi-value" style="font-size:16px;">${esc(bigMonth.month_name || '—')}</div>
+          <div style="font-size:12px; color:var(--text-muted);">${_fmt$(bigMonth.spent || 0)}</div>
+        </div>
+        <div class="ar-kpi">
+          <div class="ar-kpi-label">Lightest Month</div>
+          <div class="ar-kpi-value" style="font-size:16px;">${esc(lightMonth.month_name || '—')}</div>
+          <div style="font-size:12px; color:var(--text-muted);">${_fmt$(lightMonth.spent || 0)}</div>
+        </div>
+        <div class="ar-kpi">
+          <div class="ar-kpi-label">Recurring Costs</div>
+          <div class="ar-kpi-value" style="font-size:16px;">${_fmt$(r.recurring_monthly || 0)}/mo</div>
+          <div style="font-size:12px; color:var(--text-muted);">${_fmt$(r.recurring_annual || 0)}/yr</div>
+        </div>
+      </div>
+      ${chartHtml}
+      ${catsHtml}
+      ${merchsHtml}
+    </div>
+  `;
+}
+
+async function generateAndStoreAnnualReport() {
+  try {
+    await api('POST', `/annual-reports/generate?year=${_arYear}`);
+    toast(`${_arYear} report saved.`, 'success');
+    _loadAnnualReport();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function printAnnualReport() {
+  const content = document.getElementById('ar-printable');
+  if (!content) return;
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><title>${_arYear} Year in Review — Spendly</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; max-width: 700px; margin: 40px auto; color: #1e293b; }
+      .ar-narrative { font-size: 14px; line-height: 1.6; margin-bottom: 20px; padding: 16px; background: #f8fafc; border-radius: 8px; }
+      .ar-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+      .ar-kpi { text-align: center; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; }
+      .ar-kpi-label { font-size: 11px; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+      .ar-kpi-value { font-size: 20px; font-weight: 700; }
+      .ar-section { margin-bottom: 20px; }
+      .ar-section-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+      .ar-month-chart { display: flex; align-items: flex-end; gap: 4px; height: 120px; }
+      .ar-month-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; }
+      .ar-month-bar { width: 100%; border-radius: 3px 3px 0 0; }
+      .ar-month-label { font-size: 10px; color: #64748b; margin-top: 4px; }
+      @media print { body { margin: 20px; } }
+    </style>
+  </head><body>
+    <h1 style="text-align:center; margin-bottom:24px;">${_arYear} Year in Review</h1>
+    ${content.innerHTML}
+  </body></html>`);
+  win.document.close();
+  setTimeout(() => win.print(), 300);
+}
+
+async function openAnnualReportHistory() {
+  const modal = document.getElementById('annual-report-history-modal');
+  const bodyEl = document.getElementById('arh-body');
+  modal.classList.remove('hidden');
+  bodyEl.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-muted);">Loading…</div>';
+
+  try {
+    const data = await api('GET', '/annual-reports');
+    const reports = data.reports || [];
+    if (!reports.length) {
+      bodyEl.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-muted);">No saved reports yet.</div>';
+      return;
+    }
+    bodyEl.innerHTML = reports.map(r => `
+      <div class="sh-item" style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border);">
+        <div>
+          <div style="font-weight:600; font-size:14px;">${r.year} Year in Review</div>
+          <div style="font-size:11px; color:var(--text-muted);">Saved ${r.created_at ? r.created_at.slice(0, 10) : '—'}</div>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-secondary btn-sm" onclick="_arYear=${r.year}; closeAnnualReportHistory(); _loadAnnualReport();" style="font-size:11px;">View</button>
+          <button class="btn btn-secondary btn-sm" onclick="deleteAnnualReport(${r.year})" style="font-size:11px; color:#ef4444;">Delete</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    bodyEl.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-muted);">Failed to load.</div>';
+  }
+}
+
+function closeAnnualReportHistory() {
+  document.getElementById('annual-report-history-modal').classList.add('hidden');
+}
+
+async function deleteAnnualReport(year) {
+  if (!confirm(`Delete the ${year} annual report?`)) return;
+  try {
+    await api('DELETE', `/annual-reports/${year}`);
+    toast(`${year} report deleted.`, 'success');
+    openAnnualReportHistory();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
   }
 }
 

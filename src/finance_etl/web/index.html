@@ -74,6 +74,7 @@
       <button class="btn btn-secondary btn-sm" onclick="dashboardNextMonth()">Next →</button>
       <button class="btn btn-secondary btn-sm" onclick="loadDashboard()" style="margin-left:8px;">↻ Refresh</button>
       <button class="btn btn-primary btn-sm" onclick="openMonthlySummary()" style="margin-left:auto;">Monthly Summary</button>
+      <button class="btn btn-primary btn-sm" onclick="openAnnualReport()">Year in Review</button>
     </div>
 
     <!-- Spending Alert Banners -->
@@ -1445,6 +1446,47 @@
       <button class="wm-close" onclick="closeSummaryHistory()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); padding:2px 6px; border-radius:4px;">×</button>
     </div>
     <div id="sh-body" style="overflow-y:auto; flex:1;">
+      <div style="text-align:center; padding:24px; color:var(--text-muted);">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Year-in-Review Report Modal -->
+<div id="annual-report-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeAnnualReport()">
+  <div class="modal-dialog" style="max-width:700px; max-height:90vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button class="btn btn-secondary btn-sm" onclick="annualReportPrevYear()" style="padding:2px 8px;">←</button>
+        <span id="ar-title" style="font-size:16px; font-weight:700;">Year in Review</span>
+        <button class="btn btn-secondary btn-sm" onclick="annualReportNextYear()" style="padding:2px 8px;">→</button>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <span id="ar-stored-badge" style="font-size:11px; color:var(--text-muted);"></span>
+        <button class="btn btn-primary btn-sm" onclick="generateAndStoreAnnualReport()" style="font-size:11px;">Save Report</button>
+        <button class="btn btn-secondary btn-sm" onclick="printAnnualReport()" style="font-size:11px;">Print / PDF</button>
+        <button class="wm-close" onclick="closeAnnualReport()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); padding:2px 6px; border-radius:4px;">×</button>
+      </div>
+    </div>
+    <div id="ar-body" style="overflow-y:auto; flex:1; padding-right:4px;">
+      <div style="text-align:center; padding:40px; color:var(--text-muted);">Loading…</div>
+    </div>
+    <div style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px; flex-shrink:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <button class="btn btn-secondary btn-sm" onclick="openAnnualReportHistory()" style="font-size:11px;">Browse Past Reports</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeAnnualReport()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Annual Report History Modal -->
+<div id="annual-report-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeAnnualReportHistory()">
+  <div class="modal-dialog" style="max-width:500px; max-height:80vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
+      <span style="font-size:16px; font-weight:700;">Saved Annual Reports</span>
+      <button class="wm-close" onclick="closeAnnualReportHistory()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); padding:2px 6px; border-radius:4px;">×</button>
+    </div>
+    <div id="arh-body" style="overflow-y:auto; flex:1;">
       <div style="text-align:center; padding:24px; color:var(--text-muted);">Loading…</div>
     </div>
   </div>
