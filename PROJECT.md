@@ -183,6 +183,7 @@ TransactionAnalysis/
 | History | `#page-history` | `loadHistory()` | ✅ Working |
 | Credit Cards | `#page-credit-cards` | `loadTxnTab('credit_card')` | ✅ Working |
 | Bank Transactions | `#page-bank-transactions` | `loadTxnTab('bank')` | ✅ Working |
+| Cash Flow | `#page-cashflow` | `loadCashFlow()` | ✅ Working |
 | Reports | `#page-reports` | `loadReports()` | ✅ Working |
 | Merchants | `#page-merchant-rules` | `loadMerchantRules()`, `loadUncategorized()` | ✅ Working |
 | Categories | `#page-category-rules` | `loadCategoryRules()` | ✅ Working (BUG-1 fixed) |
@@ -236,6 +237,17 @@ TransactionAnalysis/
 - Per-transaction "Mark as Reviewed" button with unreviewed dot indicator
 - "Mark All Reviewed" bulk action (respects current filters)
 - API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`
+
+**Cash Flow (`#page-cashflow`)**
+- Summary KPI cards: Income (green), Spending (red), Net (color-coded), Month-over-Month delta
+- Time period filter dropdown: This Month, Last Month, Last 3 Months, Last 12 Months, Custom Range
+- Custom date range inputs (shown when "Custom Range" selected)
+- Toggleable "Include transfers" checkbox (excludes payment subtypes and transfer categories by default)
+- Monthly bar chart: paired income/spending bars per month, CSS-rendered (no Chart.js dependency)
+- Spending by category breakdown: horizontal bars with percentage labels (top 12)
+- Monthly detail table: Income, Spending, Net per month with color-coded values
+- Month-over-month delta indicator showing spending change vs prior month
+- API: `GET /cashflow/summary?period=&start_date=&end_date=&include_transfers=`
 
 **Reports (`#page-reports`)**
 - Static report cards: spend_by_month_category, cashflow_by_month, spend_by_merchant, totals_by_account, top_merchants
@@ -680,7 +692,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.3.1
+**Current Version:** v2.4.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -695,6 +707,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.2.0 | 2026-03-10 | Quick wins: fix BUG-4 (backup restore now includes `imported_file`), fix BUG-5 (delete run deletes transactions_norm by `run_id` directly), add `imported_file` to base DDL, remove dead code (`resolve_category`, `get_unmapped_categories`, `get_category_suggestions`), remove unused config files (`rules.yaml`, `canonical_schema.yaml`) |
 | v2.3.0 | 2026-03-10 | Renamed app to Spendly; sidebar version display now dynamic via `GET /version` endpoint |
 | v2.3.1 | 2026-03-10 | Hardened CSV upload pipeline: encoding detection, BOM stripping, line ending normalisation, delimiter sniffing fallback, Excel magic-byte rejection, extension validation |
+| v2.4.0 | 2026-03-10 | Sprint 3 — Cash Flow View: new page with income/spending/net KPIs, monthly bar chart, category breakdown, MoM delta, time filters, transfer toggle; new `GET /cashflow/summary` endpoint |
 
 ### Version Increment Rules
 
@@ -776,6 +789,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `POST` | `/budgets` | budgets | Create or update a budget goal | 🟢 Called |
 | `DELETE` | `/budgets/{id}` | budgets | Delete a budget goal | 🟢 Called |
 | `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions | 🟢 Called |
+| `GET` | `/cashflow/summary` | cashflow | Income vs spending vs net, monthly breakdown, category breakdown, MoM delta | 🟢 Called |
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
 | `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) | 🟢 Called |
 | `DELETE` | `/recurring/override/{merchant}` | recurring | Remove a recurring override | 🟢 Called |
