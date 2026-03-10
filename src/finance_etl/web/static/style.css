@@ -1252,5 +1252,44 @@ tr.unreviewed-row {
 }
 .theme-toggle:hover { background: rgba(255,255,255,.1); }
 
+/* ── Collapsible Card Panels ────────────────────────────────── */
+.card-header-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  padding: 0;
+  margin-bottom: 0;
+}
+.card-header-toggle .card-title { margin-bottom: 0; }
+.card-header-toggle .collapse-arrow {
+  transition: transform 0.2s;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+.card.collapsed .collapse-arrow { transform: rotate(-90deg); }
+.card.collapsed .card-collapsible-body { display: none; }
+.card-header-toggle .badge-count {
+  font-size: 11px;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 10px;
+  padding: 1px 8px;
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+/* Capped scroll containers for suggestion / rule lists */
+.suggestions-scroll { max-height: 400px; overflow-y: auto; }
+.rules-table-scroll { max-height: 450px; overflow-y: auto; }
+
+@media (max-width: 768px) {
+  .suggestions-scroll { max-height: 260px; }
+  .rules-table-scroll { max-height: 300px; }
+}
+
 /* ── Dashboard ──────────────────────────────────────────────── */
 #page-dashboard .card { padding: 16px 20px; }
