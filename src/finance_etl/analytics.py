@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from finance_etl.utils.query_helpers import INCOME_FILTER
+
 try:
     import duckdb
 except ImportError:
@@ -78,9 +80,7 @@ def _build_queries(source: str, top_n: int, statement_type: str | None = None) -
 
     # Feature 3: new aggregate definitions (old sign-filtered versions removed)
     # total_spend  = SUM of ALL resolved_amount values (gross signed sum, no sign filtering)
-    # Income rule: amount > 0 AND statement_type = 'bank'
-    # CC positive amounts (payments, refunds) are never true income.
-    # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
+    # INCOME_FILTER — see query_helpers.py
     # net_amount   = total_income − |outflows| = income minus absolute outflow
     _null_safe = "COALESCE(amount, 0)"
 
@@ -98,13 +98,13 @@ def _build_queries(source: str, top_n: int, statement_type: str | None = None) -
         "cashflow_by_month": f"""
             SELECT
               date_trunc('month', transaction_date) AS month,
-              -- Income rule: amount > 0 AND statement_type = 'bank' (see BUG-6/7/8)
-              SUM(CASE WHEN {_null_safe} > 0 AND statement_type = 'bank'
+              -- INCOME_FILTER — see query_helpers.py
+              SUM(CASE WHEN {INCOME_FILTER}
                        THEN {_null_safe} ELSE 0 END) AS total_income,
               -- total_outflow = absolute value of outflows
               ABS(SUM(CASE WHEN {_null_safe} < 0 THEN {_null_safe} ELSE 0 END)) AS total_outflow,
               -- net_amount = total_income - |outflows|
-              SUM(CASE WHEN {_null_safe} > 0 AND statement_type = 'bank'
+              SUM(CASE WHEN {INCOME_FILTER}
                        THEN {_null_safe} ELSE 0 END)
                 - ABS(SUM(CASE WHEN {_null_safe} < 0 THEN {_null_safe} ELSE 0 END)) AS net_amount
             FROM {source}{st_filter}
