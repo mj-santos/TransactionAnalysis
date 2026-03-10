@@ -1132,5 +1132,125 @@ tr.unreviewed-row {
 .sa-status-pct { font-weight: 700; margin-left: 2px; }
 .sa-status-text { color: var(--text-muted); font-size: 11px; margin-left: 2px; }
 
+/* ── Dark Mode ──────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --sidebar-bg:   #0b1120;
+  --sidebar-text: #94a3b8;
+  --content-bg:   #0f172a;
+  --card-bg:      #1e293b;
+  --surface:      #1e293b;
+  --bg:           #1e293b;
+  --bg-alt:       #334155;
+  --border:       #334155;
+  --text:         #e2e8f0;
+  --text-muted:   #94a3b8;
+  --shadow:       0 1px 3px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
+}
+[data-theme="dark"] body { background: var(--content-bg); color: var(--text); }
+[data-theme="dark"] .card { background: var(--card-bg); }
+[data-theme="dark"] .topbar { background: var(--card-bg); border-color: var(--border); }
+[data-theme="dark"] input, [data-theme="dark"] select, [data-theme="dark"] textarea {
+  background: var(--bg-alt, #334155); color: var(--text); border-color: var(--border);
+}
+[data-theme="dark"] table th { background: var(--bg-alt, #334155); color: var(--text); }
+[data-theme="dark"] table td { border-color: var(--border); }
+[data-theme="dark"] .btn-secondary { background: var(--bg-alt, #334155); color: var(--text); border-color: var(--border); }
+[data-theme="dark"] .modal-dialog { background: var(--card-bg); }
+[data-theme="dark"] .sa-banner-yellow { background: #422006; border-color: #92400e; color: #fbbf24; }
+[data-theme="dark"] .sa-banner-red { background: #450a0a; border-color: #991b1b; color: #fca5a5; }
+[data-theme="dark"] .sa-status-chip.sa-status-green { border-color: #166534; background: #14532d; }
+[data-theme="dark"] .sa-status-chip.sa-status-yellow { border-color: #854d0e; background: #713f12; }
+[data-theme="dark"] .sa-status-chip.sa-status-red { border-color: #991b1b; background: #7f1d1d; }
+
+/* ── Colorblind-Accessible Palette ─────────────────────────── */
+[data-palette="colorblind"] {
+  --success:    #0077bb;
+  --warning:    #ee7733;
+  --danger:     #cc3311;
+  --staged:     #aa3377;
+  --primary:    #0077bb;
+  --primary-h:  #005588;
+}
+
+/* ── Bulk Select ───────────────────────────────────────────── */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.bulk-bar button { color: #fff; border-color: rgba(255,255,255,.3); }
+.bulk-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary); }
+
+/* ── Inline Category Edit ──────────────────────────────────── */
+.inline-cat-input {
+  width: 120px;
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  outline: none;
+}
+
+/* ── Keyboard Shortcut Help ────────────────────────────────── */
+.kb-help-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  font-size: 13px;
+}
+.kb-key {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: monospace;
+  background: var(--bg-alt, #f1f5f9);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* ── Onboarding ────────────────────────────────────────────── */
+.onboarding-step {
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  background: var(--card-bg, #fff);
+}
+.onboarding-step.completed { opacity: 0.6; }
+.onboarding-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  margin-right: 8px;
+}
+.onboarding-step.completed .onboarding-step-num { background: var(--success); }
+
+/* ── Theme Toggle ──────────────────────────────────────────── */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.theme-toggle:hover { background: rgba(255,255,255,.1); }
+
 /* ── Dashboard ──────────────────────────────────────────────── */
 #page-dashboard .card { padding: 16px 20px; }
