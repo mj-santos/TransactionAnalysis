@@ -506,10 +506,23 @@ No cloud services, no external dependencies — all data stays on your machine.
         allow_headers=["*"],
     )
 
-    app.state.ui_settings = {
-        "verbose_logs": False,
-        "show_logs": False,
-    }
+    _UI_SETTINGS_PATH = Path("data/ui_settings.json")
+
+    def _load_ui_settings() -> dict:
+        defaults = {"verbose_logs": False, "show_logs": False}
+        if _UI_SETTINGS_PATH.exists():
+            try:
+                saved = json.loads(_UI_SETTINGS_PATH.read_text(encoding="utf-8"))
+                defaults.update(saved)
+            except Exception:
+                pass
+        return defaults
+
+    def _save_ui_settings(settings: dict) -> None:
+        _UI_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _UI_SETTINGS_PATH.write_text(json.dumps(settings), encoding="utf-8")
+
+    app.state.ui_settings = _load_ui_settings()
 
     def _logs_path() -> Path:
         return Path("data/logs")
@@ -1219,6 +1232,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             app.state.ui_settings["verbose_logs"] = bool(payload.verbose_logs)
         if payload.show_logs is not None:
             app.state.ui_settings["show_logs"] = bool(payload.show_logs)
+        _save_ui_settings(app.state.ui_settings)
         return dict(app.state.ui_settings)
 
     @app.get(
