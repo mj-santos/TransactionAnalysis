@@ -705,6 +705,71 @@ tr.unreviewed-row {
   border-left: 3px solid var(--warning);
 }
 
+/* ── Transaction Notes ─────────────────────────────────────── */
+.btn-note {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  line-height: 1;
+}
+.btn-note:hover { background: var(--bg-secondary); }
+.btn-note.has-note {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.note-editor-popup {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 100;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  min-width: 220px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+}
+.note-textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+}
+
+/* ── Split Transactions ───────────────────────────────────── */
+.split-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 3px;
+  padding: 1px 5px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.split-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  align-items: center;
+}
+.split-row .form-control {
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
 /* Sidebar nav badge for unreviewed count */
 .nav-badge {
   display: inline-flex;

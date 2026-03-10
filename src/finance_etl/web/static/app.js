@@ -2436,13 +2436,13 @@ function _renderTxnHeaders(p, cols, type) {
   if (!thead) return;
   const st = _txnState[type];
   // Hide metadata columns used only for review logic; append a Review header instead
-  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed']);
+  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed', 'notes', 'is_split', 'split_parent_fingerprint']);
   const selectAllCb = `<th style="width:30px;"><input type="checkbox" class="bulk-check" onchange="bulkToggleAll('${type}', this.checked)" title="Select all" /></th>`;
   thead.innerHTML = selectAllCb + cols.filter(c => !HIDDEN_COLS.has(c)).map(c => {
     const isSorted = c === st.sortBy;
     const arrow    = isSorted ? (st.sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
     return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}</th>`;
-  }).join('') + '<th class="text-center" style="min-width:100px;">Tags</th><th class="text-center" style="min-width:90px;">Review</th>';
+  }).join('') + '<th class="text-center" style="min-width:40px;">Notes</th><th class="text-center" style="min-width:100px;">Tags</th><th class="text-center" style="min-width:90px;">Review</th>';
 }
 
 /**
@@ -2479,7 +2479,7 @@ function _renderTxnBody(p, rows, cols, append) {
     'amount', 'total_spend', 'total_income', 'total_outflow', 'net_amount', 'row_count',
   ]);
   // Columns hidden from the user (used for review logic only)
-  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed']);
+  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed', 'notes', 'is_split', 'split_parent_fingerprint']);
 
   const visibleCols = cols.filter(c => !HIDDEN_COLS.has(c));
 
@@ -2487,11 +2487,14 @@ function _renderTxnBody(p, rows, cols, append) {
     // DuckDB may serialize booleans as true or 'true' depending on driver version
     const isUnreviewed = row.unreviewed === true || row.unreviewed === 'true';
     const fp = row.transaction_fingerprint || '';
+    const isSplitChild = !!row.split_parent_fingerprint;
     const rowCls = isUnreviewed ? ' class="unreviewed-row"' : '';
     // Checkbox cell for bulk selection
     const checkCell = fp
       ? `<td><input type="checkbox" class="bulk-check" data-fp="${esc(fp)}" onchange="bulkToggleRow(this)" /></td>`
       : '<td></td>';
+    // Split badge prepended to description
+    const splitBadge = isSplitChild ? '<span class="split-badge" title="Split transaction">split</span> ' : '';
     const cells = visibleCols.map(c => {
       const val = row[c] != null ? String(row[c]) : '';
       const cls = NUMERIC_COLS.has(c) ? ' class="mono text-right"' : '';
@@ -2499,8 +2502,19 @@ function _renderTxnBody(p, rows, cols, append) {
       if ((c === 'category_parent' || c === 'category_normalized' || c === 'category') && fp) {
         return `<td${cls} ondblclick="inlineCategoryEdit(this,'${esc(fp)}','${c}')" title="Double-click to edit" style="cursor:pointer;">${esc(val)}</td>`;
       }
+      // Prepend split badge to description
+      if (c === 'description' && isSplitChild) {
+        return `<td${cls}>${splitBadge}${esc(val)}</td>`;
+      }
       return `<td${cls}>${esc(val)}</td>`;
     }).join('');
+    // Notes cell: icon button that opens inline edit
+    const noteVal = row.notes || '';
+    const notesCell = fp
+      ? `<td class="text-center" style="white-space:nowrap;">
+          <button class="btn-note${noteVal ? ' has-note' : ''}" onclick="openNoteEdit('${esc(fp)}', this)" title="${noteVal ? esc(noteVal) : 'Add note'}">${noteVal ? '&#9998;' : '&#43;'}</button>
+        </td>`
+      : '<td></td>';
     // Tag cell
     const tagCell = fp
       ? `<td class="text-center" style="white-space:nowrap;">
@@ -2516,7 +2530,7 @@ function _renderTxnBody(p, rows, cols, append) {
             : '<span style="color:var(--success); font-size:11px;">&#10003;</span>'
         }</td>`
       : '<td></td>';
-    return `<tr${rowCls} data-fp="${esc(fp)}">${checkCell}${cells}${tagCell}${reviewCell}</tr>`;
+    return `<tr${rowCls} data-fp="${esc(fp)}">${checkCell}${cells}${notesCell}${tagCell}${reviewCell}</tr>`;
   }).join('');
 
   if (append) {
@@ -2582,6 +2596,178 @@ async function refreshUnreviewedBadge() {
 
 // _renderTxnTfoot has been extracted to table_controls.js as renderTxnTotals().
 // See table_controls.js for the implementation with proper labeled column cells.
+
+// ── Transaction Notes ─────────────────────────────────────────
+
+/** Open an inline note editor below the button. */
+function openNoteEdit(fp, btnEl) {
+  // Close any existing note editor
+  document.querySelectorAll('.note-editor-popup').forEach(el => el.remove());
+
+  const td = btnEl.closest('td');
+  const tr = btnEl.closest('tr');
+  // Find existing note from the button's title (stored there during render)
+  const currentNote = btnEl.title === 'Add note' ? '' : btnEl.title;
+
+  const editor = document.createElement('div');
+  editor.className = 'note-editor-popup';
+  editor.innerHTML = `
+    <textarea class="note-textarea" rows="2" placeholder="Add a note...">${esc(currentNote)}</textarea>
+    <div style="display:flex; gap:4px; justify-content:flex-end; margin-top:4px;">
+      <button class="btn btn-secondary btn-sm" onclick="this.closest('.note-editor-popup').remove()">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="saveNote('${esc(fp)}', this)">Save</button>
+    </div>
+  `;
+  td.style.position = 'relative';
+  td.appendChild(editor);
+  editor.querySelector('textarea').focus();
+
+  // Save on Enter (without shift)
+  editor.querySelector('textarea').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      saveNote(fp, editor.querySelector('.btn-primary'));
+    }
+  });
+}
+
+/** Save a note via PATCH endpoint. */
+async function saveNote(fp, btnEl) {
+  const popup = btnEl.closest('.note-editor-popup');
+  const textarea = popup.querySelector('textarea');
+  const noteText = textarea.value.trim() || null;
+  try {
+    await api('PATCH', `/transactions/${encodeURIComponent(fp)}`, { notes: noteText });
+    // Update the button in the row
+    const td = popup.closest('td');
+    popup.remove();
+    const noteBtn = td.querySelector('.btn-note');
+    if (noteBtn) {
+      noteBtn.title = noteText || 'Add note';
+      noteBtn.innerHTML = noteText ? '&#9998;' : '&#43;';
+      noteBtn.classList.toggle('has-note', !!noteText);
+    }
+    toast('Note saved', 'success');
+  } catch (err) {
+    toast('Failed to save note: ' + err.message, 'error');
+  }
+}
+
+// ── Split Transactions ────────────────────────────────────────
+
+/** Open the split transaction modal for a given fingerprint. */
+function openSplitModal(fp) {
+  // Find the row data from the current table
+  const tr = document.querySelector(`tr[data-fp="${fp}"]`);
+  if (!tr) { toast('Transaction not found in table', 'error'); return; }
+  // Get amount from the row (find the amount cell)
+  const cells = tr.querySelectorAll('td');
+  let amount = 0;
+  cells.forEach(td => {
+    const text = td.textContent.trim();
+    if (text.match(/^-?\$?[\d,]+\.\d{2}$/)) {
+      amount = parseFloat(text.replace(/[$,]/g, ''));
+    }
+  });
+
+  const modal = document.getElementById('split-txn-modal');
+  if (!modal) return;
+  modal.dataset.fp = fp;
+  modal.dataset.amount = amount;
+  document.getElementById('split-parent-amount').textContent = _fmt$(amount);
+  _renderSplitRows(amount, 2);
+  modal.classList.remove('hidden');
+}
+
+function closeSplitModal() {
+  document.getElementById('split-txn-modal')?.classList.add('hidden');
+}
+
+/** Render N split input rows in the modal. */
+function _renderSplitRows(parentAmount, count) {
+  const container = document.getElementById('split-rows-container');
+  if (!container) return;
+  const splitAmt = Math.round((parentAmount / count) * 100) / 100;
+  let html = '';
+  for (let i = 0; i < count; i++) {
+    const amt = i === count - 1 ? Math.round((parentAmount - splitAmt * (count - 1)) * 100) / 100 : splitAmt;
+    html += `<div class="split-row" data-idx="${i}">
+      <input type="text" class="form-control split-category" placeholder="Category" style="flex:2;" />
+      <input type="number" class="form-control split-amount" step="0.01" value="${amt}" style="flex:1;" onchange="_updateSplitRemaining()" />
+      <input type="text" class="form-control split-desc" placeholder="Description (optional)" style="flex:2;" />
+    </div>`;
+  }
+  container.innerHTML = html;
+  _updateSplitRemaining();
+}
+
+function addSplitRow() {
+  const modal = document.getElementById('split-txn-modal');
+  const parentAmount = parseFloat(modal.dataset.amount);
+  const container = document.getElementById('split-rows-container');
+  const count = container.querySelectorAll('.split-row').length + 1;
+  _renderSplitRows(parentAmount, count);
+}
+
+function _updateSplitRemaining() {
+  const modal = document.getElementById('split-txn-modal');
+  const parentAmount = parseFloat(modal.dataset.amount);
+  const inputs = document.querySelectorAll('#split-rows-container .split-amount');
+  let total = 0;
+  inputs.forEach(inp => { total += parseFloat(inp.value) || 0; });
+  const remaining = Math.round((parentAmount - total) * 100) / 100;
+  const el = document.getElementById('split-remaining');
+  if (el) {
+    el.textContent = `Remaining: ${_fmt$(remaining)}`;
+    el.style.color = Math.abs(remaining) < 0.01 ? 'var(--success)' : 'var(--danger)';
+  }
+}
+
+/** Submit split to the server. */
+async function submitSplit() {
+  const modal = document.getElementById('split-txn-modal');
+  const fp = modal.dataset.fp;
+  const rows = document.querySelectorAll('#split-rows-container .split-row');
+  const splits = [];
+  rows.forEach(row => {
+    const category = row.querySelector('.split-category').value.trim();
+    const amount = parseFloat(row.querySelector('.split-amount').value);
+    const description = row.querySelector('.split-desc').value.trim();
+    const s = { amount };
+    if (category) s.category = category;
+    if (description) s.description = description;
+    splits.push(s);
+  });
+  try {
+    const result = await api('POST', `/transactions/${encodeURIComponent(fp)}/split`, { splits });
+    toast(`Split into ${result.children} transactions`, 'success');
+    closeSplitModal();
+    // Reload the current tab
+    const activeTab = document.querySelector('.tab-btn.active');
+    if (activeTab) {
+      const type = activeTab.dataset.type || 'bank';
+      loadTxnTab(type);
+    }
+  } catch (err) {
+    toast('Split failed: ' + err.message, 'error');
+  }
+}
+
+/** Unsplit a transaction (called from context or a button). */
+async function unsplitTransaction(parentFp) {
+  if (!confirm('Remove all splits and restore the original transaction?')) return;
+  try {
+    const result = await api('DELETE', `/transactions/${encodeURIComponent(parentFp)}/split`);
+    toast(`Removed ${result.children_removed} split(s)`, 'success');
+    const activeTab = document.querySelector('.tab-btn.active');
+    if (activeTab) {
+      const type = activeTab.dataset.type || 'bank';
+      loadTxnTab(type);
+    }
+  } catch (err) {
+    toast('Unsplit failed: ' + err.message, 'error');
+  }
+}
 
 
 // ── Merchant Intelligence ─────────────────────────────────────

@@ -1655,6 +1655,28 @@
   </div>
 </div>
 
+<!-- Split Transaction Modal -->
+<div id="split-txn-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSplitModal()">
+  <div class="modal-dialog" style="max-width:560px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <span style="font-size:16px; font-weight:700;">Split Transaction</span>
+      <button class="wm-close" onclick="closeSplitModal()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted);">×</button>
+    </div>
+    <p style="margin:0 0 8px; font-size:13px; color:var(--text-muted);">
+      Original amount: <strong id="split-parent-amount"></strong>
+    </p>
+    <div id="split-rows-container"></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+      <span id="split-remaining" style="font-size:12px; font-weight:600;"></span>
+      <button class="btn btn-secondary btn-sm" onclick="addSplitRow()">+ Add Row</button>
+    </div>
+    <div style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px; display:flex; justify-content:flex-end; gap:8px;">
+      <button class="btn btn-secondary btn-sm" onclick="closeSplitModal()">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="submitSplit()">Split</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/table_controls.js"></script>
 <script src="/static/app.js"></script>
 </body>
