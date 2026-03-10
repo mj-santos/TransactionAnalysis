@@ -3564,6 +3564,19 @@ No cloud services, no external dependencies — all data stays on your machine.
                     "pct": pct,
                 })
 
+            # Spending alerts: derive from budgets_vs_actual
+            spending_alerts = []
+            for bva in budgets_vs_actual:
+                if bva["pct"] is not None and bva["pct"] >= 80:
+                    status = "exceeded" if bva["pct"] >= 100 else "warning"
+                    spending_alerts.append({
+                        "parent": bva["parent"],
+                        "budget": bva["monthly_amount"],
+                        "spent": bva["actual_amount"],
+                        "pct": bva["pct"],
+                        "status": status,
+                    })
+
             # Unreviewed count (global, not month-scoped)
             unrev_row = conn.execute(
                 "SELECT COUNT(*) FROM transactions_norm WHERE COALESCE(unreviewed, TRUE) = TRUE"
@@ -3604,6 +3617,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "top_merchants": top_merchants,
             "recent_transactions": recent_transactions,
             "budgets_vs_actual": budgets_vs_actual,
+            "spending_alerts": spending_alerts,
             "unreviewed_count": unreviewed_count,
             "savings_goals": savings_goals_summary,
         }

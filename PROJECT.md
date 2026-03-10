@@ -198,6 +198,7 @@ TransactionAnalysis/
 - Top categories bar chart (horizontal, CSS-rendered)
 - Budget tracker with inline add/edit/delete form — `openBudgetForm()`, `saveBudget()`, `deleteBudget()`
 - Budget rebalance suggestions — `loadRebalanceSuggestions()`, `applyRebalance()`: analyses avg monthly spend vs budget, suggests adjustments for categories >=15% over/under, user selects and confirms before applying
+- **Spending Alerts & Thresholds**: in-app alert banners for categories at ≥80% (yellow warning) and ≥100% (red exceeded) of monthly budget; budget status overview card with green/yellow/red status chips per category; color-coded status dots on budget tracker bars; dismissible banners; alerts auto-reset each month
 - **Savings Goals** widget: progress bars for each goal, inline create/edit/delete, manual progress updates (set or add mode), auto-calculated monthly savings needed to hit target by deadline, suggested monthly amount from avg net cash flow
 - **Monthly Summary** button: opens modal with plain-language narrative, KPI grid (spent/income/net/txns), top categories with delta bars, top merchants chips, biggest purchase card; month navigation ←/→; save/regenerate summaries; "Browse History" opens stored summaries list
 - Recent transactions table (last 10) with unreviewed dot indicators
@@ -765,7 +766,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.9.0
+**Current Version:** v2.10.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -786,6 +787,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.7.0 | 2026-03-10 | Sprint 6 — Savings Goals Tracker: create goals with name/target/date/account, progress bar UI, manual progress updates (set or add), auto-calculated monthly savings needed, suggested monthly savings from avg net cash flow, dashboard widget with inline CRUD; new `savings_goals` table; new `GET/POST/PUT/DELETE /savings-goals`, `POST /savings-goals/{id}/update-progress`, `GET /savings-goals/suggestions` endpoints; backup/restore support |
 | v2.8.0 | 2026-03-10 | Sprint 7 — Monthly Summary Engine: auto-generated plain-language monthly summaries with total spent/income/net, vs-prior-month delta, top 3 categories with deltas, top 3 merchants, biggest single transaction; modal viewer with month navigation, save/regenerate, browsable history of stored summaries; new `monthly_summaries` table; new `POST /monthly-summaries/generate`, `GET /monthly-summaries`, `GET /monthly-summaries/{year}/{month}`, `DELETE /monthly-summaries/{year}/{month}` endpoints; backup/restore support |
 | v2.9.0 | 2026-03-10 | Sprint 8 — Merchant Intelligence: per-merchant analytics with total spend, monthly avg, transaction frequency, months active, last transaction date; 3-month trend indicator (increasing/decreasing/flat) with MoM %; accelerating spend flag (>20% MoM); mini sparkline bars; sort by total spend/frequency/recent/trend; search filter; KPI summary (total merchants, accelerating count); new `GET /merchant-analytics` endpoint |
+| v2.10.0 | 2026-03-10 | Sprint 9 — Spending Alerts & Thresholds: per-category spending alerts derived from existing budget goals; alert banners at top of dashboard for categories at 80% (warning) and 100% (exceeded) of monthly budget; budget status overview card with green/yellow/red chips per category; color-coded status dots on budget tracker progress bars; dismissible alert banners; alerts auto-reset each month (spending is month-scoped); enhanced `GET /dashboard/summary` response with `spending_alerts` array |
 
 ### Version Increment Rules
 
@@ -869,7 +871,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/budgets/rebalance` | budgets | Analyse avg spend vs budget, generate rebalance suggestions | 🟢 Called |
 | `POST` | `/budgets/rebalance/apply` | budgets | Apply user-selected budget adjustments | 🟢 Called |
 | `GET` | `/merchant-analytics` | merchant | Per-merchant spend, trends, frequency, acceleration flags | 🟢 Called |
-| `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, recent transactions | 🟢 Called |
+| `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, spending alerts, recent transactions | 🟢 Called |
 | `GET` | `/cashflow/summary` | cashflow | Income vs spending vs net, monthly breakdown, category breakdown, MoM delta | 🟢 Called |
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
 | `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) | 🟢 Called |
