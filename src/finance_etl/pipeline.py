@@ -32,6 +32,38 @@ class RunResult:
 # ---------------------------------------------------------------------------
 _staged_runs: dict[str, dict] = {}
 
+_STAGED_DIR = Path("data/staged")
+
+
+def _save_staged(run_id: str, state: dict) -> None:
+    """Persist staged run state to disk so it survives server restarts."""
+    _STAGED_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _STAGED_DIR / f"{run_id}.json"
+    dest.write_text(json.dumps(state, default=str), encoding="utf-8")
+
+
+def _remove_staged(run_id: str) -> None:
+    """Remove persisted staged run state from disk."""
+    dest = _STAGED_DIR / f"{run_id}.json"
+    dest.unlink(missing_ok=True)
+
+
+def _load_all_staged() -> None:
+    """Restore staged runs from disk into the in-memory dict on startup."""
+    if not _STAGED_DIR.exists():
+        return
+    for f in _STAGED_DIR.glob("*.json"):
+        run_id = f.stem
+        if run_id not in _staged_runs:
+            try:
+                _staged_runs[run_id] = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                pass  # corrupted sidecar — skip
+
+
+# Restore any staged runs persisted before a previous server shutdown
+_load_all_staged()
+
 
 def run(
     inputs: list[str | Path],
@@ -213,6 +245,7 @@ def run_with_options(
                 # Source tracking: run_id written onto every loaded transaction row
                 "run_id": run_id,
             }
+            _save_staged(run_id, _staged_runs[run_id])
             finalize_run(conn, run_id, "staged", counts, notes="awaiting commit")
             conn.close()
             log.info("Run %s staged — awaiting commit.", run_id)
@@ -266,6 +299,7 @@ def commit_run(run_id: str) -> RunResult:
         )
 
     state = _staged_runs.pop(run_id)
+    _remove_staged(run_id)
     log = get_logger("finance_etl.commit", Path(state["logs_dir"]), run_id)
     log.info("Committing staged run %s", run_id)
 
