@@ -770,6 +770,91 @@ tr.unreviewed-row {
   padding: 6px 8px;
 }
 
+/* ── Duplicate Banner ─────────────────────────────────────── */
+.dup-banner {
+  background: var(--warning-bg, #fff3cd);
+  border: 1px solid var(--warning, #ffc107);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dup-banner a { color: var(--primary); font-weight: 600; }
+
+/* ── Data Health ──────────────────────────────────────────── */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.health-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--text);
+  transition: background .15s;
+}
+.health-metric:hover { background: var(--bg-secondary); }
+.health-label { font-size: 13px; }
+.health-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--success);
+}
+.health-value.health-warn { color: var(--warning); }
+
+/* ── Category Picker ──────────────────────────────────────── */
+.cat-picker-input {
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--text);
+}
+.cat-picker-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  z-index: 200;
+}
+.cat-picker-option {
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.cat-picker-option:hover { background: var(--bg-secondary); }
+.cat-picker-custom { font-style: italic; color: var(--text-muted); border-top: 1px solid var(--border); }
+
+/* ── Utility page tweaks ──────────────────────────────────── */
+.util-cat-cell { cursor: pointer; }
+.util-cat-cell:hover { background: var(--bg-secondary); }
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.btn-danger:hover { opacity: .85; }
+
 /* Sidebar nav badge for unreviewed count */
 .nav-badge {
   display: inline-flex;

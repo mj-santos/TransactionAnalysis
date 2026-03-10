@@ -127,6 +127,18 @@ CREATE TABLE IF NOT EXISTS transactions_norm (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_fingerprint
   ON transactions_norm(transaction_fingerprint);
+
+CREATE SEQUENCE IF NOT EXISTS seq_duplicate_candidates_id;
+CREATE TABLE IF NOT EXISTS duplicate_candidates (
+  id                    BIGINT DEFAULT nextval('seq_duplicate_candidates_id') PRIMARY KEY,
+  fingerprint_a         TEXT NOT NULL,
+  fingerprint_b         TEXT NOT NULL,
+  similarity_score      DECIMAL(3,2),
+  reason                TEXT,
+  status                TEXT DEFAULT 'pending',
+  detected_at           TEXT NOT NULL,
+  resolved_at           TEXT
+);
 """
 
 # ---------------------------------------------------------------------------
