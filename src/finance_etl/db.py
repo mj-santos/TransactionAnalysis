@@ -252,6 +252,26 @@ CREATE TABLE IF NOT EXISTS recurring_overrides (
   updated_at   TEXT   NOT NULL
 )
 """,
+
+    # ── Tags ───────────────────────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_tags_id",
+    """
+CREATE TABLE IF NOT EXISTS tags (
+  id         BIGINT DEFAULT nextval('seq_tags_id') PRIMARY KEY,
+  name       TEXT   NOT NULL UNIQUE,
+  color      TEXT   NOT NULL DEFAULT '#3b82f6',
+  created_at TEXT   NOT NULL,
+  updated_at TEXT   NOT NULL
+)
+""",
+    """
+CREATE TABLE IF NOT EXISTS transaction_tags (
+  transaction_fingerprint TEXT NOT NULL,
+  tag_id                  BIGINT NOT NULL,
+  created_at              TEXT NOT NULL,
+  UNIQUE(transaction_fingerprint, tag_id)
+)
+""",
 ]
 
 

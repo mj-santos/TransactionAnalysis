@@ -1369,7 +1369,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
     def _build_txn_where(
         type, date_from, date_to, account, category, merchant, source, subtype=None,
-        unreviewed_only=False,
+        unreviewed_only=False, tag=None,
     ) -> tuple[list, list]:
         """Build shared WHERE clause + params for /transactions and /transactions/totals."""
         where, params = [], []
@@ -1398,6 +1398,13 @@ No cloud services, no external dependencies — all data stays on your machine.
         # COALESCE handles pre-migration rows where unreviewed is NULL (treated as unreviewed)
         if unreviewed_only:
             where.append("COALESCE(unreviewed, TRUE) = TRUE")
+        # tag filter: only transactions with a specific tag
+        if tag:
+            where.append(
+                "transaction_fingerprint IN ("
+                "SELECT transaction_fingerprint FROM transaction_tags WHERE tag_id = ?)"
+            )
+            params.append(int(tag))
         return where, params
 
     @app.get("/transactions", tags=["transactions"], summary="List transactions with filters")
@@ -1416,6 +1423,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         sort_by:   str           = Query("transaction_date", description="Column to sort by"),
         sort_dir:  str           = Query("desc",          description="'asc' or 'desc'"),
         unreviewed_only: bool    = Query(False,           description="Show only unreviewed transactions"),
+        tag:       Optional[int] = Query(None,            description="Filter by tag ID"),
     ):
         """
         Filtered transaction list.
@@ -1425,7 +1433,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Pass `source=<run_id>` to filter by a specific import; omit or pass `source=all`
         to show all rows for the given type.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         group_fields = [f.strip() for f in (group_by or "").split(",")
@@ -1488,6 +1496,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         subtype:   Optional[str] = Query(None, description="transaction_subtype filter: spending|payment|adjustment"),
         source:    Optional[str] = Query(None,  description="run_id to filter by import source; 'all' = no filter"),
         unreviewed_only: bool    = Query(False, description="Show only unreviewed transactions"),
+        tag:       Optional[int] = Query(None,  description="Filter by tag ID"),
     ):
         """
         Return aggregate totals for the filtered set (without fetching all rows).
@@ -1501,7 +1510,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
         source: specific run_id to scope to one import; omit or 'all' for all rows.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"
@@ -2569,6 +2578,206 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {"status": "applied", "updated": updated}
 
     # -----------------------------------------------------------------------
+    # Tags
+    # -----------------------------------------------------------------------
+
+    @app.get("/tags", tags=["tags"], summary="List all tags")
+    def list_tags():
+        """Return all user-defined tags ordered by name."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, name, color, created_at, updated_at FROM tags ORDER BY name"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"tags": []}
+        cols = ["id", "name", "color", "created_at", "updated_at"]
+        return {"tags": [dict(zip(cols, r)) for r in rows]}
+
+    @app.post("/tags", tags=["tags"], summary="Create a tag", status_code=201)
+    def create_tag(payload: dict):
+        """Create a new tag with name and optional color."""
+        name = (payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Tag name is required.")
+        color = (payload.get("color") or "#3b82f6").strip()
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        try:
+            existing = conn.execute("SELECT id FROM tags WHERE name = ?", [name]).fetchone()
+            if existing:
+                raise HTTPException(status_code=409, detail=f"Tag '{name}' already exists.")
+            conn.execute(
+                "INSERT INTO tags (name, color, created_at, updated_at) VALUES (?,?,?,?)",
+                [name, color, now, now],
+            )
+            row = conn.execute("SELECT id FROM tags WHERE name = ?", [name]).fetchone()
+        finally:
+            conn.close()
+        return {"id": row[0], "name": name, "color": color}
+
+    @app.put("/tags/{tag_id}", tags=["tags"], summary="Update a tag")
+    def update_tag(tag_id: int, payload: dict):
+        """Update tag name and/or color."""
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        try:
+            existing = conn.execute("SELECT id FROM tags WHERE id = ?", [tag_id]).fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Tag not found.")
+            name = (payload.get("name") or "").strip()
+            color = (payload.get("color") or "").strip()
+            if name:
+                conn.execute("UPDATE tags SET name=?, updated_at=? WHERE id=?", [name, now, tag_id])
+            if color:
+                conn.execute("UPDATE tags SET color=?, updated_at=? WHERE id=?", [color, now, tag_id])
+        finally:
+            conn.close()
+        return {"id": tag_id, "status": "updated"}
+
+    @app.delete("/tags/{tag_id}", tags=["tags"], summary="Delete a tag")
+    def delete_tag(tag_id: int):
+        """Delete a tag and all its transaction associations."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute("DELETE FROM transaction_tags WHERE tag_id = ?", [tag_id])
+            conn.execute("DELETE FROM tags WHERE id = ?", [tag_id])
+        finally:
+            conn.close()
+        return {"status": "deleted"}
+
+    @app.post("/transactions/tags", tags=["tags"],
+              summary="Assign tags to a transaction")
+    def assign_tags(payload: dict):
+        """
+        Assign one or more tags to a transaction by fingerprint.
+        Payload: {"fingerprint": str, "tag_ids": [int, ...]}
+        """
+        fp = payload.get("fingerprint", "")
+        tag_ids = payload.get("tag_ids", [])
+        if not fp or not tag_ids:
+            raise HTTPException(status_code=400, detail="fingerprint and tag_ids required.")
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        added = 0
+        try:
+            for tid in tag_ids:
+                existing = conn.execute(
+                    "SELECT 1 FROM transaction_tags WHERE transaction_fingerprint=? AND tag_id=?",
+                    [fp, int(tid)],
+                ).fetchone()
+                if not existing:
+                    conn.execute(
+                        "INSERT INTO transaction_tags (transaction_fingerprint, tag_id, created_at) "
+                        "VALUES (?,?,?)",
+                        [fp, int(tid), now],
+                    )
+                    added += 1
+        finally:
+            conn.close()
+        return {"status": "ok", "added": added}
+
+    @app.delete("/transactions/tags", tags=["tags"],
+                summary="Remove a tag from a transaction")
+    def remove_tag_from_transaction(
+        fingerprint: str = Query(..., description="Transaction fingerprint"),
+        tag_id: int = Query(..., description="Tag ID to remove"),
+    ):
+        """Remove a specific tag from a transaction."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "DELETE FROM transaction_tags WHERE transaction_fingerprint=? AND tag_id=?",
+                [fingerprint, tag_id],
+            )
+        finally:
+            conn.close()
+        return {"status": "removed"}
+
+    @app.get("/transactions/{fingerprint}/tags", tags=["tags"],
+             summary="Get tags for a transaction")
+    def get_transaction_tags(fingerprint: str):
+        """Return all tags assigned to a specific transaction."""
+        conn = get_connection(db_path, read_only=True)
+        try:
+            rows = conn.execute(
+                """SELECT t.id, t.name, t.color
+                   FROM tags t
+                   JOIN transaction_tags tt ON tt.tag_id = t.id
+                   WHERE tt.transaction_fingerprint = ?
+                   ORDER BY t.name""",
+                [fingerprint],
+            ).fetchall()
+        finally:
+            conn.close()
+        return {"tags": [{"id": r[0], "name": r[1], "color": r[2]} for r in rows]}
+
+    @app.get("/tags/totals", tags=["tags"], summary="Per-tag spending totals")
+    def tag_totals(
+        year: Optional[int] = Query(None, description="Filter by year"),
+        month: Optional[int] = Query(None, description="Filter by month (1-12)"),
+    ):
+        """
+        Return spending totals per tag, optionally filtered by year/month.
+        Shows both all-time and (if year/month provided) monthly totals.
+        """
+        conn = get_connection(db_path, read_only=True)
+        try:
+            # All-time totals
+            alltime_rows = conn.execute(
+                """SELECT t.id, t.name, t.color,
+                          COUNT(*) AS txn_count,
+                          ABS(COALESCE(SUM(CASE WHEN tn.amount < 0 THEN tn.amount ELSE 0 END), 0)) AS total_spending,
+                          COALESCE(SUM(CASE WHEN tn.amount > 0 THEN tn.amount ELSE 0 END), 0) AS total_income
+                   FROM tags t
+                   JOIN transaction_tags tt ON tt.tag_id = t.id
+                   JOIN transactions_norm tn ON tn.transaction_fingerprint = tt.transaction_fingerprint
+                   GROUP BY t.id, t.name, t.color
+                   ORDER BY total_spending DESC"""
+            ).fetchall()
+
+            monthly_totals = None
+            if year and month:
+                monthly_rows = conn.execute(
+                    """SELECT t.id, t.name, t.color,
+                              COUNT(*) AS txn_count,
+                              ABS(COALESCE(SUM(CASE WHEN tn.amount < 0 THEN tn.amount ELSE 0 END), 0)) AS total_spending,
+                              COALESCE(SUM(CASE WHEN tn.amount > 0 THEN tn.amount ELSE 0 END), 0) AS total_income
+                       FROM tags t
+                       JOIN transaction_tags tt ON tt.tag_id = t.id
+                       JOIN transactions_norm tn ON tn.transaction_fingerprint = tt.transaction_fingerprint
+                       WHERE YEAR(tn.transaction_date) = ? AND MONTH(tn.transaction_date) = ?
+                       GROUP BY t.id, t.name, t.color
+                       ORDER BY total_spending DESC""",
+                    [year, month],
+                ).fetchall()
+                monthly_totals = [
+                    {"id": r[0], "name": r[1], "color": r[2], "txn_count": int(r[3]),
+                     "total_spending": float(r[4]), "total_income": float(r[5])}
+                    for r in monthly_rows
+                ]
+        finally:
+            conn.close()
+
+        return {
+            "alltime": [
+                {"id": r[0], "name": r[1], "color": r[2], "txn_count": int(r[3]),
+                 "total_spending": float(r[4]), "total_income": float(r[5])}
+                for r in alltime_rows
+            ],
+            "monthly": monthly_totals,
+            "year": year,
+            "month": month,
+        }
+
+    # -----------------------------------------------------------------------
     # Dashboard summary
     # -----------------------------------------------------------------------
 
@@ -3024,6 +3233,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         "normalization_jobs",
         "transactions_stage",
         "transactions_norm",
+        "tags",
+        "transaction_tags",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
@@ -3306,6 +3517,27 @@ No cloud services, no external dependencies — all data stays on your machine.
                 )
                 tx_count += 1
 
+            # 10. tags
+            conn.execute("DELETE FROM tags")
+            for r in data.get("tags", []):
+                conn.execute(
+                    """INSERT INTO tags (name, color, created_at, updated_at)
+                       VALUES (?,?,?,?)""",
+                    [r["name"], r.get("color", "#3b82f6"),
+                     r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # 11. transaction_tags
+            conn.execute("DELETE FROM transaction_tags")
+            for r in data.get("transaction_tags", []):
+                conn.execute(
+                    """INSERT INTO transaction_tags
+                       (transaction_fingerprint, tag_id, created_at)
+                       VALUES (?,?,?)""",
+                    [r["transaction_fingerprint"], r["tag_id"],
+                     r.get("created_at", now)],
+                )
+
             conn.close()
         except HTTPException:
             raise
@@ -3338,6 +3570,8 @@ No cloud services, no external dependencies — all data stays on your machine.
             "normalization_jobs_restored": len(data.get("normalization_jobs", [])),
             "transactions_stage_restored": len(data.get("transactions_stage", [])),
             "transactions_norm_restored": tx_count,
+            "tags_restored": len(data.get("tags", [])),
+            "transaction_tags_restored": len(data.get("transaction_tags", [])),
             "wizard_profiles_restored": profiles_restored,
         }
 

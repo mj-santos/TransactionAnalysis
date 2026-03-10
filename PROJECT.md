@@ -237,6 +237,9 @@ TransactionAnalysis/
 - Totals footer row
 - Per-transaction "Mark as Reviewed" button with unreviewed dot indicator
 - "Mark All Reviewed" bulk action (respects current filters)
+- Tag filter dropdown — filters transactions by assigned tag
+- Per-row tag chips showing assigned tags, "+tag" button opens tag assignment popup
+- Tag assignment popup: checkboxes for all tags, toggle to assign/remove per transaction
 - API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`
 
 **Cash Flow (`#page-cashflow`)**
@@ -320,7 +323,12 @@ TransactionAnalysis/
     - Supports v1 (legacy) and v2 backup files; v1 auto-migrated to v2 on restore
   - Auto-backup on every successful import commit (max 5 rotated in `data/auto_backups/`)
 - ~~**⚠️ Settings were in-memory only** — fixed in v2.1.3 (BUG-3); now persisted to `data/ui_settings.json`~~
-- API: `GET /backup/export`, `POST /backup/restore`, `GET /backup/status`
+- **Tag Management** card:
+  - Create/edit/delete custom tags with name and color picker
+  - Tag list with colored badges, edit/delete buttons
+  - Per-tag totals panel: transaction count and total spend per tag (all-time)
+  - Tags loaded on Settings page visit via `loadTags()` → `GET /tags`
+- API: `GET /backup/export`, `POST /backup/restore`, `GET /backup/status`, `GET/POST/PUT/DELETE /tags`, `POST/DELETE /transactions/tags`, `GET /transactions/{fingerprint}/tags`, `GET /tags/totals`
 
 ---
 
@@ -525,6 +533,30 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 
 ---
 
+### `tags` — user-defined transaction tags
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | BIGINT PK | Auto-seq |
+| `name` | TEXT NOT NULL UNIQUE | Tag display name |
+| `color` | TEXT DEFAULT '#3b82f6' | Hex color code |
+| `created_at` | TEXT | ISO timestamp |
+| `updated_at` | TEXT | ISO timestamp |
+
+---
+
+### `transaction_tags` — many-to-many tag assignments
+
+| Column | Type | Notes |
+|---|---|---|
+| `transaction_fingerprint` | TEXT NOT NULL | FK to `transactions_norm.transaction_fingerprint` |
+| `tag_id` | BIGINT NOT NULL | FK to `tags.id` |
+| `created_at` | TEXT NOT NULL | ISO timestamp |
+
+**Unique constraint:** `(transaction_fingerprint, tag_id)`
+
+---
+
 ### `schema_version` — DuckDB schema version tracking
 
 | Column | Type | Notes |
@@ -693,7 +725,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.5.0
+**Current Version:** v2.6.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -710,6 +742,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.3.1 | 2026-03-10 | Hardened CSV upload pipeline: encoding detection, BOM stripping, line ending normalisation, delimiter sniffing fallback, Excel magic-byte rejection, extension validation |
 | v2.4.0 | 2026-03-10 | Sprint 3 — Cash Flow View: new page with income/spending/net KPIs, monthly bar chart, category breakdown, MoM delta, time filters, transfer toggle; new `GET /cashflow/summary` endpoint |
 | v2.5.0 | 2026-03-10 | Sprint 4 — Smart Budget Rebalancing: suggestion engine compares avg monthly actuals vs budgets, generates over/under suggestions with editable amounts, user-confirmed apply; new `GET /budgets/rebalance` and `POST /budgets/rebalance/apply` endpoints |
+| v2.6.0 | 2026-03-10 | Sprint 5 — Transaction Tagging: custom tags with name/color, many-to-many tag assignment per transaction, tag filtering in CC/Bank views, per-tag totals in Settings, tag popup UI, backup/restore support for tags; new `tags`, `transaction_tags` tables; new `GET/POST/PUT/DELETE /tags`, `POST/DELETE /transactions/tags`, `GET /transactions/{fp}/tags`, `GET /tags/totals` endpoints |
 
 ### Version Increment Rules
 
