@@ -977,5 +977,66 @@ tr.unreviewed-row {
   transition: width 0.3s ease;
 }
 
+/* ── Spending Alerts ────────────────────────────────────────── */
+.sa-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.sa-banner-yellow {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+}
+.sa-banner-red {
+  background: #fee2e2;
+  border: 1px solid #ef4444;
+  color: #991b1b;
+}
+.sa-banner-dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  opacity: 0.6;
+  padding: 0 4px;
+  color: inherit;
+}
+.sa-banner-dismiss:hover { opacity: 1; }
+
+.sa-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+.sa-status-dot.sa-status-green { background: #22c55e; }
+.sa-status-dot.sa-status-yellow { background: #f59e0b; }
+.sa-status-dot.sa-status-red { background: #ef4444; }
+
+.sa-status-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-alt, #f8f9fa);
+}
+.sa-status-chip.sa-status-green { border-color: #bbf7d0; background: #f0fdf4; }
+.sa-status-chip.sa-status-yellow { border-color: #fde68a; background: #fffbeb; }
+.sa-status-chip.sa-status-red { border-color: #fecaca; background: #fef2f2; }
+.sa-status-label { font-weight: 600; }
+.sa-status-pct { font-weight: 700; margin-left: 2px; }
+.sa-status-text { color: var(--text-muted); font-size: 11px; margin-left: 2px; }
+
 /* ── Dashboard ──────────────────────────────────────────────── */
 #page-dashboard .card { padding: 16px 20px; }

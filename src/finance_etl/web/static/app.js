@@ -3180,18 +3180,19 @@ function _renderDashboard(data) {
     catList.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No spending data for this month.</span>';
   }
 
-  // Budget tracker
+  // Budget tracker (with green/yellow/red status)
   const budgetList = document.getElementById('dash-budget-list');
   if (budgetList) {
-    if (data.budgets && data.budgets.length) {
-      budgetList.innerHTML = data.budgets.map(b => {
+    const bva = data.budgets_vs_actual || [];
+    if (bva.length) {
+      budgetList.innerHTML = bva.map(b => {
         const pct = Math.min(b.pct || 0, 100);
-        const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
-        const label = b.category || b.parent;
+        const color = b.pct >= 100 ? '#ef4444' : b.pct >= 80 ? '#f59e0b' : '#22c55e';
+        const statusClass = b.pct >= 100 ? 'sa-status-red' : b.pct >= 80 ? 'sa-status-yellow' : 'sa-status-green';
         return `<div>
-          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px;">
-            <span>${esc(label)}</span>
-            <span>${_fmt$(b.spent)} / ${_fmt$(b.budget)} <span style="color:${color};">(${b.pct ?? 0}%)</span></span>
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; margin-bottom:2px;">
+            <span><span class="sa-status-dot ${statusClass}"></span>${esc(b.parent)}</span>
+            <span>${_fmt$(b.actual_amount)} / ${_fmt$(b.monthly_amount)} <span style="color:${color};">(${b.pct ?? 0}%)</span></span>
           </div>
           <div style="background:var(--border); border-radius:4px; height:6px;">
             <div style="background:${color}; border-radius:4px; height:6px; width:${pct}%;"></div>
@@ -3202,6 +3203,9 @@ function _renderDashboard(data) {
       budgetList.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No budgets set. Click "+ Set Budget" to add one.</span>';
     }
   }
+
+  // Spending alerts — banners + status overview
+  _renderSpendingAlerts(data.spending_alerts || [], data.budgets_vs_actual || []);
 
   // Savings goals
   _renderSavingsGoals(data.savings_goals || []);
@@ -3229,6 +3233,55 @@ function _renderDashboard(data) {
       }).join('');
     } else {
       tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px;">No transactions found.</td></tr>';
+    }
+  }
+}
+
+// ── Spending Alerts & Thresholds ────────────────────────────────
+
+function _renderSpendingAlerts(alerts, budgets) {
+  // Alert banners
+  const bannerEl = document.getElementById('spending-alerts-banner');
+  if (bannerEl) {
+    if (alerts.length) {
+      bannerEl.style.display = '';
+      bannerEl.innerHTML = alerts.map(a => {
+        const isExceeded = a.status === 'exceeded';
+        const cls = isExceeded ? 'sa-banner sa-banner-red' : 'sa-banner sa-banner-yellow';
+        const icon = isExceeded ? '🚨' : '⚠️';
+        const msg = isExceeded
+          ? `${esc(a.parent)} has exceeded its monthly budget — ${_fmt$(a.spent)} of ${_fmt$(a.budget)} (${a.pct}%)`
+          : `${esc(a.parent)} is approaching its budget limit — ${_fmt$(a.spent)} of ${_fmt$(a.budget)} (${a.pct}%)`;
+        return `<div class="${cls}">
+          <span>${icon} ${msg}</span>
+          <button class="sa-banner-dismiss" onclick="this.parentElement.remove()" title="Dismiss">✕</button>
+        </div>`;
+      }).join('');
+    } else {
+      bannerEl.style.display = 'none';
+      bannerEl.innerHTML = '';
+    }
+  }
+
+  // Budget Status Overview (green/yellow/red per category)
+  const overviewEl = document.getElementById('budget-status-overview');
+  const gridEl = document.getElementById('budget-status-grid');
+  if (overviewEl && gridEl) {
+    if (budgets.length) {
+      overviewEl.style.display = '';
+      gridEl.innerHTML = budgets.map(b => {
+        const statusClass = b.pct >= 100 ? 'sa-status-red' : b.pct >= 80 ? 'sa-status-yellow' : 'sa-status-green';
+        const statusLabel = b.pct >= 100 ? 'Over Budget' : b.pct >= 80 ? 'Near Limit' : 'On Track';
+        return `<div class="sa-status-chip ${statusClass}">
+          <span class="sa-status-dot ${statusClass}"></span>
+          <span class="sa-status-label">${esc(b.parent)}</span>
+          <span class="sa-status-pct">${b.pct ?? 0}%</span>
+          <span class="sa-status-text">${statusLabel}</span>
+        </div>`;
+      }).join('');
+    } else {
+      overviewEl.style.display = 'none';
+      gridEl.innerHTML = '';
     }
   }
 }
