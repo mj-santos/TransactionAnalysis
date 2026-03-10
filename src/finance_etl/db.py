@@ -226,6 +226,7 @@ CREATE TABLE IF NOT EXISTS category_rules (
   updated_at   TEXT    NOT NULL
 )
 """,
+    "ALTER TABLE category_rules ADD COLUMN IF NOT EXISTS conditions TEXT",
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS category_normalized TEXT",
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS category_parent TEXT",
 

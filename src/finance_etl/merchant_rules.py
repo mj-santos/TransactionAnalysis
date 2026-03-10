@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from finance_etl.utils.log import get_logger
+from finance_etl.utils.query_helpers import evaluate_rule_groups, _match_single as _shared_match
 
 log = get_logger(__name__)
 
@@ -82,42 +83,10 @@ class CompiledRule:
                 log.warning("Invalid regex in merchant_rule id=%s: %s", self.id, exc)
                 self._regex = None
 
-    def _match_single(self, pattern: str, match_type: str, compiled: re.Pattern | None, text: str) -> bool:
-        """Evaluate one condition against text."""
-        if match_type == "contains":
-            return pattern.lower() in text.lower()
-        if match_type == "startswith":
-            return text.lower().startswith(pattern.lower())
-        if match_type == "regex":
-            return bool(compiled and compiled.search(text))
-        return False
-
-    def _eval_condition(self, cond: dict, idx: int, text: str) -> bool:
-        """Evaluate a single condition with negate support."""
-        result = self._match_single(
-            cond["pattern"], cond.get("match_type", "contains"),
-            self._condition_regexes.get(idx), text
-        )
-        return (not result) if cond.get("negate") else result
-
     def matches(self, text: str) -> bool:
         if self._groups:
-            # Evaluate each group, then AND all group results together
-            idx = 0
-            for group in self._groups:
-                group_logic = group.get("group_logic", "AND")
-                conditions = group.get("conditions", [])
-                group_results = []
-                for cond in conditions:
-                    group_results.append(self._eval_condition(cond, idx, text))
-                    idx += 1
-                if not group_results:
-                    continue
-                group_pass = all(group_results) if group_logic == "AND" else any(group_results)
-                if not group_pass:
-                    return False  # Inter-group AND: any group failing means no match
-            return True
-        return self._match_single(self.pattern, self.match_type, self._regex, text)
+            return evaluate_rule_groups(self._groups, text, self._condition_regexes)
+        return _shared_match(self.pattern, self.match_type, text, self._regex)
 
 
 # ---------------------------------------------------------------------------

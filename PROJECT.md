@@ -295,6 +295,7 @@ TransactionAnalysis/
   - Analyzes raw descriptions; suggests pattern → merchant rules
   - Accept, Edit, Dismiss per suggestion; Accept All
 - Merchant Normalization Rules CRUD table: `loadMerchantRules()` → `GET /merchant-rules`
+  - **Inline search bar**: real-time filter across pattern, merchant, match_type columns; "X of N rules" count; Escape to clear
   - Add/Edit rules with compound AND/OR conditions, match types (contains/startswith/regex), priority, negation
   - Test rule against live data; paginated match results
   - Delete with confirmation
@@ -313,7 +314,9 @@ TransactionAnalysis/
   - Keyword-heuristic matching of merchant names to categories
   - Accept assigns category to merchant via `/merchant-categories`
 - Category Normalization Rules CRUD table: `loadCategoryRules()` → `GET /category-rules`
+  - **Inline search bar**: real-time filter across raw_category, normalized category, parent group columns; "X of N rules" count; Escape to clear
   - Maps raw bank category → normalized category + parent group
+  - **Grouped condition builder**: same pattern as merchant rules — 1+ groups with AND/OR combiner, conditions with exact/contains/starts_with match types, NOT support; legacy exact-match rules auto-load as single condition on edit
   - Inline editor form with parent group dropdown (fixed list of 12 parents)
 - **Collapsible panels**: Suggested Mappings, Suggested Merchant Categories, Category Rules panels all collapse/expand with item count badges; scroll-capped containers; collapse state persisted in localStorage
 - Apply Normalization button: `startCategoryNormalize()` → `POST /category-rules/apply` (background job)
@@ -547,13 +550,14 @@ Applied in order: `priority DESC, id ASC`. First matching rule wins.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | BIGINT PK | Auto-seq |
-| `raw_category` | TEXT NOT NULL UNIQUE | Raw bank category string (case-insensitive match) |
+| `raw_category` | TEXT NOT NULL UNIQUE | Raw bank category string (legacy exact-match) or label for grouped rules |
 | `category` | TEXT NOT NULL | Normalized subcategory (e.g. "Restaurants") |
 | `parent` | TEXT NOT NULL | Parent group (e.g. "Food & Dining") |
+| `conditions` | TEXT | JSON grouped conditions or NULL for legacy exact-match. Format: `{"groups": [{"group_logic": "AND"|"OR", "conditions": [{"pattern": str, "match_type": "exact"|"contains"|"starts_with", "negate": bool}]}]}` |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
 
-Lookup priority: user rules (DB) > built-in `BUILT_IN_CATEGORY_MAP` in `category_rules.py` > fallback (keep raw, assign parent "Other").
+Lookup priority: grouped condition rules (DB, `conditions` IS NOT NULL) > exact-match user rules (DB, `conditions` IS NULL) > built-in `BUILT_IN_CATEGORY_MAP` in `category_rules.py` > fallback (keep raw, assign parent "Other"). Backward-compatible: single group + single condition + match_type="exact" + no negate → stored as legacy (conditions=NULL).
 
 **Built-in taxonomy covers ~97 raw category strings** across 12 parent groups: Food & Dining, Shopping, Travel, Transportation, Entertainment, Health & Wellness, Bills & Utilities, Financial, Education, Home, Gifts & Charity, Other.
 
@@ -849,6 +853,8 @@ Single-row table seeded with `1` on first migration run.
 - **`INCOME_FILTER`** constant in `utils/query_helpers.py` defines the canonical income SQL condition: `amount > 0 AND statement_type = 'bank'`. All income queries must import and use this constant (or reference it in a comment when table aliases prevent direct use). CC positive amounts (payments, refunds) are never income. See BUG-6/7/8 history. A tripwire test (`test_income_filter_constant_unchanged`) guards against accidental changes.
 - **Collapsible card panels**: Cards on Merchants and Categories pages use `.card-header-toggle` + `.card-collapsible-body` pattern. `toggleCardCollapse()` toggles `.collapsed` class and persists state in localStorage (`collapse_<cardId>`). Badge counts (`.badge-count`) show item totals even when collapsed. `ensureCardExpanded(cardId)` auto-opens a panel before scrolling to its content (e.g., when opening a form). Suggestion lists use `.suggestions-scroll` (max-height 400px), rule tables use `.rules-table-scroll` (max-height 450px). Note: localStorage is used for collapse state (alongside dark mode, colorblind palette, and onboarding prefs). If a DB-backed settings store is added later, consider migrating these UI prefs for cross-device consistency.
 - **Category drill-down pattern**: `openCategoryDrilldown(categoryParent, dateFrom, dateTo)` opens a modal listing transactions for the given category within the date range. If `dateFrom`/`dateTo` are omitted, defaults to dashboard's current month. Used in: Dashboard top categories, Cash Flow spending breakdown, Monthly Summary top categories, Reports category tables. NOT applied to: Budget Tracker, Utilities Category List, Rule editors. "View All in Transactions" navigates to Bank tab with category + dates pre-filtered.
+- **`evaluate_rule_groups(groups, text, compiled_regexes)`** in `utils/query_helpers.py` is the shared grouped boolean condition evaluator. All groups must pass (implicit AND). Within each group, conditions combined by `group_logic` (AND|OR). Supports match types: `exact`, `contains`, `starts_with`, `startswith`, `regex`. Used by `merchant_rules.CompiledRule.matches()` and `category_rules.normalize_category()`. Single implementation, two consumers — no duplicated logic.
+- **Rule table search**: Merchant and Category rule tables have inline search bars. JS-only filtering (`filterMerchantRules()`, `filterCatRules()`) against cached `_allMerchantRules`/`_allCatRules` arrays. Case-insensitive match across all visible columns. Shows "X of N rules" count. Escape key clears filter. Search does NOT steal focus on load.
 - **Docker BuildKit cache corruption**: If Docker build fails with `parent snapshot does not exist` or similar layer cache errors, run `docker builder prune --all --force` before investigating code. Cache corruption from failed builds is a known Docker BuildKit issue and is not always a code problem.
 
 ---
@@ -881,7 +887,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.19.0
+**Current Version:** v2.20.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -918,6 +924,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.18.0 | 2026-03-10 | Merchant rule grouped boolean logic — implicit AND between groups; rules now support 1+ condition groups each with own AND/OR combiner; inter-group logic always AND; legacy flat conditions auto-migrate to single group on read; rule editor UI shows visually separated group blocks with per-group logic selector; matching engine evaluates groups independently then ANDs results; 6 new unit tests including Amazon-not-Prime example; conditions JSON schema updated to grouped format |
 | v2.18.1 | 2026-03-10 | Fixed dashboard error loading (undefined values for `category_parent`/`total_amount`/`prev_spend`/`pct_change`); fixed analytics reports empty after backup restore — restore now auto-regenerates reports; new `POST /reports/regenerate` endpoint |
 | v2.19.0 | 2026-03-10 | Year filter for transactions + cash flow — new `GET /transactions/years` endpoint; year dropdown on CC and Bank filter bars scopes Quick Date presets to selected year; cash flow period dropdown includes per-year options; clickable category drill-down app-wide — category rows in Cash Flow spending breakdown, Monthly Summary top categories, and Reports category tables now open drill-down modal with date-scoped transaction list; `openCategoryDrilldown()` accepts optional date range for flexible reuse |
+| v2.20.0 | 2026-03-10 | Rule search bars + category rule grouped condition builder + shared rule evaluation utility; inline search/filter on Merchant and Category rule tables (real-time, case-insensitive, match count, Escape to clear); category rule editor replaced with grouped condition builder (exact/contains/starts_with match types, AND/OR groups, NOT support); backward-compatible with legacy exact-match rules; `evaluate_rule_groups()` shared utility in `query_helpers.py` used by both merchant and category rule engines; new `conditions` column on `category_rules` table; 7 new unit tests for shared utility; 281 total tests |
 
 ### Version Increment Rules
 
