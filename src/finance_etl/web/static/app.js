@@ -3171,7 +3171,7 @@ function _pollCatNorm() {
   if (_catNormPoll) clearInterval(_catNormPoll);
   _catNormPoll = setInterval(async () => {
     try {
-      const data = await api('GET', `/category-normalize/${_catNormJobId}`);
+      const data = await api('GET', `/normalize/${_catNormJobId}`);
       const statusEl = document.getElementById('cat-norm-status');
       if (data.status === 'success') {
         clearInterval(_catNormPoll);
