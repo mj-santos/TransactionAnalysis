@@ -162,6 +162,7 @@ TransactionAnalysis/
     ├── test_models.py
     ├── test_money.py
     ├── test_pipeline_api.py
+    ├── test_income_classification.py ← income rule regression tests (BUG-6/7/8)
     ├── test_recurring.py       ← recurring detection engine tests
     └── test_wizard_mapping.py
 ```
@@ -694,31 +695,10 @@ Single-row table seeded with `1` on first migration run.
 - Impact: Low severity — user must re-enable verbose logs after every restart. Not data-losing, but annoying.
 - Fix: Persist settings to a `user_settings` DB table or a JSON file in `data/`.
 
-**BUG-6: Monthly Summary counts CC payments as income**
-- File: `api.py`, Lines: 3137-3145 (`_generate_monthly_summary`)
-- Description: The income query uses `WHERE amount > 0` with no filter on `statement_type` or `transaction_subtype`. Credit card payment transactions (balance payments TO the card) are stored with `amount > 0` and `transaction_subtype = 'payment'`. The Monthly Summary income query includes these as income. Cash Flow correctly excludes them via `COALESCE(transaction_subtype, '') != 'payment'` in its transfer exclusion clause (enabled by default).
-- Impact: Monthly Summary reports significantly inflated "Total Income" figures when CC data is present. Every CC balance payment is double-counted as income. For a CC-only dataset, income should be near-zero (only small refunds), but instead shows the sum of all payments made to the card.
-- Root cause: Query inconsistency — Cash Flow has transfer/payment exclusion filters; Monthly Summary does not.
-- Fix: Add `AND COALESCE(transaction_subtype, '') != 'payment'` to the income query in `_generate_monthly_summary`. Ideally also add `AND statement_type = 'bank'` to restrict income to bank inflows only (CC credits are refunds/adjustments, not income).
-
-**BUG-7: Annual Report counts CC payments as income (same root cause as BUG-6)**
-- File: `api.py`, Lines: 3857-3864 (`_generate_annual_report`)
-- Description: Identical to BUG-6 — the annual report income query uses `WHERE amount > 0` with no subtype or statement_type filter. CC payments inflate the annual income figure.
-- Impact: Year-in-review "Total Income" is overstated by the sum of all CC balance payments for the year.
-- Fix: Same as BUG-6 — add payment/transfer exclusion or restrict income to `statement_type = 'bank'`.
-
-**BUG-8: No income query checks `statement_type` — CC refunds/adjustments counted as income everywhere**
-- Files: `api.py` lines 3137-3145 (monthly summary), 3720-3733 (cash flow), 3857-3864 (annual report), 3893-3897 (annual monthly breakdown)
-- Description: All income classification across the app is based purely on `amount > 0` without checking whether the transaction source is a bank or credit card. For CC transactions: payments have `amount > 0` (BUG-6/7), and adjustments/refunds can also have `amount > 0`. These are not true income — they are internal transfers (payments) or spending offsets (refunds). Only bank statement inflows represent actual income (salary, deposits, interest, etc.).
-- Impact: Even after fixing BUG-6/7 (excluding `payment` subtype), CC refunds/adjustments with positive amounts will still be counted as income. The magnitude is typically small (refunds), but conceptually incorrect.
-- Fix: Add `AND statement_type = 'bank'` to all income queries. CC positive-amount rows should be treated as spending offsets, not income. This is the comprehensive fix that resolves BUG-6, BUG-7, and BUG-8 together.
-- Diagnostic queries:
-  - Query A (what Monthly Summary counts as income): `SELECT ... FROM transactions_norm WHERE amount > 0 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ? ORDER BY ABS(amount) DESC LIMIT 50`
-  - Query B (what Cash Flow counts as income): same but adds `AND COALESCE(transaction_subtype, '') != 'payment' AND LOWER(COALESCE(category, '')) NOT LIKE '%transfer%'`
-  - Query C (suspect CC rows): `SELECT ... FROM transactions_norm WHERE statement_type = 'credit_card' AND amount > 0 ORDER BY amount DESC LIMIT 50`
-  - The difference between A and B result sets reveals the CC payment rows causing the discrepancy.
-
 ### Previously Fixed Bugs
+
+**BUG-6/7/8 (FIXED): Income classification — CC payments/refunds counted as income**
+- All income queries across the app (Monthly Summary, Annual Report, Cash Flow, transaction totals, tag totals, analytics CSV reports) now use `amount > 0 AND statement_type = 'bank'`. CC positive amounts (payments, refunds, adjustments) are never counted as income. See `tests/test_income_classification.py` for regression tests. Fixed in v2.13.1.
 
 **BUG (FIXED): Duplicate function names in `app.js`**
 - Merchant-category functions renamed to `acceptMerchantCatSuggestion()` / `dismissMerchantCatSuggestion()`. Category-rules versions (`acceptCatSuggestion()` / `dismissCatSuggestion()`) remain separate.
@@ -843,7 +823,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.13.0
+**Current Version:** v2.13.1
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -868,6 +848,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.11.0 | 2026-03-10 | Sprint 10 — Net Worth Snapshot: manual net worth tracker with account management (checking/savings/investment/credit card/loan/other); assets vs liabilities breakdown; point-in-time snapshots with history chart; dashboard widget showing current net worth with trend vs last snapshot; new `nw_accounts` and `nw_snapshots` tables; new `GET/POST/PUT/DELETE /net-worth/accounts`, `GET /net-worth/summary`, `GET/POST/DELETE /net-worth/snapshots` endpoints; backup/restore support |
 | v2.12.0 | 2026-03-10 | Sprint 11 — Annual Year-in-Review Report: generate annual financial reports with total income/spent/net saved, top 5 categories and merchants, biggest and lightest months, month-by-month chart, recurring costs total; modal viewer with year navigation, save/regenerate, print/PDF export via browser print dialog; stored report history with browse/compare/delete; new `annual_reports` table; new `POST /annual-reports/generate`, `GET /annual-reports`, `GET /annual-reports/{year}`, `DELETE /annual-reports/{year}` endpoints; backup/restore support |
 | v2.13.0 | 2026-03-10 | Sprint 12 — Power User & Polish: keyboard shortcuts (j/k navigate, r review, c category edit, x select, / search, ? help, 1-9 tabs); inline category editing via double-click on transaction rows; bulk actions with multi-select checkboxes (mark reviewed, assign category, assign tag); colorblind-accessible palette (deuteranopia/protanopia safe); dark/light mode toggle with localStorage persistence; onboarding flow for first-time users (3-step guided import → categories → budgets); no new API endpoints — all features are UI-only |
+| v2.13.1 | 2026-03-10 | Fix BUG-6/7/8: income classification — CC payments and refunds no longer counted as income; all income queries now require `amount > 0 AND statement_type = 'bank'`; applied to Monthly Summary, Annual Report, Cash Flow, transaction totals, tag totals, and analytics CSV reports; 3 regression tests added |
 
 ### Version Increment Rules
 

@@ -329,14 +329,16 @@ def _build_report_sql(payload: Any) -> tuple[list, list, list[str]]:
             col_names.append(field)
         # Feature 3: Replaced definitions (old sign-filtered versions deleted)
         # total_spend  = gross signed sum of ALL amounts (no sign filtering)
-        # total_income = sum of inflows only (bank context; always >= 0)
+        # Income rule: amount > 0 AND statement_type = 'bank'
+        # CC positive amounts (payments, refunds) are never true income.
+        # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
         # net_amount   = total_income − |outflows|  (null-safe via COALESCE)
         _ns = "COALESCE(amount, 0)"
         sel += [
             "COUNT(*) AS row_count",
             f"SUM({_ns}) AS total_spend",
-            f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END) AS total_income",
-            (f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END)"
+            f"SUM(CASE WHEN {_ns} > 0 AND statement_type = 'bank' THEN {_ns} ELSE 0 END) AS total_income",
+            (f"SUM(CASE WHEN {_ns} > 0 AND statement_type = 'bank' THEN {_ns} ELSE 0 END)"
              f" - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount"),
         ]
         col_names += ["row_count", "total_spend", "total_income", "net_amount"]
@@ -1447,11 +1449,14 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn = get_connection(db_path)
             if group_fields:
                 # Feature 3 aggregations
+                # Income rule: amount > 0 AND statement_type = 'bank'
+                # CC positive amounts (payments, refunds) are never true income.
+                # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
                 sel = list(group_fields) + [
                     "COUNT(*) AS row_count",
                     f"SUM({_ns}) AS total_spend",
-                    f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END) AS total_income",
-                    (f"SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END)"
+                    f"SUM(CASE WHEN {_ns} > 0 AND statement_type = 'bank' THEN {_ns} ELSE 0 END) AS total_income",
+                    (f"SUM(CASE WHEN {_ns} > 0 AND statement_type = 'bank' THEN {_ns} ELSE 0 END)"
                      f" - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount"),
                 ]
                 grp_sql = ", ".join(group_fields)
@@ -1504,7 +1509,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Feature 1: type filter isolates credit_card from bank — never combined.
         Feature 3 definitions:
           total_spend   = gross signed sum (all amounts, no sign filter)
-          total_income  = sum of inflows (bank context)
+          total_income  = sum of inflows (bank statement_type only)
           total_outflow = absolute sum of outflows
           net_amount    = total_income − total_outflow
         Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
@@ -1515,13 +1520,16 @@ No cloud services, no external dependencies — all data stays on your machine.
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"
         _ra = "COALESCE(resolved_amount, 0)"
+        # Income rule: amount > 0 AND statement_type = 'bank'
+        # CC positive amounts (payments, refunds) are never true income.
+        # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
         sql = f"""
             SELECT
               COUNT(*) AS row_count,
               SUM({_ns}) AS total_spend,
-              SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END) AS total_income,
+              SUM(CASE WHEN {_ns} > 0 AND statement_type = 'bank' THEN {_ns} ELSE 0 END) AS total_income,
               ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS total_outflow,
-              SUM(CASE WHEN {_ns} > 0 THEN {_ns} ELSE 0 END)
+              SUM(CASE WHEN {_ns} > 0 AND statement_type = 'bank' THEN {_ns} ELSE 0 END)
                 - ABS(SUM(CASE WHEN {_ns} < 0 THEN {_ns} ELSE 0 END)) AS net_amount,
               -- CC balance fields (subtype model)
               COALESCE(SUM(CASE WHEN transaction_subtype = 'spending'    THEN {_ra} ELSE 0 END), 0) AS cc_spending,
@@ -2893,11 +2901,15 @@ No cloud services, no external dependencies — all data stays on your machine.
         conn = get_connection(db_path, read_only=True)
         try:
             # All-time totals
+            # Income rule: amount > 0 AND statement_type = 'bank'
+            # CC positive amounts (payments, refunds) are never true income.
+            # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
             alltime_rows = conn.execute(
                 """SELECT t.id, t.name, t.color,
                           COUNT(*) AS txn_count,
                           ABS(COALESCE(SUM(CASE WHEN tn.amount < 0 THEN tn.amount ELSE 0 END), 0)) AS total_spending,
-                          COALESCE(SUM(CASE WHEN tn.amount > 0 THEN tn.amount ELSE 0 END), 0) AS total_income
+                          COALESCE(SUM(CASE WHEN tn.amount > 0 AND tn.statement_type = 'bank'
+                                            THEN tn.amount ELSE 0 END), 0) AS total_income
                    FROM tags t
                    JOIN transaction_tags tt ON tt.tag_id = t.id
                    JOIN transactions_norm tn ON tn.transaction_fingerprint = tt.transaction_fingerprint
@@ -2911,7 +2923,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                     """SELECT t.id, t.name, t.color,
                               COUNT(*) AS txn_count,
                               ABS(COALESCE(SUM(CASE WHEN tn.amount < 0 THEN tn.amount ELSE 0 END), 0)) AS total_spending,
-                              COALESCE(SUM(CASE WHEN tn.amount > 0 THEN tn.amount ELSE 0 END), 0) AS total_income
+                              COALESCE(SUM(CASE WHEN tn.amount > 0 AND tn.statement_type = 'bank'
+                                                THEN tn.amount ELSE 0 END), 0) AS total_income
                        FROM tags t
                        JOIN transaction_tags tt ON tt.tag_id = t.id
                        JOIN transactions_norm tn ON tn.transaction_fingerprint = tt.transaction_fingerprint
@@ -3135,10 +3148,14 @@ No cloud services, no external dependencies — all data stays on your machine.
         txn_count = int(spend_row[1])
 
         # Total income
+        # Income rule: amount > 0 AND statement_type = 'bank'
+        # CC positive amounts (payments, refunds) are never true income.
+        # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
         income_row = conn.execute(
             """SELECT COALESCE(SUM(amount), 0)
                FROM transactions_norm
                WHERE amount > 0
+                 AND statement_type = 'bank'
                  AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?""",
             [year, month],
         ).fetchone()
@@ -3717,10 +3734,14 @@ No cloud services, no external dependencies — all data stays on your machine.
                 )
 
             # ── Summary totals ──────────────────────────────────────
+            # Income rule: amount > 0 AND statement_type = 'bank'
+            # CC positive amounts (payments, refunds) are never true income.
+            # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
             summary_row = conn.execute(
                 f"""
                 SELECT
-                    COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN amount > 0 AND statement_type = 'bank'
+                                     THEN amount ELSE 0 END), 0),
                     ABS(COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0)),
                     COALESCE(SUM(amount), 0),
                     COUNT(*)
@@ -3736,11 +3757,15 @@ No cloud services, no external dependencies — all data stays on your machine.
             txn_count = int(summary_row[3])
 
             # ── Monthly breakdown ───────────────────────────────────
+            # Income rule: amount > 0 AND statement_type = 'bank'
+            # CC positive amounts (payments, refunds) are never true income.
+            # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
             monthly_rows = conn.execute(
                 f"""
                 SELECT
                     DATE_TRUNC('month', transaction_date) AS month,
-                    COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS income,
+                    COALESCE(SUM(CASE WHEN amount > 0 AND statement_type = 'bank'
+                                     THEN amount ELSE 0 END), 0) AS income,
                     ABS(COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0)) AS spending,
                     COALESCE(SUM(amount), 0) AS net
                 FROM transactions_norm
@@ -3854,10 +3879,14 @@ No cloud services, no external dependencies — all data stays on your machine.
         txn_count = int(spend_row[1])
 
         # Total income
+        # Income rule: amount > 0 AND statement_type = 'bank'
+        # CC positive amounts (payments, refunds) are never true income.
+        # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
         income_row = conn.execute(
             """SELECT COALESCE(SUM(amount), 0)
                FROM transactions_norm
                WHERE amount > 0
+                 AND statement_type = 'bank'
                  AND YEAR(transaction_date) = ?""",
             [year],
         ).fetchone()
@@ -3890,11 +3919,15 @@ No cloud services, no external dependencies — all data stays on your machine.
         top_merchants = [{"name": r[0], "amount": float(r[1])} for r in top_merchs]
 
         # Month-by-month breakdown
+        # Income rule: amount > 0 AND statement_type = 'bank'
+        # CC positive amounts (payments, refunds) are never true income.
+        # Do not remove the statement_type filter. See PROJECT.md BUG-6/7/8.
         monthly_rows = conn.execute(
             """SELECT MONTH(transaction_date) AS m,
                       COALESCE(SUM(CASE WHEN transaction_subtype='spending'
                                         THEN resolved_amount ELSE 0 END), 0) AS spent,
-                      COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS inc
+                      COALESCE(SUM(CASE WHEN amount > 0 AND statement_type = 'bank'
+                                        THEN amount ELSE 0 END), 0) AS inc
                FROM transactions_norm
                WHERE YEAR(transaction_date) = ?
                GROUP BY m ORDER BY m""",
