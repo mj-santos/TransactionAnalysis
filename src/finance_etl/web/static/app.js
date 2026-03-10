@@ -2273,7 +2273,8 @@ function _renderTxnHeaders(p, cols, type) {
   const st = _txnState[type];
   // Hide metadata columns used only for review logic; append a Review header instead
   const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed']);
-  thead.innerHTML = cols.filter(c => !HIDDEN_COLS.has(c)).map(c => {
+  const selectAllCb = `<th style="width:30px;"><input type="checkbox" class="bulk-check" onchange="bulkToggleAll('${type}', this.checked)" title="Select all" /></th>`;
+  thead.innerHTML = selectAllCb + cols.filter(c => !HIDDEN_COLS.has(c)).map(c => {
     const isSorted = c === st.sortBy;
     const arrow    = isSorted ? (st.sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
     return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}</th>`;
@@ -2323,9 +2324,17 @@ function _renderTxnBody(p, rows, cols, append) {
     const isUnreviewed = row.unreviewed === true || row.unreviewed === 'true';
     const fp = row.transaction_fingerprint || '';
     const rowCls = isUnreviewed ? ' class="unreviewed-row"' : '';
+    // Checkbox cell for bulk selection
+    const checkCell = fp
+      ? `<td><input type="checkbox" class="bulk-check" data-fp="${esc(fp)}" onchange="bulkToggleRow(this)" /></td>`
+      : '<td></td>';
     const cells = visibleCols.map(c => {
       const val = row[c] != null ? String(row[c]) : '';
       const cls = NUMERIC_COLS.has(c) ? ' class="mono text-right"' : '';
+      // Inline category edit: make category cells double-clickable
+      if ((c === 'category_parent' || c === 'category_normalized' || c === 'category') && fp) {
+        return `<td${cls} ondblclick="inlineCategoryEdit(this,'${esc(fp)}','${c}')" title="Double-click to edit" style="cursor:pointer;">${esc(val)}</td>`;
+      }
       return `<td${cls}>${esc(val)}</td>`;
     }).join('');
     // Tag cell
@@ -2343,7 +2352,7 @@ function _renderTxnBody(p, rows, cols, append) {
             : '<span style="color:var(--success); font-size:11px;">&#10003;</span>'
         }</td>`
       : '<td></td>';
-    return `<tr${rowCls}>${cells}${tagCell}${reviewCell}</tr>`;
+    return `<tr${rowCls} data-fp="${esc(fp)}">${checkCell}${cells}${tagCell}${reviewCell}</tr>`;
   }).join('');
 
   if (append) {
@@ -4604,3 +4613,291 @@ function _renderCfTable(monthly) {
     </tr>`;
   }).join('');
 }
+
+// ── Theme Toggle (Dark / Light) ────────────────────────────────
+
+function toggleTheme() {
+  const html = document.documentElement;
+  const current = html.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('spendly-theme', next);
+  _updateThemeUI(next);
+}
+
+function _updateThemeUI(theme) {
+  const icon = document.getElementById('theme-icon');
+  const label = document.getElementById('theme-label');
+  if (icon) icon.textContent = theme === 'dark' ? '☀️' : '🌙';
+  if (label) label.textContent = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
+}
+
+function toggleColorblind() {
+  const on = document.getElementById('colorblind-toggle')?.checked;
+  if (on) {
+    document.documentElement.setAttribute('data-palette', 'colorblind');
+    localStorage.setItem('spendly-palette', 'colorblind');
+  } else {
+    document.documentElement.removeAttribute('data-palette');
+    localStorage.removeItem('spendly-palette');
+  }
+}
+
+// Apply saved theme/palette on load
+(function _initTheme() {
+  const saved = localStorage.getItem('spendly-theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+    _updateThemeUI(saved);
+  }
+  const palette = localStorage.getItem('spendly-palette');
+  if (palette) {
+    document.documentElement.setAttribute('data-palette', palette);
+    const cb = document.getElementById('colorblind-toggle');
+    if (cb) cb.checked = true;
+  }
+})();
+
+// ── Keyboard Shortcuts ─────────────────────────────────────────
+
+let _kbHighlightIdx = -1;
+
+function showKeyboardHelp() {
+  document.getElementById('keyboard-help-modal').classList.remove('hidden');
+}
+function hideKeyboardHelp() {
+  document.getElementById('keyboard-help-modal').classList.add('hidden');
+}
+
+document.addEventListener('keydown', e => {
+  // Don't intercept when typing in inputs, textareas, or selects
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+    if (e.key === 'Escape') e.target.blur();
+    return;
+  }
+  // Close any visible modal on Escape
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
+    bulkClearSelection('credit_card');
+    bulkClearSelection('bank');
+    return;
+  }
+  if (e.key === '?') { showKeyboardHelp(); return; }
+  if (e.key === '/') { e.preventDefault(); _focusSearchField(); return; }
+
+  // Tab numbers 1-9 for sidebar navigation
+  if (e.key >= '1' && e.key <= '9' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const pages = ['dashboard','import','history','credit-cards','bank-transactions','cashflow','reports','merchant-rules','category-rules'];
+    const idx = parseInt(e.key) - 1;
+    if (idx < pages.length) { navigate(pages[idx]); return; }
+  }
+
+  // j/k for row navigation, r for review, c for category edit, x for select
+  const activePage = document.querySelector('.page.active');
+  if (!activePage) return;
+  const tbody = activePage.querySelector('tbody');
+  if (!tbody) return;
+  const trs = Array.from(tbody.querySelectorAll('tr[data-fp]'));
+  if (!trs.length) return;
+
+  if (e.key === 'j') {
+    _kbHighlightIdx = Math.min(_kbHighlightIdx + 1, trs.length - 1);
+    _highlightRow(trs);
+  } else if (e.key === 'k') {
+    _kbHighlightIdx = Math.max(_kbHighlightIdx - 1, 0);
+    _highlightRow(trs);
+  } else if (e.key === 'r' && _kbHighlightIdx >= 0 && _kbHighlightIdx < trs.length) {
+    const fp = trs[_kbHighlightIdx].dataset.fp;
+    if (fp) markReviewed(fp);
+  } else if (e.key === 'c' && _kbHighlightIdx >= 0 && _kbHighlightIdx < trs.length) {
+    const catCell = trs[_kbHighlightIdx].querySelector('td[ondblclick]');
+    if (catCell) catCell.ondblclick();
+  } else if (e.key === 'x' && _kbHighlightIdx >= 0 && _kbHighlightIdx < trs.length) {
+    const cb = trs[_kbHighlightIdx].querySelector('.bulk-check');
+    if (cb) { cb.checked = !cb.checked; bulkToggleRow(cb); }
+  }
+});
+
+function _highlightRow(trs) {
+  trs.forEach(tr => tr.style.outline = '');
+  if (_kbHighlightIdx >= 0 && _kbHighlightIdx < trs.length) {
+    trs[_kbHighlightIdx].style.outline = '2px solid var(--primary)';
+    trs[_kbHighlightIdx].scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function _focusSearchField() {
+  const activePage = document.querySelector('.page.active');
+  if (!activePage) return;
+  const input = activePage.querySelector('input[type="text"][placeholder*="earch"], input[type="text"][oninput*="debounce"]');
+  if (input) input.focus();
+}
+
+// ── Bulk Actions ───────────────────────────────────────────────
+
+const _bulkSelected = { credit_card: new Set(), bank: new Set() };
+
+function bulkToggleRow(cb) {
+  const fp = cb.dataset.fp;
+  const type = _getActiveTxnType();
+  if (cb.checked) {
+    _bulkSelected[type].add(fp);
+  } else {
+    _bulkSelected[type].delete(fp);
+  }
+  _updateBulkBar(type);
+}
+
+function bulkToggleAll(type, checked) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const tbody = document.getElementById(`${p}-tbody`);
+  if (!tbody) return;
+  tbody.querySelectorAll('.bulk-check').forEach(cb => {
+    cb.checked = checked;
+    const fp = cb.dataset.fp;
+    if (checked) _bulkSelected[type].add(fp);
+    else _bulkSelected[type].delete(fp);
+  });
+  _updateBulkBar(type);
+}
+
+function _updateBulkBar(type) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const bar = document.getElementById(`${p}-bulk-bar`);
+  const count = document.getElementById(`${p}-bulk-count`);
+  const n = _bulkSelected[type].size;
+  if (bar) bar.style.display = n > 0 ? '' : 'none';
+  if (count) count.textContent = `${n} selected`;
+}
+
+function bulkClearSelection(type) {
+  _bulkSelected[type].clear();
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const tbody = document.getElementById(`${p}-tbody`);
+  if (tbody) tbody.querySelectorAll('.bulk-check').forEach(cb => cb.checked = false);
+  const thead = document.getElementById(`${p}-thead`);
+  if (thead) { const cb = thead.querySelector('.bulk-check'); if (cb) cb.checked = false; }
+  _updateBulkBar(type);
+}
+
+function _getActiveTxnType() {
+  const ccPage = document.getElementById('page-credit-cards');
+  if (ccPage && ccPage.classList.contains('active')) return 'credit_card';
+  return 'bank';
+}
+
+async function bulkMarkReviewed(type) {
+  const fps = Array.from(_bulkSelected[type]);
+  if (!fps.length) return;
+  try {
+    await api('POST', '/transactions/mark-reviewed', { fingerprints: fps });
+    toast(`Marked ${fps.length} transaction${fps.length !== 1 ? 's' : ''} as reviewed.`, 'success');
+    bulkClearSelection(type);
+    loadTxnTab(type);
+    refreshUnreviewedBadge();
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+  }
+}
+
+async function bulkAssignCategory(type) {
+  const fps = Array.from(_bulkSelected[type]);
+  if (!fps.length) return;
+  const cat = prompt('Enter category to assign:');
+  if (!cat) return;
+  try {
+    for (const fp of fps) {
+      await api('POST', '/merchant-categories', { merchant: fp, category: cat });
+    }
+    toast(`Category "${cat}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
+    bulkClearSelection(type);
+    loadTxnTab(type);
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+  }
+}
+
+async function bulkAssignTag(type) {
+  const fps = Array.from(_bulkSelected[type]);
+  if (!fps.length) return;
+  // Get available tags
+  try {
+    const data = await api('GET', '/tags');
+    const tags = data.tags || [];
+    if (!tags.length) { toast('Create tags in Settings first.', 'info'); return; }
+    const tagNames = tags.map(t => t.name).join(', ');
+    const tagName = prompt(`Available tags: ${tagNames}\nEnter tag name to assign:`);
+    if (!tagName) return;
+    const tag = tags.find(t => t.name.toLowerCase() === tagName.toLowerCase());
+    if (!tag) { toast(`Tag "${tagName}" not found.`, 'error'); return; }
+    for (const fp of fps) {
+      await api('POST', '/transactions/tags', { fingerprint: fp, tag_id: tag.id });
+    }
+    toast(`Tag "${tag.name}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
+    bulkClearSelection(type);
+    loadTxnTab(type);
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+  }
+}
+
+// ── Inline Category Editing ────────────────────────────────────
+
+function inlineCategoryEdit(td, fp, field) {
+  if (td.querySelector('input')) return; // Already editing
+  const current = td.textContent.trim();
+  td.innerHTML = `<input type="text" class="inline-cat-input" value="${esc(current)}"
+    onkeydown="if(event.key==='Enter')inlineCategorySave(this,'${esc(fp)}','${field}');if(event.key==='Escape')inlineCategoryCancel(this,'${esc(current)}')"
+    onblur="inlineCategoryCancel(this,'${esc(current)}')" />`;
+  td.querySelector('input').focus();
+  td.querySelector('input').select();
+}
+
+function inlineCategoryCancel(input, original) {
+  const td = input.closest('td');
+  if (td) td.textContent = original;
+}
+
+async function inlineCategorySave(input, fp, field) {
+  const newVal = input.value.trim();
+  const td = input.closest('td');
+  if (!newVal) { if (td) td.textContent = ''; return; }
+  // Use merchant-categories endpoint to assign the category
+  try {
+    await api('POST', '/merchant-categories', { merchant: fp, category: newVal });
+    if (td) td.textContent = newVal;
+    toast('Category updated.', 'success');
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+    if (td) td.textContent = newVal;
+  }
+}
+
+// ── Onboarding Flow ────────────────────────────────────────────
+
+function _checkOnboarding() {
+  if (localStorage.getItem('spendly-onboarding-dismissed')) return;
+  // Check if user has any data
+  api('GET', '/runs').then(data => {
+    const runs = data.runs || [];
+    if (runs.length === 0) {
+      document.getElementById('onboarding-modal').classList.remove('hidden');
+    }
+  }).catch(() => {});
+}
+
+function closeOnboarding() {
+  document.getElementById('onboarding-modal').classList.add('hidden');
+  if (document.getElementById('ob-dismiss')?.checked) {
+    localStorage.setItem('spendly-onboarding-dismissed', '1');
+  }
+}
+
+function onboardingGo(page) {
+  closeOnboarding();
+  navigate(page);
+}
+
+// Trigger onboarding check after initial load
+setTimeout(_checkOnboarding, 1500);

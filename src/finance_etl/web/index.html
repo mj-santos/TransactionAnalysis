@@ -51,7 +51,15 @@
     </a>
   </nav>
   <div class="sidebar-footer">
+    <div class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+      <span id="theme-icon">🌙</span> <span id="theme-label">Dark Mode</span>
+    </div>
+    <label class="theme-toggle" style="cursor:pointer; font-size:11px;">
+      <input type="checkbox" id="colorblind-toggle" onchange="toggleColorblind()" style="accent-color:var(--primary);" />
+      Colorblind mode
+    </label>
     <a href="/docs" target="_blank">API docs ↗</a>
+    <span style="font-size:11px; color:var(--sidebar-text); opacity:.6; cursor:pointer;" onclick="showKeyboardHelp()">Keyboard shortcuts (?)</span>
   </div>
 </aside>
 
@@ -479,6 +487,14 @@
         <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('credit_card')">Mark All Reviewed</button>
       </div>
     </div>
+    <!-- Bulk action bar (hidden by default) -->
+    <div id="cc-bulk-bar" class="bulk-bar" style="display:none;">
+      <span id="cc-bulk-count">0 selected</span>
+      <button class="btn btn-secondary btn-sm" onclick="bulkMarkReviewed('credit_card')">Mark Reviewed</button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkAssignCategory('credit_card')">Assign Category</button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkAssignTag('credit_card')">Assign Tag</button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkClearSelection('credit_card')" style="margin-left:auto;">Clear</button>
+    </div>
     <!-- Transaction table -->
     <div class="card" style="padding:0; overflow:hidden;">
       <div class="table-wrap">
@@ -565,6 +581,14 @@
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('bank')">↻ Refresh</button>
         <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('bank')">Mark All Reviewed</button>
       </div>
+    </div>
+    <!-- Bulk action bar (hidden by default) -->
+    <div id="bk-bulk-bar" class="bulk-bar" style="display:none;">
+      <span id="bk-bulk-count">0 selected</span>
+      <button class="btn btn-secondary btn-sm" onclick="bulkMarkReviewed('bank')">Mark Reviewed</button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkAssignCategory('bank')">Assign Category</button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkAssignTag('bank')">Assign Tag</button>
+      <button class="btn btn-secondary btn-sm" onclick="bulkClearSelection('bank')" style="margin-left:auto;">Clear</button>
     </div>
     <!-- Transaction table -->
     <div class="card" style="padding:0; overflow:hidden;">
@@ -1507,6 +1531,62 @@
     <div style="display:flex; gap:8px; justify-content:flex-end;">
       <button class="btn btn-secondary" onclick="hideDeleteModal()">Cancel</button>
       <button class="btn btn-danger" onclick="confirmDeleteRun()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Keyboard Shortcuts Help Modal -->
+<div id="keyboard-help-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideKeyboardHelp()">
+  <div class="modal-dialog" style="max-width:420px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <span style="font-size:16px; font-weight:700;">Keyboard Shortcuts</span>
+      <button class="wm-close" onclick="hideKeyboardHelp()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted);">×</button>
+    </div>
+    <div class="kb-help-grid">
+      <span class="kb-key">?</span><span>Show this help</span>
+      <span class="kb-key">/</span><span>Focus search field</span>
+      <span class="kb-key">j / k</span><span>Next / previous transaction row</span>
+      <span class="kb-key">r</span><span>Mark highlighted row as reviewed</span>
+      <span class="kb-key">c</span><span>Inline-edit category on highlighted row</span>
+      <span class="kb-key">x</span><span>Toggle select on highlighted row</span>
+      <span class="kb-key">1–9</span><span>Navigate to sidebar tab (1=Dashboard, 2=Import, …)</span>
+      <span class="kb-key">Esc</span><span>Close modals / deselect</span>
+    </div>
+  </div>
+</div>
+
+<!-- Onboarding Modal -->
+<div id="onboarding-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeOnboarding()">
+  <div class="modal-dialog" style="max-width:520px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <span style="font-size:18px; font-weight:700;">Welcome to Spendly!</span>
+      <button class="wm-close" onclick="closeOnboarding()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted);">×</button>
+    </div>
+    <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+      Get started in 3 easy steps. Click any step to jump straight there.
+    </p>
+    <div id="onboarding-steps">
+      <div class="onboarding-step" onclick="onboardingGo('import')">
+        <span class="onboarding-step-num" id="ob-num-1">1</span>
+        <strong>Import your first CSV</strong>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Upload a bank or credit card statement. The wizard will guide you through column mapping.</p>
+      </div>
+      <div class="onboarding-step" onclick="onboardingGo('category-rules')">
+        <span class="onboarding-step-num" id="ob-num-2">2</span>
+        <strong>Set up categories</strong>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Accept suggested category mappings or create your own rules to organize transactions.</p>
+      </div>
+      <div class="onboarding-step" onclick="onboardingGo('dashboard')">
+        <span class="onboarding-step-num" id="ob-num-3">3</span>
+        <strong>Set your first budget</strong>
+        <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Go to the dashboard and click "+ Set Budget" to start tracking spending limits.</p>
+      </div>
+    </div>
+    <div style="margin-top:14px; display:flex; justify-content:space-between; align-items:center;">
+      <label style="font-size:12px; color:var(--text-muted); cursor:pointer;">
+        <input type="checkbox" id="ob-dismiss" /> Don't show again
+      </label>
+      <button class="btn btn-primary btn-sm" onclick="closeOnboarding()">Got it!</button>
     </div>
   </div>
 </div>

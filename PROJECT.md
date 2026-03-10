@@ -45,6 +45,8 @@
 - Success: `#22c55e`, Danger: `#ef4444`, Warning: `#f59e0b`, Staged: `#8b5cf6`
 - Font: system-ui stack (`-apple-system`, `BlinkMacSystemFont`, `Segoe UI`, `Roboto`)
 - Border radius: `8px`, Shadow: `0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06)`
+- **Dark mode**: `[data-theme="dark"]` overrides on `<body>` — dark background (`#0f172a`), light text, adjusted sidebar/card/input colors; toggled via sidebar footer button, persisted in localStorage
+- **Colorblind palette**: `[data-palette="colorblind"]` overrides — deuteranopia/protanopia-safe colors (`--success: #0077bb`, `--warning: #ee7733`, `--danger: #cc3311`); toggled via sidebar footer button, persisted in localStorage
 
 ---
 
@@ -95,7 +97,7 @@ TransactionAnalysis/
 │
 ├── src/finance_etl/            ← main Python package
 │   ├── __init__.py
-│   ├── api.py                  ← FastAPI app factory (create_app); ALL endpoints defined here (~3022 lines)
+│   ├── api.py                  ← FastAPI app factory (create_app); ALL endpoints defined here (~4867 lines)
 │   ├── analytics.py            ← Stage 9: SQL analytics queries → CSV reports
 │   ├── backup_migrations.py    ← Backup payload migration chain (v1→v2); CURRENT_BACKUP_VERSION
 │   ├── category_rules.py       ← Category normalization engine + BUILT_IN_CATEGORY_MAP (~97 entries)
@@ -133,10 +135,10 @@ TransactionAnalysis/
 │   │   └── setup_wizard.py         ← CLI interactive wizard (called by `finance_etl wizard`)
 │   │
 │   └── web/
-│       ├── index.html          ← Single-page UI (1,146 lines); all pages embedded as hidden sections
+│       ├── index.html          ← Single-page UI (1,597 lines); all pages embedded as hidden sections
 │       └── static/
-│           ├── app.js          ← All UI logic (~3,248 lines); no bundler/framework
-│           ├── style.css       ← All styles (~728 lines)
+│           ├── app.js          ← All UI logic (~4,903 lines); no bundler/framework
+│           ├── style.css       ← All styles (~1,256 lines)
 │           └── table_controls.js ← Two reusable widgets (~279 lines):
 │                                   makeSourceDropdown() — Import Source radio-dropdown
 │                                   renderTxnTotals()   — pinned tfoot totals row (CC + bank)
@@ -245,6 +247,8 @@ TransactionAnalysis/
 - Tag filter dropdown — filters transactions by assigned tag
 - Per-row tag chips showing assigned tags, "+tag" button opens tag assignment popup
 - Tag assignment popup: checkboxes for all tags, toggle to assign/remove per transaction
+- **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar appears when ≥1 selected; actions: mark reviewed, assign category, assign tag; selection count badge; clear selection button
+- **Inline Category Editing**: double-click category cell to edit in-place; Enter saves via `/merchant-categories`, Escape/blur cancels; no modal required
 - API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`
 
 **Cash Flow (`#page-cashflow`)**
@@ -342,6 +346,12 @@ TransactionAnalysis/
   - Per-tag totals panel: transaction count and total spend per tag (all-time)
   - Tags loaded on Settings page visit via `loadTags()` → `GET /tags`
 - API: `GET /backup/export`, `POST /backup/restore`, `GET /backup/status`, `GET/POST/PUT/DELETE /tags`, `POST/DELETE /transactions/tags`, `GET /transactions/{fingerprint}/tags`, `GET /tags/totals`
+
+**Power User Features (UI-only, no new API endpoints)**
+- **Keyboard Shortcuts**: global `keydown` listener — `j`/`k` navigate transaction rows, `r` mark reviewed, `c` inline category edit, `x` toggle select, `/` focus search, `?` show help modal, `1`-`9` switch tabs, `Esc` close modals; highlighted row indicator; keyboard help modal accessible from sidebar footer link
+- **Dark/Light Mode Toggle**: sidebar footer button toggles `[data-theme="dark"]` on `<body>`; preference saved in localStorage; `toggleTheme()` / `_updateThemeUI()`
+- **Colorblind Palette Toggle**: sidebar footer button toggles `[data-palette="colorblind"]` on `<body>`; deuteranopia/protanopia-safe colors; preference saved in localStorage; `toggleColorblind()`
+- **Onboarding Flow**: 3-step guided modal for first-time users (import → categories → budgets); shown automatically on first visit; dismissible; "Don't show again" saved in localStorage; `_checkOnboarding()` / `onboardingGo()` / `closeOnboarding()`
 
 ---
 
@@ -809,7 +819,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.12.0
+**Current Version:** v2.13.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -833,6 +843,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.10.0 | 2026-03-10 | Sprint 9 — Spending Alerts & Thresholds: per-category spending alerts derived from existing budget goals; alert banners at top of dashboard for categories at 80% (warning) and 100% (exceeded) of monthly budget; budget status overview card with green/yellow/red chips per category; color-coded status dots on budget tracker progress bars; dismissible alert banners; alerts auto-reset each month (spending is month-scoped); enhanced `GET /dashboard/summary` response with `spending_alerts` array |
 | v2.11.0 | 2026-03-10 | Sprint 10 — Net Worth Snapshot: manual net worth tracker with account management (checking/savings/investment/credit card/loan/other); assets vs liabilities breakdown; point-in-time snapshots with history chart; dashboard widget showing current net worth with trend vs last snapshot; new `nw_accounts` and `nw_snapshots` tables; new `GET/POST/PUT/DELETE /net-worth/accounts`, `GET /net-worth/summary`, `GET/POST/DELETE /net-worth/snapshots` endpoints; backup/restore support |
 | v2.12.0 | 2026-03-10 | Sprint 11 — Annual Year-in-Review Report: generate annual financial reports with total income/spent/net saved, top 5 categories and merchants, biggest and lightest months, month-by-month chart, recurring costs total; modal viewer with year navigation, save/regenerate, print/PDF export via browser print dialog; stored report history with browse/compare/delete; new `annual_reports` table; new `POST /annual-reports/generate`, `GET /annual-reports`, `GET /annual-reports/{year}`, `DELETE /annual-reports/{year}` endpoints; backup/restore support |
+| v2.13.0 | 2026-03-10 | Sprint 12 — Power User & Polish: keyboard shortcuts (j/k navigate, r review, c category edit, x select, / search, ? help, 1-9 tabs); inline category editing via double-click on transaction rows; bulk actions with multi-select checkboxes (mark reviewed, assign category, assign tag); colorblind-accessible palette (deuteranopia/protanopia safe); dark/light mode toggle with localStorage persistence; onboarding flow for first-time users (3-step guided import → categories → budgets); no new API endpoints — all features are UI-only |
 
 ### Version Increment Rules
 
