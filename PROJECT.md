@@ -765,6 +765,9 @@ Single-row table seeded with `1` on first migration run.
 **BUG-5 (FIXED): Delete run uses `file_hash` from `transactions_stage` which may be empty**
 - `DELETE /runs/{run_id}` now deletes from `transactions_norm` by `run_id` directly, with file_hash fallback for legacy rows.
 
+**BUG (FIXED): Restore connection conflict after Sprint C (DuckDB single-writer violation)**
+- All 9 Sprint C functions (`_detect_duplicates`, `_create_export_payload`, `resolve_duplicate`, `list_duplicates`, `utilities_categories`, `utilities_merchants`, `utilities_test_rule` ×2, `utilities_health`) now use `conn = None; try: ... finally: conn.close()` pattern. Restore endpoint (`POST /backup/restore`) also wrapped with try/finally. Added restore lock: returns HTTP 409 if background jobs are active or another restore is in progress (`_restore_in_progress` flag). Fixed in v2.17.1.
+
 ### Hardcoded Values & Workarounds
 
 - **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">`) with exactly 12 options. These match `BUILT_IN_CATEGORY_MAP`'s parent groups exactly but are not dynamically derived — adding a new taxonomy parent requires editing both `category_rules.py` and `index.html`.
@@ -824,6 +827,7 @@ Single-row table seeded with `1` on first migration run.
 - **Preview-then-commit workflow**: Every import run goes through a `staged` state where the user reviews rows before they hit the ledger. The "Commit" step is a separate API call.
 - **Deterministic fingerprinting**: Each transaction row gets a `transaction_fingerprint` built from hash(date + description + amount + account). This is the dedup key.
 - **Background threads (not async workers)**: Normalization and category-apply jobs run in Python threads via `BackgroundTasks`. No Celery, Redis, or worker queue. The UI polls `/normalize/{job_id}` every 1500ms.
+- **DuckDB single-writer constraint**: DuckDB allows only one active read-write connection at a time per database file. All `get_connection()` calls MUST use `conn = None; try: conn = get_connection(...); ... finally: if conn: conn.close()` to guarantee release. Read-only connections (`read_only=True`) can coexist but must also be released promptly. Background tasks (`_commit_bg`, `_detect_duplicates`) must close connections before returning. The restore endpoint checks for active background jobs and returns HTTP 409 if any are running (`_restore_in_progress` flag + `_async_runs` status check).
 - **`_staged_runs` is persisted**: Staged run state is stored in `pipeline._staged_runs: dict[str, dict]` in memory and persisted to `data/staged/` as JSON sidecar files (BUG-2 fix).
 - **YAML wizard profiles** persist column mappings per institution/account. On re-upload, the wizard auto-matches headers.
 - **`source='user'` vs `source='learned'`** in `merchant_category_map`: User-assigned categories are never overwritten by the learn mechanism.
@@ -869,7 +873,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.17.0
+**Current Version:** v2.17.1
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -900,6 +904,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.15.0 | 2026-03-10 | Global transaction search + dashboard category drill-down; new `GET /transactions/search` endpoint with text and amount operators (>, <, range); persistent search bar in topbar visible on all pages; `/` shortcut focuses search; floating results panel with keyboard nav (↑↓ Enter Esc); click result navigates to CC/Bank tab with date pre-filtered and transaction highlighted; dashboard top-categories bar chart rows are now clickable — opens drill-down modal showing all transactions for that category + month with subtotal; "View All in Transactions" navigates to Bank tab with category pre-filtered; new `category_parent` filter on `GET /transactions` |
 | v2.16.0 | 2026-03-10 | Transaction Notes + Split Transactions; per-transaction `notes` TEXT field with inline popup editor (pencil icon, auto-save on Enter); new `PATCH /transactions/{fingerprint}` endpoint for notes updates; split transactions: `POST /transactions/{fingerprint}/split` divides one transaction into N sub-rows with category/amount/description; amounts validated to sum to parent; parent marked `is_split=TRUE` and excluded from all totals/queries via `_build_txn_where`; `DELETE /transactions/{fingerprint}/split` unsplits (removes children, restores parent); split children show "split" badge on description; split modal UI with dynamic row editor and remaining-amount tracker; new columns: `notes`, `is_split`, `split_parent_fingerprint` on `transactions_norm`; backup/restore updated for all 3 new columns |
 | v2.17.0 | 2026-03-10 | Duplicate detection + Utilities tab + category picker fix; near-duplicate detection runs automatically after every import commit — flags transactions with same merchant, amount within 1%, date within 3 days; results stored in new `duplicate_candidates` table; non-blocking banner shown post-import linking to Duplicate Review; new Utilities tab with 5 collapsible sections: Category List (searchable taxonomy with counts), Merchant List (sortable with inline category edit), Rule Tester (full classification trace), Duplicate Review (side-by-side comparison with resolve actions), Data Health (5 quality metrics with navigation links); structured category picker replaces free-text input in Uncategorized Merchants with type-ahead dropdown from taxonomy + custom option; new `GET /duplicates`, `POST /duplicates/{id}/resolve`, `GET /utilities/categories`, `GET /utilities/merchants`, `POST /utilities/test-rule`, `GET /utilities/health` endpoints; backup/restore updated for `duplicate_candidates` table |
+| v2.17.1 | 2026-03-10 | Fixed restore connection conflict introduced by Sprint C; all Sprint C connection sites now use try/finally guard pattern; added restore lock (HTTP 409 when background jobs active); `_restore_in_progress` flag prevents concurrent restores; 3 new backup/restore tests |
 
 ### Version Increment Rules
 

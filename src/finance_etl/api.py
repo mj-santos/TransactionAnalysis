@@ -13,6 +13,7 @@ from finance_etl.utils.query_helpers import INCOME_FILTER
 # Keys: run_id  Values: {"status": "pending"|"running"|"success"|"failed", ...}
 # ---------------------------------------------------------------------------
 _async_runs: dict[str, dict] = {}
+_restore_in_progress: bool = False
 
 # ---------------------------------------------------------------------------
 # Whitelisted fields + buckets for safe custom report SQL generation
@@ -572,6 +573,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
     def _detect_duplicates(run_id: str):
         """Background task: detect near-duplicate transactions after import."""
+        conn = None
         try:
             conn = get_connection(db_path)
             now = conn.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0]
@@ -584,7 +586,6 @@ No cloud services, no external dependencies — all data stays on your machine.
                 [run_id],
             ).fetchall()
             if not new_rows:
-                conn.close()
                 return 0
             inserted = 0
             for fp_b, match_key_b, amt_b, date_b in new_rows:
@@ -628,10 +629,15 @@ No cloud services, no external dependencies — all data stays on your machine.
                         [fp_a, fp_b, score, reason, now_str],
                     )
                     inserted += 1
-            conn.close()
             return inserted
         except Exception:
             return 0
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _commit_bg(run_id: str):
         _async_runs[run_id] = {"status": "committing", "run_id": run_id}
@@ -1982,6 +1988,7 @@ No cloud services, no external dependencies — all data stays on your machine.
     @app.get("/duplicates", tags=["duplicates"], summary="List pending duplicate candidates")
     def list_duplicates(status: Optional[str] = Query("pending", description="Filter by status")):
         """Return duplicate candidates with joined transaction details."""
+        conn = None
         try:
             conn = get_connection(db_path, read_only=True)
             where = "WHERE dc.status = ?" if status else ""
@@ -2004,9 +2011,14 @@ No cloud services, no external dependencies — all data stays on your machine.
                 params,
             ).fetchall()
             cols = [d[0] for d in conn.description]
-            conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Query error: {exc}") from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         result = []
         for r in rows:
             d = {}
@@ -2027,6 +2039,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         action = body.get("action", "")
         if action not in ("keep_both", "delete_b", "not_duplicate"):
             raise HTTPException(status_code=400, detail="action must be 'keep_both', 'delete_b', or 'not_duplicate'")
+        conn = None
         try:
             conn = get_connection(db_path)
             now = _isoformat(conn.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0])
@@ -2034,10 +2047,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "SELECT fingerprint_b, status FROM duplicate_candidates WHERE id = ?", [dup_id]
             ).fetchone()
             if not candidate:
-                conn.close()
                 raise HTTPException(status_code=404, detail="Duplicate candidate not found")
             if candidate[1] != "pending":
-                conn.close()
                 raise HTTPException(status_code=400, detail="Already resolved")
             new_status = "not_duplicate" if action == "not_duplicate" else "confirmed_duplicate" if action == "delete_b" else "not_duplicate"
             if action == "delete_b":
@@ -2049,11 +2060,16 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "UPDATE duplicate_candidates SET status = ?, resolved_at = ? WHERE id = ?",
                 [new_status, now, dup_id],
             )
-            conn.close()
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Resolve failed: {exc}") from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         return {"id": dup_id, "action": action, "status": new_status}
 
     # -----------------------------------------------------------------------
@@ -2069,6 +2085,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         taxonomy = {}
         for _, (subcat, parent) in BUILT_IN_CATEGORY_MAP.items():
             taxonomy.setdefault(parent, set()).add(subcat)
+        conn = None
         try:
             conn = get_connection(db_path, read_only=True)
             # Also include any user-created categories from category_rules table
@@ -2086,9 +2103,14 @@ No cloud services, no external dependencies — all data stays on your machine.
                    WHERE COALESCE(is_split, FALSE) = FALSE
                    GROUP BY cat"""
             ).fetchall()
-            conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         counts = {r[0]: r[1] for r in counts_raw}
         result = []
         for parent in sorted(taxonomy):
@@ -2103,6 +2125,7 @@ No cloud services, no external dependencies — all data stays on your machine.
              summary="Merchant summary list with counts and categories")
     def utilities_merchants():
         """Return all merchants with their transaction counts, categories, and last seen date."""
+        conn = None
         try:
             conn = get_connection(db_path, read_only=True)
             rows = conn.execute(
@@ -2116,9 +2139,14 @@ No cloud services, no external dependencies — all data stays on your machine.
                    GROUP BY normalized_name, raw_name, assigned_category
                    ORDER BY txn_count DESC"""
             ).fetchall()
-            conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         merchants = []
         for r in rows:
             merchants.append({
@@ -2142,12 +2170,18 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=400, detail="'description' is required")
         from finance_etl.merchant_rules import load_rules, apply_rules
         from finance_etl.category_rules import BUILT_IN_CATEGORY_MAP, _BUILT_IN_LOWER
+        conn = None
         try:
             conn = get_connection(db_path, read_only=True)
             rules = load_rules(conn)
-            conn.close()
         except Exception:
             rules = []
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         # Find matching merchant rule
         merchant_name = apply_rules(description, rules)
         rule_info = None
@@ -2166,13 +2200,13 @@ No cloud services, no external dependencies — all data stays on your machine.
         parent = None
         if merchant_name:
             # Check merchant_category_map in DB
+            conn2 = None
             try:
-                conn = get_connection(db_path, read_only=True)
-                cat_row = conn.execute(
+                conn2 = get_connection(db_path, read_only=True)
+                cat_row = conn2.execute(
                     "SELECT category FROM merchant_category_map WHERE merchant = ?",
                     [merchant_name],
                 ).fetchone()
-                conn.close()
                 if cat_row and cat_row[0]:
                     lookup = cat_row[0].lower()
                     if lookup in _BUILT_IN_LOWER:
@@ -2181,6 +2215,12 @@ No cloud services, no external dependencies — all data stays on your machine.
                         category = cat_row[0]
             except Exception:
                 pass
+            finally:
+                if conn2:
+                    try:
+                        conn2.close()
+                    except Exception:
+                        pass
         # Also try direct category lookup from description
         if not category:
             lookup = description.lower()
@@ -2198,6 +2238,7 @@ No cloud services, no external dependencies — all data stays on your machine.
              summary="Data quality health metrics")
     def utilities_health():
         """Return aggregate data health counts."""
+        conn = None
         try:
             conn = get_connection(db_path, read_only=True)
             r = conn.execute("""
@@ -2222,9 +2263,14 @@ No cloud services, no external dependencies — all data stays on your machine.
             pending_dups = conn.execute(
                 "SELECT COUNT(*) FROM duplicate_candidates WHERE status = 'pending'"
             ).fetchone()
-            conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         return {
             "uncategorized_transactions": r[0] or 0,
             "unreviewed_transactions": r[1] or 0,
@@ -5058,11 +5104,13 @@ No cloud services, no external dependencies — all data stays on your machine.
         from finance_etl.db import get_connection as _gc
 
         conn = _gc(db_path, read_only=True)
-        data: dict[str, Any] = {}
-        for table in _BACKUP_TABLES:
-            data[table] = _rows_to_dicts(conn.execute(f"SELECT * FROM {table}"))
-        schema_ver = _get_schema_version(conn)
-        conn.close()
+        try:
+            data: dict[str, Any] = {}
+            for table in _BACKUP_TABLES:
+                data[table] = _rows_to_dicts(conn.execute(f"SELECT * FROM {table}"))
+            schema_ver = _get_schema_version(conn)
+        finally:
+            conn.close()
 
         payload = {
             "backup_version": CURRENT_BACKUP_VERSION,
@@ -5111,6 +5159,23 @@ No cloud services, no external dependencies — all data stays on your machine.
         from finance_etl.backup_migrations import CURRENT_BACKUP_VERSION, run_migrations
         from finance_etl.db import get_connection as _gc
 
+        global _restore_in_progress
+
+        # ── Block if background jobs are active ──────────────────────────
+        active_jobs = [r for r in _async_runs.values()
+                       if r.get("status") in ("running", "committing", "pending")]
+        if active_jobs:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot restore while background jobs are active. "
+                       "Please wait for all imports to complete.",
+            )
+        if _restore_in_progress:
+            raise HTTPException(
+                status_code=409,
+                detail="A restore is already in progress.",
+            )
+
         raw = await file.read()
         try:
             payload = json.loads(raw)
@@ -5141,6 +5206,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         except Exception:
             pass  # Non-fatal — don't block restore if snapshot fails
 
+        _restore_in_progress = True
+        conn = None
         try:
             conn = _gc(db_path)
 
@@ -5381,11 +5448,17 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("resolved_at")],
                 )
 
-            conn.close()
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Restore failed: {exc}") from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            _restore_in_progress = False
 
         # ── Restore YAML wizard profiles ─────────────────────────────────
         profiles_restored = 0
