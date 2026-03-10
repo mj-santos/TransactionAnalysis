@@ -214,8 +214,8 @@ try:
         match_type: str = Field("contains", description="'contains' | 'startswith' | 'regex'")
         merchant:   str = Field(..., description="Normalized merchant name to assign")
         priority:   int = Field(0, description="Higher = applied first")
-        conditions: Optional[list] = Field(None, description="Compound conditions [{pattern, match_type, negate}]")
-        logic:      str = Field("AND", description="'AND' | 'OR' — how conditions are combined")
+        conditions: Any = Field(None, description="Conditions: flat list or grouped {groups: [...]}")
+        logic:      str = Field("AND", description="'AND' | 'OR' — how conditions are combined (legacy flat mode)")
 
     class MerchantCategoryRequest(BaseModel):
         merchant:  str = Field(..., description="Merchant name (exact, case-sensitive)")
@@ -2541,6 +2541,9 @@ No cloud services, no external dependencies — all data stays on your machine.
                 except Exception:
                     d["conditions"] = None
             d["logic"] = d["logic"] or "AND"
+            # Auto-migrate flat conditions to grouped format for API consumers
+            if isinstance(d["conditions"], list):
+                d["conditions"] = {"groups": [{"group_logic": d["logic"], "conditions": d["conditions"]}]}
             result.append(d)
         return {"rules": result}
 

@@ -2868,16 +2868,13 @@ async function loadMerchantAnalytics() {
 
 let _editingRuleId = null; // null = creating new rule
 
-// ── Condition row helpers ──────────────────────────────────────
+// ── Condition group helpers ────────────────────────────────────
 
 function _makeConditionRow(pattern, matchType, negate) {
-  // Build via DOM APIs to avoid global CSS "width:100%" on select/input
-  // collapsing the pattern input to 0px inside the flex row.
   const row = document.createElement('div');
   row.className = 'rf-condition-row';
   row.style.cssText = 'display:flex; align-items:center; gap:8px; background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:6px 10px;';
 
-  // Match-type select — override global width:100% so it only sizes to content
   const sel = document.createElement('select');
   sel.className = 'rf-cond-type';
   sel.style.cssText = 'width:auto; flex-shrink:0; padding:4px 6px; border-radius:5px; border:1px solid var(--border); font-size:12px;';
@@ -2889,7 +2886,6 @@ function _makeConditionRow(pattern, matchType, negate) {
     sel.appendChild(opt);
   });
 
-  // Pattern input — flex:1 grows to fill remaining space; width:auto overrides global
   const inp = document.createElement('input');
   inp.type = 'text';
   inp.className = 'rf-cond-pattern';
@@ -2897,7 +2893,6 @@ function _makeConditionRow(pattern, matchType, negate) {
   inp.value = pattern || '';
   inp.style.cssText = 'flex:1; min-width:80px; width:auto; padding:4px 8px; border-radius:5px; border:1px solid var(--border); font-size:12px; font-family:monospace; background:var(--card-bg,#fff); color:var(--text,#222);';
 
-  // NOT label + checkbox
   const label = document.createElement('label');
   label.style.cssText = 'display:flex; align-items:center; gap:4px; font-size:12px; white-space:nowrap; cursor:pointer; flex-shrink:0;';
   const cb = document.createElement('input');
@@ -2908,14 +2903,13 @@ function _makeConditionRow(pattern, matchType, negate) {
   label.appendChild(cb);
   label.appendChild(document.createTextNode(' NOT'));
 
-  // Remove button
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'btn btn-secondary btn-sm rf-cond-remove';
-  btn.textContent = '✕';
+  btn.textContent = '\u2715';
   btn.title = 'Remove condition';
   btn.style.cssText = 'font-size:12px; padding:2px 8px; flex-shrink:0;';
-  btn.addEventListener('click', function() { removeConditionRow(this); });
+  btn.addEventListener('click', function() { _removeConditionRow(this); });
 
   row.appendChild(sel);
   row.appendChild(inp);
@@ -2924,56 +2918,183 @@ function _makeConditionRow(pattern, matchType, negate) {
   return row;
 }
 
-function _updateLogicVisibility() {
-  const rows = document.querySelectorAll('#rf-conditions .rf-condition-row');
-  const wrap = document.getElementById('rf-logic-wrap');
-  if (wrap) wrap.style.display = rows.length >= 2 ? 'flex' : 'none';
-  // Update remove button visibility — always keep at least one row
-  document.querySelectorAll('#rf-conditions .rf-cond-remove').forEach(btn => {
-    btn.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+function _makeGroupBlock(groupLogic, conditions) {
+  const block = document.createElement('div');
+  block.className = 'rf-group-block';
+  block.style.cssText = 'border:1px solid var(--border); border-radius:8px; padding:10px 12px;';
+
+  // Header row: label + logic selector + remove group button
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;';
+  const lbl = document.createElement('span');
+  lbl.style.cssText = 'font-size:13px; font-weight:600;';
+  lbl.textContent = 'Match Conditions';
+
+  const right = document.createElement('div');
+  right.style.cssText = 'display:flex; align-items:center; gap:6px; font-size:13px;';
+  const logicLabel = document.createElement('span');
+  logicLabel.style.cssText = 'color:var(--text-muted);';
+  logicLabel.textContent = 'Combine with:';
+  const logicSel = document.createElement('select');
+  logicSel.className = 'rf-group-logic';
+  logicSel.style.cssText = 'width:auto; padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;';
+  [['AND', 'AND \u2014 all must match'], ['OR', 'OR \u2014 any must match']].forEach(([val, text]) => {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = text; opt.selected = (val === groupLogic);
+    logicSel.appendChild(opt);
+  });
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'btn btn-secondary btn-sm rf-group-remove';
+  removeBtn.textContent = 'Remove Group';
+  removeBtn.style.cssText = 'font-size:11px; padding:2px 8px; margin-left:8px;';
+  removeBtn.addEventListener('click', function() { _removeGroup(this); });
+
+  right.appendChild(logicLabel);
+  right.appendChild(logicSel);
+  right.appendChild(removeBtn);
+  header.appendChild(lbl);
+  header.appendChild(right);
+  block.appendChild(header);
+
+  // Conditions container
+  const condContainer = document.createElement('div');
+  condContainer.className = 'rf-group-conditions';
+  condContainer.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-bottom:8px;';
+  block.appendChild(condContainer);
+
+  // Add Condition button
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'btn btn-secondary btn-sm';
+  addBtn.textContent = '+ Add Condition';
+  addBtn.style.cssText = 'font-size:12px;';
+  addBtn.addEventListener('click', function() { _addConditionToGroup(this.closest('.rf-group-block')); });
+  block.appendChild(addBtn);
+
+  // Populate conditions
+  if (conditions && conditions.length) {
+    conditions.forEach(c => {
+      condContainer.appendChild(_makeConditionRow(c.pattern, c.match_type || 'contains', !!c.negate));
+    });
+  } else {
+    condContainer.appendChild(_makeConditionRow('', 'contains', false));
+  }
+
+  _updateGroupUI();
+  return block;
+}
+
+function _addConditionToGroup(groupBlock) {
+  const container = groupBlock.querySelector('.rf-group-conditions');
+  if (!container) return;
+  container.appendChild(_makeConditionRow('', 'contains', false));
+  _updateGroupUI();
+}
+
+function _removeConditionRow(btn) {
+  const groupBlock = btn.closest('.rf-group-block');
+  const rows = groupBlock.querySelectorAll('.rf-condition-row');
+  if (rows.length <= 1) return;
+  btn.closest('.rf-condition-row').remove();
+  _updateGroupUI();
+}
+
+function _removeGroup(btn) {
+  const groups = document.querySelectorAll('#rf-groups .rf-group-block');
+  if (groups.length <= 1) return;
+  btn.closest('.rf-group-block').remove();
+  _updateGroupUI();
+}
+
+function _updateGroupUI() {
+  const groups = document.querySelectorAll('#rf-groups .rf-group-block');
+  // Show/hide remove group buttons — hide when only 1 group
+  groups.forEach(g => {
+    const removeBtn = g.querySelector('.rf-group-remove');
+    if (removeBtn) removeBtn.style.display = groups.length > 1 ? '' : 'none';
+    // Show/hide logic selector when 2+ conditions in group
+    const rows = g.querySelectorAll('.rf-condition-row');
+    const logicSel = g.querySelector('.rf-group-logic');
+    const logicLabel = logicSel ? logicSel.previousElementSibling : null;
+    if (logicSel) logicSel.style.display = rows.length >= 2 ? '' : 'none';
+    if (logicLabel) logicLabel.style.display = rows.length >= 2 ? '' : 'none';
+    // Show/hide condition remove buttons — keep at least one
+    g.querySelectorAll('.rf-cond-remove').forEach(b => {
+      b.style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+    });
   });
 }
 
-function addConditionRow(pattern = '', matchType = 'contains', negate = false) {
-  const container = document.getElementById('rf-conditions');
+function addConditionGroup(groupLogic = 'AND', conditions = null) {
+  const container = document.getElementById('rf-groups');
   if (!container) return;
-  container.appendChild(_makeConditionRow(pattern, matchType, negate));
-  _updateLogicVisibility();
+  container.appendChild(_makeGroupBlock(groupLogic, conditions));
+  _updateGroupUI();
 }
 
-function removeConditionRow(btn) {
-  const rows = document.querySelectorAll('#rf-conditions .rf-condition-row');
-  if (rows.length <= 1) return; // Keep at least one
-  btn.closest('.rf-condition-row').remove();
-  _updateLogicVisibility();
+// Legacy compatibility wrappers
+function addConditionRow(pattern = '', matchType = 'contains', negate = false) {
+  // Add to the last group, or create one if none exist
+  const groups = document.querySelectorAll('#rf-groups .rf-group-block');
+  if (!groups.length) { addConditionGroup('AND', [{pattern, match_type: matchType, negate}]); return; }
+  const lastGroup = groups[groups.length - 1];
+  _addConditionToGroup(lastGroup);
+  // Set values on the newly added row
+  const rows = lastGroup.querySelectorAll('.rf-condition-row');
+  const lastRow = rows[rows.length - 1];
+  if (pattern) lastRow.querySelector('.rf-cond-pattern').value = pattern;
+  if (matchType !== 'contains') lastRow.querySelector('.rf-cond-type').value = matchType;
+  if (negate) lastRow.querySelector('.rf-cond-negate').checked = true;
 }
 
 function _getRuleConditions() {
-  const rows = document.querySelectorAll('#rf-conditions .rf-condition-row');
-  return Array.from(rows).map(row => ({
-    pattern:    row.querySelector('.rf-cond-pattern').value.trim(),
-    match_type: row.querySelector('.rf-cond-type').value,
-    negate:     row.querySelector('.rf-cond-negate').checked,
-  }));
+  // Returns grouped conditions structure
+  const groups = document.querySelectorAll('#rf-groups .rf-group-block');
+  const result = [];
+  groups.forEach(g => {
+    const logicSel = g.querySelector('.rf-group-logic');
+    const groupLogic = logicSel ? logicSel.value : 'AND';
+    const rows = g.querySelectorAll('.rf-condition-row');
+    const conditions = Array.from(rows).map(row => ({
+      pattern:    row.querySelector('.rf-cond-pattern').value.trim(),
+      match_type: row.querySelector('.rf-cond-type').value,
+      negate:     row.querySelector('.rf-cond-negate').checked,
+    }));
+    result.push({ group_logic: groupLogic, conditions });
+  });
+  return { groups: result };
 }
 
-function _setRuleConditions(conditions, logic) {
-  const container = document.getElementById('rf-conditions');
+function _setRuleConditions(conditionsData, logic) {
+  const container = document.getElementById('rf-groups');
   if (!container) return;
   container.innerHTML = '';
-  (conditions || []).forEach(c => addConditionRow(c.pattern, c.match_type || 'contains', !!c.negate));
-  if (!conditions || !conditions.length) addConditionRow(); // Ensure at least one row
-  const logicEl = document.getElementById('rf-logic');
-  if (logicEl) logicEl.value = logic || 'AND';
-  _updateLogicVisibility();
+  // Handle grouped format: {groups: [...]}
+  if (conditionsData && conditionsData.groups) {
+    conditionsData.groups.forEach(g => {
+      addConditionGroup(g.group_logic || 'AND', g.conditions);
+    });
+  } else if (Array.isArray(conditionsData) && conditionsData.length) {
+    // Legacy flat array — single group
+    addConditionGroup(logic || 'AND', conditionsData);
+  } else {
+    // Empty — one default group with one empty condition
+    addConditionGroup('AND', null);
+  }
+  _updateGroupUI();
 }
 
 // ── Merchant rules CRUD ────────────────────────────────────────
 
 function _rulePatternSummary(r) {
-  if (r.conditions && r.conditions.length) {
-    const parts = r.conditions.map(c => `${c.negate ? 'NOT ' : ''}${esc(c.match_type)} "${esc(c.pattern)}"`);
-    return parts.join(` <span style="color:var(--text-muted);font-size:10px;">${esc(r.logic || 'AND')}</span> `);
+  if (r.conditions && r.conditions.groups) {
+    return r.conditions.groups.map(g => {
+      const parts = (g.conditions || []).map(c => `${c.negate ? 'NOT ' : ''}${esc(c.match_type)} "${esc(c.pattern)}"`);
+      const inner = parts.join(` <span style="color:var(--text-muted);font-size:10px;">${esc(g.group_logic || 'AND')}</span> `);
+      return r.conditions.groups.length > 1 ? `(${inner})` : inner;
+    }).join(' <span style="color:var(--text-muted);font-size:10px;">AND</span> ');
   }
   return `<span class="mono">${esc(r.pattern)}</span>`;
 }
@@ -3029,10 +3150,12 @@ function openRuleForm(ruleId) {
     if (!rule) return;
     document.getElementById('rf-priority').value = String(rule.priority);
     document.getElementById('rf-merchant').value = rule.merchant;
-    if (rule.conditions && rule.conditions.length) {
+    if (rule.conditions && rule.conditions.groups) {
+      _setRuleConditions(rule.conditions, rule.logic);
+    } else if (rule.conditions && Array.isArray(rule.conditions)) {
       _setRuleConditions(rule.conditions, rule.logic);
     } else {
-      _setRuleConditions([{pattern: rule.pattern, match_type: rule.match_type, negate: false}], 'AND');
+      _setRuleConditions({groups: [{group_logic: 'AND', conditions: [{pattern: rule.pattern, match_type: rule.match_type, negate: false}]}]}, 'AND');
     }
   });
 }
@@ -3049,21 +3172,25 @@ async function saveRule() {
     toast('Merchant name is required.', 'error');
     return;
   }
-  // Strip any accidentally-empty condition rows
-  const conditions = _getRuleConditions().filter(c => c.pattern);
-  if (!conditions.length) {
+  // Get grouped conditions and strip empty patterns
+  const grouped = _getRuleConditions();
+  grouped.groups = grouped.groups.map(g => ({
+    ...g,
+    conditions: g.conditions.filter(c => c.pattern),
+  })).filter(g => g.conditions.length > 0);
+  if (!grouped.groups.length) {
     toast('At least one condition pattern is required.', 'error');
     return;
   }
-  const logic = (document.getElementById('rf-logic') || {}).value || 'AND';
-  // Use first condition as legacy pattern/match_type for backward compat display
+  // Use first condition of first group as legacy pattern/match_type
+  const firstCond = grouped.groups[0].conditions[0];
   const body = {
-    pattern:    conditions[0].pattern,
-    match_type: conditions[0].match_type,
+    pattern:    firstCond.pattern,
+    match_type: firstCond.match_type,
     merchant,
     priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
-    conditions: conditions.length > 1 || conditions[0].negate ? conditions : null,
-    logic:      conditions.length > 1 || conditions[0].negate ? logic : 'AND',
+    conditions: grouped,
+    logic:      grouped.groups[0].group_logic || 'AND',
   };
   try {
     if (_editingRuleId) {
@@ -3122,24 +3249,28 @@ function _loadMoreTestMatches(currentCount) {
 async function testRule() {
   const resultEl = document.getElementById('rf-test-result');
   const matchesEl = document.getElementById('rf-test-matches');
-  resultEl.textContent = 'Testing…';
+  resultEl.textContent = 'Testing\u2026';
   matchesEl.style.display = 'none';
   _testMatches = [];
 
-  // Strip empty rows — don't block on accidental blank rows
-  const conditions = _getRuleConditions().filter(c => c.pattern);
-  if (!conditions.length) {
+  // Get grouped conditions and strip empty patterns
+  const grouped = _getRuleConditions();
+  grouped.groups = grouped.groups.map(g => ({
+    ...g,
+    conditions: g.conditions.filter(c => c.pattern),
+  })).filter(g => g.conditions.length > 0);
+  if (!grouped.groups.length) {
     resultEl.textContent = 'Enter at least one condition pattern first.';
     return;
   }
-  const logic = (document.getElementById('rf-logic') || {}).value || 'AND';
+  const firstCond = grouped.groups[0].conditions[0];
   const body = {
-    pattern:    conditions[0].pattern,
-    match_type: conditions[0].match_type,
+    pattern:    firstCond.pattern,
+    match_type: firstCond.match_type,
     merchant:   document.getElementById('rf-merchant').value.trim() || 'Test',
     priority:   parseInt(document.getElementById('rf-priority').value, 10) || 0,
-    conditions: conditions.length > 1 || conditions[0].negate ? conditions : null,
-    logic,
+    conditions: grouped,
+    logic:      grouped.groups[0].group_logic || 'AND',
   };
   try {
     const data = await api('POST', '/merchant-rules/test', body);

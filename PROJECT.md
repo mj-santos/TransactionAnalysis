@@ -160,11 +160,13 @@ TransactionAnalysis/
     ├── test_golden_pipeline.py
     ├── test_ingest.py
     ├── test_mapping.py
+    ├── test_merchant_groups.py  ← grouped boolean logic tests for merchant rules engine
     ├── test_models.py
     ├── test_money.py
     ├── test_pipeline_api.py
     ├── test_income_classification.py ← income rule regression tests (BUG-6/7/8)
     ├── test_recurring.py       ← recurring detection engine tests
+    ├── test_utilities.py       ← Utilities endpoint tests
     └── test_wizard_mapping.py
 ```
 
@@ -522,8 +524,8 @@ Rows exist only during preview phase; deleted after commit or discard.
 | `priority` | INTEGER DEFAULT 0 | Higher = applied first |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
-| `conditions` | TEXT | JSON array of `{pattern, match_type, negate}` for compound rules (added by migration) |
-| `logic` | TEXT DEFAULT 'AND' | `'AND'` or `'OR'` for combining conditions (added by migration) |
+| `conditions` | TEXT | JSON: grouped `{"groups": [{"group_logic": "OR"\|"AND", "conditions": [{pattern, match_type, negate}]}]}` or legacy flat array. All groups must pass (implicit AND between groups). |
+| `logic` | TEXT DEFAULT 'AND' | `'AND'` or `'OR'` — used as group_logic when legacy flat conditions are auto-migrated to grouped format on read |
 
 Applied in order: `priority DESC, id ASC`. First matching rule wins.
 
@@ -834,6 +836,7 @@ Single-row table seeded with `1` on first migration run.
 - **`_staged_runs` is persisted**: Staged run state is stored in `pipeline._staged_runs: dict[str, dict]` in memory and persisted to `data/staged/` as JSON sidecar files (BUG-2 fix).
 - **YAML wizard profiles** persist column mappings per institution/account. On re-upload, the wizard auto-matches headers.
 - **`source='user'` vs `source='learned'`** in `merchant_category_map`: User-assigned categories are never overwritten by the learn mechanism.
+- **Merchant rule grouped boolean logic**: Rules have 1+ condition groups. Each group has its own AND/OR combiner applied within the group. Inter-group logic is always AND (implicit — not stored, not configurable). Legacy flat conditions (list) are auto-migrated to a single group on read. This maps to user intent: "match this OR that, BUT ALSO not this" = `(Group1 OR) AND (Group2 AND NOT)`.
 
 ### Consistent Patterns
 
@@ -877,7 +880,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.17.3
+**Current Version:** v2.18.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -911,6 +914,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.17.1 | 2026-03-10 | Fixed restore connection conflict introduced by Sprint C; all Sprint C connection sites now use try/finally guard pattern; added restore lock (HTTP 409 when background jobs active); `_restore_in_progress` flag prevents concurrent restores; 3 new backup/restore tests |
 | v2.17.2 | 2026-03-10 | Fixed Utilities category list column name mismatch; `GET /utilities/categories` query used `normalized_category`/`parent_category` instead of correct `category`/`parent` from `category_rules` schema; audited merchants and health endpoints (no issues); added utility endpoint test |
 | v2.17.3 | 2026-03-10 | Fixed Docker build cache corruption after category list fix; verified clean build — no code changes needed; issue was Docker BuildKit layer cache corruption, not a dependency or packaging problem; added Docker cache troubleshooting note to architectural decisions |
+| v2.18.0 | 2026-03-10 | Merchant rule grouped boolean logic — implicit AND between groups; rules now support 1+ condition groups each with own AND/OR combiner; inter-group logic always AND; legacy flat conditions auto-migrate to single group on read; rule editor UI shows visually separated group blocks with per-group logic selector; matching engine evaluates groups independently then ANDs results; 6 new unit tests including Amazon-not-Prime example; conditions JSON schema updated to grouped format |
 
 ### Version Increment Rules
 
