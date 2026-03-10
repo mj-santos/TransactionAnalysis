@@ -559,18 +559,6 @@ Single-row table seeded with `1` on first migration run.
 - Impact: Low severity — user must re-enable verbose logs after every restart. Not data-losing, but annoying.
 - Fix: Persist settings to a `user_settings` DB table or a JSON file in `data/`.
 
-**BUG-4: Backup restore omits `imported_file` column for runs**
-- File: `api.py`, Line: 2793
-- Description: The restore INSERT for the `runs` table does not include the `imported_file` column (13 columns vs 14 in the schema). Backups that contain `imported_file` data will silently lose it on restore.
-- Impact: After restoring a backup, the History page will show blank imported file names for all runs.
-- Fix: Add `imported_file` to the restore INSERT statement.
-
-**BUG-5: Delete run uses `file_hash` from `transactions_stage` which may be empty**
-- File: `api.py`, Line: 976-987
-- Description: `DELETE /runs/{run_id}` finds `file_hash` values from `transactions_stage` to delete from `transactions_norm`. But if the staging rows were already purged (e.g. after a previous successful commit), no file_hashes are found, so no transactions are deleted — even though the user explicitly chose `keep_transactions=false`.
-- Impact: When deleting a committed run with `keep_transactions=false`, the transactions remain in the ledger because the stage rows no longer exist to provide the join key.
-- Fix: Also query `transactions_norm` directly with `WHERE run_id = ?` when `keep_transactions=false`.
-
 ### Previously Fixed Bugs
 
 **BUG (FIXED): Duplicate function names in `app.js`**
@@ -588,6 +576,12 @@ Single-row table seeded with `1` on first migration run.
 **BUG (FIXED): `transactions_stage` never purged after commit**
 - `commit_run()` now deletes staging rows after successful commit.
 
+**BUG-4 (FIXED): Backup restore omits `imported_file` column for runs**
+- Added `imported_file` to the restore INSERT statement and to the base DDL.
+
+**BUG-5 (FIXED): Delete run uses `file_hash` from `transactions_stage` which may be empty**
+- `DELETE /runs/{run_id}` now deletes from `transactions_norm` by `run_id` directly, with file_hash fallback for legacy rows.
+
 ### Hardcoded Values & Workarounds
 
 - **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">`) with exactly 12 options. These match `BUILT_IN_CATEGORY_MAP`'s parent groups exactly but are not dynamically derived — adding a new taxonomy parent requires editing both `category_rules.py` and `index.html`.
@@ -599,28 +593,27 @@ Single-row table seeded with `1` on first migration run.
 ### Duplicate Logic
 
 - **Two wizard implementations:** `src/finance_etl/wizard/` subpackage (CLI) and `wizard_mapping.py` (web API) both handle header inference and profile management. They are not unified.
-- **`config/categories/rules.yaml`** is an unused YAML-based category rules file. The active system is the `category_rules` DB table + `BUILT_IN_CATEGORY_MAP`.
 - **`setup_wizard.py` at repo root** duplicates `src/finance_etl/wizard/setup_wizard.py`. Neither is referenced by the web UI.
 - **`data/profiles/*.json`** and **`data/validation/*.json`** accumulate indefinitely. There is no cleanup mechanism.
 - **Two category suggestion data stores in `app.js`**: `_catSuggestions` (merchant→category, from `/merchant-categories/suggestions`) and `_catSuggestionsData` (raw_category→normalized, from `/category-rules/suggestions`). Variable names are confusingly similar.
-- **`get_unmapped_categories()` and `get_category_suggestions()`** in `category_rules.py` are defined as module-level functions but the API endpoints in `api.py` implement equivalent logic inline rather than calling these helpers.
+- ~~`get_unmapped_categories()` and `get_category_suggestions()` — removed (v2.2.0); api.py implements equivalent logic inline.~~
 
 ### Schema Inconsistencies
 
-- **`imported_file` column** exists in `runs` table (added by migration) but is NOT in the base DDL. Backup restore silently drops it.
+- ~~`imported_file` column — added to base DDL and backup restore (v2.2.0).~~
 - **`category` vs `category_normalized`**: `transactions_norm.category` holds the raw bank category string; `category_normalized` holds the applied rule result. If a transaction was imported without a bank category, `category_normalized` and `category_parent` will be NULL even after running Apply Normalization.
 - **`runs.status` value `'committing'`** exists in the UI state machine but is never persisted to the DB — it lives only in the `_async_runs` in-memory dict.
 
 ### Dead / Unreferenced Code
 
-- `resolve_category()` in `category_rules.py` — backward-compat alias for `normalize_category()`. Not imported or called anywhere.
-- `get_unmapped_categories()` in `category_rules.py` — defined but api.py implements equivalent logic inline at line 2220.
-- `get_category_suggestions()` in `category_rules.py` — defined but api.py implements equivalent logic inline at line 2249.
+- ~~`resolve_category()` — removed (v2.2.0).~~
+- ~~`get_unmapped_categories()` — removed (v2.2.0).~~
+- ~~`get_category_suggestions()` — removed (v2.2.0).~~
 - `src/finance_etl/wizard/category_suggestion.py` — called by `wizard/setup_wizard.py` (CLI path only).
 - `src/finance_etl/wizard/mapping_rules.py` — CLI only.
 - `src/finance_etl/wizard/header_inference.py` — CLI only; web wizard uses `wizard_mapping.py`.
-- `config/categories/rules.yaml` — not read by any active code path.
-- `config/canonical_schema.yaml` — not read by any active code path.
+- ~~`config/categories/rules.yaml` — removed (v2.2.0).~~
+- ~~`config/canonical_schema.yaml` — removed (v2.2.0).~~
 
 ---
 
@@ -702,6 +695,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.1.1 | 2026-03-10 | Fix BUG-1: category normalization polling now calls correct `/normalize/` endpoint |
 | v2.1.2 | 2026-03-10 | Fix BUG-2: staged runs now persist to `data/staged/` and survive server restarts |
 | v2.1.3 | 2026-03-10 | Fix BUG-3: ui_settings now persist to `data/ui_settings.json` across restarts |
+| v2.2.0 | 2026-03-10 | Quick wins: fix BUG-4 (backup restore now includes `imported_file`), fix BUG-5 (delete run deletes transactions_norm by `run_id` directly), add `imported_file` to base DDL, remove dead code (`resolve_category`, `get_unmapped_categories`, `get_category_suggestions`), remove unused config files (`rules.yaml`, `canonical_schema.yaml`) |
 
 ### Version Increment Rules
 

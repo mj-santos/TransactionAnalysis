@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS runs (
   rows_normalized   BIGINT,
   rows_loaded       BIGINT,
   errors_count      INTEGER,
-  notes             TEXT
+  notes             TEXT,
+  imported_file     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transactions_stage (
