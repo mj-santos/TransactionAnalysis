@@ -293,6 +293,7 @@ TransactionAnalysis/
 - Uncategorized Merchants panel: `loadUncategorized()` → `GET /merchant-categories/uncategorized`
   - Inline category assignment dropdown + assign button per merchant
   - Backfills category onto all transactions for that merchant
+- **Collapsible panels**: Recommended Rules, Merchant Rules, Uncategorized panels all collapse/expand with item count badges; scroll-capped containers; collapse state persisted in localStorage
 - API: Full CRUD on `/merchant-rules`, `/merchant-categories`, `/normalize/apply`, `/normalize/{job_id}`, `GET /merchant-analytics`
 
 **Categories (`#page-category-rules`)**
@@ -305,6 +306,7 @@ TransactionAnalysis/
 - Category Normalization Rules CRUD table: `loadCategoryRules()` → `GET /category-rules`
   - Maps raw bank category → normalized category + parent group
   - Inline editor form with parent group dropdown (fixed list of 12 parents)
+- **Collapsible panels**: Suggested Mappings, Suggested Merchant Categories, Category Rules panels all collapse/expand with item count badges; scroll-capped containers; collapse state persisted in localStorage
 - Apply Normalization button: `startCategoryNormalize()` → `POST /category-rules/apply` (background job)
   - ~~**❌ BROKEN**: polling fixed in v2.1.1 (BUG-1)~~
 - API: Full CRUD on `/category-rules`, `/category-rules/apply`, `/category-rules/suggestions`, `/merchant-categories/suggestions`
@@ -794,6 +796,7 @@ Single-row table seeded with `1` on first migration run.
 - Background jobs write to `normalization_jobs` for progress tracking.
 - `esc(str)` is used throughout `app.js` to HTML-encode user data before inserting into innerHTML.
 - **`INCOME_FILTER`** constant in `utils/query_helpers.py` defines the canonical income SQL condition: `amount > 0 AND statement_type = 'bank'`. All income queries must import and use this constant (or reference it in a comment when table aliases prevent direct use). CC positive amounts (payments, refunds) are never income. See BUG-6/7/8 history. A tripwire test (`test_income_filter_constant_unchanged`) guards against accidental changes.
+- **Collapsible card panels**: Cards on Merchants and Categories pages use `.card-header-toggle` + `.card-collapsible-body` pattern. `toggleCardCollapse()` toggles `.collapsed` class and persists state in localStorage (`collapse_<cardId>`). Badge counts (`.badge-count`) show item totals even when collapsed. `ensureCardExpanded(cardId)` auto-opens a panel before scrolling to its content (e.g., when opening a form). Suggestion lists use `.suggestions-scroll` (max-height 400px), rule tables use `.rules-table-scroll` (max-height 450px). Note: localStorage is used for collapse state (alongside dark mode, colorblind palette, and onboarding prefs). If a DB-backed settings store is added later, consider migrating these UI prefs for cross-device consistency.
 
 ---
 
@@ -825,7 +828,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.13.2
+**Current Version:** v2.14.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -852,6 +855,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.13.0 | 2026-03-10 | Sprint 12 — Power User & Polish: keyboard shortcuts (j/k navigate, r review, c category edit, x select, / search, ? help, 1-9 tabs); inline category editing via double-click on transaction rows; bulk actions with multi-select checkboxes (mark reviewed, assign category, assign tag); colorblind-accessible palette (deuteranopia/protanopia safe); dark/light mode toggle with localStorage persistence; onboarding flow for first-time users (3-step guided import → categories → budgets); no new API endpoints — all features are UI-only |
 | v2.13.1 | 2026-03-10 | Fix BUG-6/7/8: income classification — CC payments and refunds no longer counted as income; all income queries now require `amount > 0 AND statement_type = 'bank'`; applied to Monthly Summary, Annual Report, Cash Flow, transaction totals, tag totals, and analytics CSV reports; 3 regression tests added |
 | v2.13.2 | 2026-03-10 | Centralized income filter constant (`INCOME_FILTER` in `utils/query_helpers.py`); replaced all 10 inline income conditions with constant reference; added custom report builder regression test and tripwire test for constant integrity; 264 total tests |
+| v2.14.0 | 2026-03-10 | Collapsible panels + scroll containers on Merchants and Categories pages; each card panel gets expand/collapse toggle with item count badges; suggestion lists and rule tables capped with `max-height` + `overflow-y: auto`; collapse state persisted in localStorage; auto-expand on form open; responsive breakpoint for narrow viewports |
 
 ### Version Increment Rules
 

@@ -74,6 +74,45 @@ function toast(msg, type = 'info', duration = 4000) {
   setTimeout(() => el.remove(), duration);
 }
 
+// ── Collapsible Card Panels ─────────────────────────────────
+// Collapse state is persisted in localStorage so panels stay
+// collapsed/expanded across page navigations within a session.
+// NOTE: If a DB-backed settings store is added later, consider
+// migrating collapse prefs there for cross-device consistency.
+
+function toggleCardCollapse(headerEl) {
+  const card = headerEl.closest('.card');
+  if (!card || !card.id) return;
+  card.classList.toggle('collapsed');
+  localStorage.setItem('collapse_' + card.id, card.classList.contains('collapsed'));
+}
+
+function restoreCollapseState() {
+  document.querySelectorAll('.card[id] .card-header-toggle').forEach(hdr => {
+    const card = hdr.closest('.card');
+    if (card && card.id && localStorage.getItem('collapse_' + card.id) === 'true') {
+      card.classList.add('collapsed');
+    }
+  });
+}
+
+/** Ensure a collapsible card is expanded (e.g. before scrolling to its content). */
+function ensureCardExpanded(cardId) {
+  const card = document.getElementById(cardId);
+  if (card && card.classList.contains('collapsed')) {
+    card.classList.remove('collapsed');
+    localStorage.setItem('collapse_' + cardId, 'false');
+  }
+}
+
+/** Update a badge-count element: show count or hide if zero. */
+function _updateBadge(id, count) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = count;
+  el.style.display = count ? '' : 'none';
+}
+
 // ── API helpers ─────────────────────────────────────────────
 async function api(method, path, body) {
   const opts = { method, headers: {} };
@@ -1273,6 +1312,7 @@ function esc(str) {
 loadSettings();
 loadDashboard();
 refreshUnreviewedBadge();
+restoreCollapseState();
 // FIX 3: ensure custom-headers checkbox is always checked on page load
 (function() {
   const tog = document.getElementById('custom-headers-toggle');
@@ -2616,8 +2656,10 @@ async function loadMerchantRules() {
     const data = await api('GET', '/merchant-rules');
     if (!data.rules.length) {
       tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px">No rules yet. Click "+ Add Rule" to create one.</td></tr>';
+      _updateBadge('merchant-rules-count', 0);
       return;
     }
+    _updateBadge('merchant-rules-count', data.rules.length);
     tbody.innerHTML = data.rules.map(r => `<tr>
       <td class="text-right">${esc(String(r.priority))}</td>
       <td><span class="badge badge-running" style="font-size:11px;">${esc(r.match_type)}</span></td>
@@ -2637,6 +2679,7 @@ async function loadMerchantRules() {
 
 function openRuleForm(ruleId) {
   _editingRuleId = ruleId;
+  ensureCardExpanded('panel-merchant-rules');
   const card = document.getElementById('rule-form-card');
   const title = document.getElementById('rule-form-title');
   card.style.display = '';
@@ -2839,8 +2882,10 @@ async function loadUncategorized() {
     const data = await api('GET', '/merchant-categories/uncategorized');
     if (!data.merchants.length) {
       container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All merchants are categorized.</span>';
+      _updateBadge('uncategorized-count', 0);
       return;
     }
+    _updateBadge('uncategorized-count', data.merchants.length);
     container.innerHTML = data.merchants.map(m => {
       const safeId  = m.replace(/[^a-zA-Z0-9]/g, '_');
       // JSON.stringify wraps in double-quotes; escape them for the HTML attribute
@@ -2929,6 +2974,7 @@ function _renderRuleSuggestions() {
   const listEl = document.getElementById('rule-suggestions-list');
   if (!listEl) return;
   const visible = _ruleSuggestions.filter(s => !s._dismissed);
+  _updateBadge('rule-suggest-count', visible.length);
   if (!visible.length) {
     listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All suggestions have been reviewed.</span>';
     document.getElementById('rule-suggest-accept-all').style.display = 'none';
@@ -3053,6 +3099,7 @@ function _renderCategorySuggestions() {
   const listEl = document.getElementById('cat-suggestions-list');
   if (!listEl) return;
   const visible = _catSuggestions.filter(s => !s._dismissed);
+  _updateBadge('cat-suggest-count', visible.length);
   if (!visible.length) {
     listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All suggestions reviewed.</span>';
     document.getElementById('cat-suggest-accept-all').style.display = 'none';
@@ -3879,8 +3926,10 @@ async function loadCategoryRules() {
     const data = await api('GET', '/category-rules');
     if (!data.rules.length) {
       tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:24px">No rules yet. Click "+ Add Rule" or use "Analyze My Data" to create them.</td></tr>';
+      _updateBadge('cat-rules-count', 0);
       return;
     }
+    _updateBadge('cat-rules-count', data.rules.length);
     tbody.innerHTML = data.rules.map(r => `<tr>
       <td class="mono" style="font-size:12px;">${esc(r.raw_category)}</td>
       <td>${esc(r.category)}</td>
@@ -3899,6 +3948,7 @@ async function loadCategoryRules() {
 
 function openCatRuleForm(ruleId) {
   _editingCatRuleId = ruleId;
+  ensureCardExpanded('panel-category-rules');
   const card = document.getElementById('cat-rule-form-card');
   document.getElementById('cat-rule-form-title').textContent = ruleId ? 'Edit Category Rule' : 'Add Category Rule';
   card.style.display = '';
@@ -3987,6 +4037,7 @@ function _renderCatSuggestions() {
   const listEl = document.getElementById('crule-suggestions-list');
   if (!listEl) return;
   const visible = _catSuggestionsData.filter(s => !s._dismissed);
+  _updateBadge('crule-suggest-count', visible.length);
   if (!visible.length) {
     listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All suggestions reviewed.</span>';
     const ab = document.getElementById('crule-suggest-accept-all'); if(ab) ab.style.display='none';

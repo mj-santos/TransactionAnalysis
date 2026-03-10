@@ -983,58 +983,70 @@
     </div>
 
     <!-- ── Recommended Rules ─────────────────────────────────── -->
-    <div class="card" style="margin-bottom:24px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-        <span>💡 Recommended Normalization Rules</span>
+    <div class="card" id="panel-rule-suggestions" style="margin-bottom:24px;">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Recommended Normalization Rules</span>
+          <span class="badge-count" id="rule-suggest-count" style="display:none;"></span>
+        </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="rule-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
-          <button class="btn btn-secondary btn-sm" onclick="loadRuleSuggestions()">Analyze My Data</button>
-          <button id="rule-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="acceptAllRuleSuggestions()">Accept All</button>
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); loadRuleSuggestions()">Analyze My Data</button>
+          <button id="rule-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="event.stopPropagation(); acceptAllRuleSuggestions()">Accept All</button>
+          <span class="collapse-arrow">▼</span>
         </div>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Automatically finds patterns in your raw transaction descriptions and proposes normalization rules.
-        Each suggestion shows the inferred merchant name, match pattern, and real examples from your data.
-        Click <strong>Analyze My Data</strong> to generate recommendations.
-      </p>
-      <div id="rule-suggestions-list" style="display:flex; flex-direction:column; gap:8px;">
-        <!-- populated by JS -->
+      <div class="card-collapsible-body">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
+          Automatically finds patterns in your raw transaction descriptions and proposes normalization rules.
+          Each suggestion shows the inferred merchant name, match pattern, and real examples from your data.
+          Click <strong>Analyze My Data</strong> to generate recommendations.
+        </p>
+        <div id="rule-suggestions-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:8px;">
+          <!-- populated by JS -->
+        </div>
       </div>
     </div>
 
     <!-- Merchant Normalization Rules -->
-    <div class="card" style="margin-bottom:24px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-        <span>Merchant Normalization Rules</span>
-        <div style="display:flex; gap:8px;">
-          <button class="btn btn-secondary btn-sm" onclick="loadMerchantRules()">↻ Refresh</button>
-          <button class="btn btn-primary btn-sm" onclick="openRuleForm(null)">+ Add Rule</button>
+    <div class="card" id="panel-merchant-rules" style="margin-bottom:24px;">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Merchant Normalization Rules</span>
+          <span class="badge-count" id="merchant-rules-count" style="display:none;"></span>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); loadMerchantRules()">↻ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); openRuleForm(null)">+ Add Rule</button>
+          <span class="collapse-arrow">▼</span>
         </div>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Rules map transaction descriptions to normalized merchant names. Applied in priority order (highest first) during import and re-normalization.
-      </p>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Priority</th>
-              <th>Match Type</th>
-              <th>Pattern</th>
-              <th>→ Merchant</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="merchant-rules-tbody">
-            <tr><td colspan="5" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <div class="card-collapsible-body">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
+          Rules map transaction descriptions to normalized merchant names. Applied in priority order (highest first) during import and re-normalization.
+        </p>
+        <div class="table-wrap rules-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>Match Type</th>
+                <th>Pattern</th>
+                <th>→ Merchant</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="merchant-rules-tbody">
+              <tr><td colspan="5" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
 
-      <!-- Re-normalize button -->
-      <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
-        <button class="btn btn-secondary" onclick="startRenormalize()">↻ Re-normalize All Transactions</button>
-        <span id="renorm-status" style="font-size:13px; color:var(--text-muted);"></span>
+        <!-- Re-normalize button -->
+        <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
+          <button class="btn btn-secondary" onclick="startRenormalize()">↻ Re-normalize All Transactions</button>
+          <span id="renorm-status" style="font-size:13px; color:var(--text-muted);"></span>
+        </div>
       </div>
     </div>
 
@@ -1085,16 +1097,24 @@
     </div>
 
     <!-- Uncategorized Merchants panel -->
-    <div class="card">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-        <span>Uncategorized Merchants</span>
-        <button class="btn btn-secondary btn-sm" onclick="loadUncategorized()">↻ Refresh</button>
+    <div class="card" id="panel-uncategorized">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Uncategorized Merchants</span>
+          <span class="badge-count" id="uncategorized-count" style="display:none;"></span>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); loadUncategorized()">↻ Refresh</button>
+          <span class="collapse-arrow">▼</span>
+        </div>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Merchants in the ledger with no category assigned. Assign a category to apply it to all matching transactions.
-      </p>
-      <div id="uncategorized-list" style="display:flex; flex-direction:column; gap:8px;">
-        <span style="color:var(--text-muted); font-size:13px;">Loading…</span>
+      <div class="card-collapsible-body">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
+          Merchants in the ledger with no category assigned. Assign a category to apply it to all matching transactions.
+        </p>
+        <div id="uncategorized-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:8px;">
+          <span style="color:var(--text-muted); font-size:13px;">Loading…</span>
+        </div>
       </div>
     </div>
 
@@ -1104,66 +1124,84 @@
   <section id="page-category-rules" class="page">
 
     <!-- Suggested Mappings panel -->
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-        <span>Suggested Category Mappings</span>
+    <div class="card" id="panel-cat-suggestions" style="margin-bottom:20px;">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Suggested Category Mappings</span>
+          <span class="badge-count" id="crule-suggest-count" style="display:none;"></span>
+        </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="crule-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
-          <button class="btn btn-secondary btn-sm" id="crule-suggest-accept-all" style="display:none;" onclick="acceptAllCatSuggestions()">✓ Accept All</button>
-          <button class="btn btn-primary btn-sm" onclick="loadCatSuggestions()">Analyze My Data</button>
+          <button class="btn btn-secondary btn-sm" id="crule-suggest-accept-all" style="display:none;" onclick="event.stopPropagation(); acceptAllCatSuggestions()">✓ Accept All</button>
+          <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); loadCatSuggestions()">Analyze My Data</button>
+          <span class="collapse-arrow">▼</span>
         </div>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Scans all raw bank category strings and suggests normalized mappings. Green = matches built-in taxonomy; grey = needs manual assignment.
-      </p>
-      <div id="crule-suggestions-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+      <div class="card-collapsible-body">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
+          Scans all raw bank category strings and suggests normalized mappings. Green = matches built-in taxonomy; grey = needs manual assignment.
+        </p>
+        <div id="crule-suggestions-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:6px;"></div>
+      </div>
     </div>
 
     <!-- Suggested Merchant Categories panel -->
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-        <span>🏷 Suggested Merchant Categories</span>
+    <div class="card" id="panel-merchant-cat-suggestions" style="margin-bottom:20px;">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Suggested Merchant Categories</span>
+          <span class="badge-count" id="cat-suggest-count" style="display:none;"></span>
+        </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="cat-suggest-status" style="font-size:12px; color:var(--text-muted);"></span>
-          <button id="cat-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="acceptAllCategorySuggestions()">Accept All</button>
-          <button class="btn btn-secondary btn-sm" onclick="loadCategorySuggestions()">Suggest Categories</button>
+          <button id="cat-suggest-accept-all" class="btn btn-primary btn-sm" style="display:none" onclick="event.stopPropagation(); acceptAllCategorySuggestions()">Accept All</button>
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); loadCategorySuggestions()">Suggest Categories</button>
+          <span class="collapse-arrow">▼</span>
         </div>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Matches your normalized merchants against common category patterns (Restaurants, Groceries, Gas, Shopping, etc.).
-        Only uncategorized merchants are shown. Click <strong>Suggest Categories</strong> to start.
-      </p>
-      <div id="cat-suggestions-list" style="display:flex; flex-direction:column; gap:6px;">
-        <!-- populated by JS -->
+      <div class="card-collapsible-body">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
+          Matches your normalized merchants against common category patterns (Restaurants, Groceries, Gas, Shopping, etc.).
+          Only uncategorized merchants are shown. Click <strong>Suggest Categories</strong> to start.
+        </p>
+        <div id="cat-suggestions-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:6px;">
+          <!-- populated by JS -->
+        </div>
       </div>
     </div>
 
     <!-- Category Rules table -->
-    <div class="card" style="margin-bottom:20px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-        <span>Category Normalization Rules</span>
-        <div style="display:flex; gap:8px;">
-          <button class="btn btn-secondary btn-sm" onclick="loadCategoryRules()">↻ Refresh</button>
-          <button class="btn btn-primary btn-sm" onclick="openCatRuleForm(null)">+ Add Rule</button>
+    <div class="card" id="panel-category-rules" style="margin-bottom:20px;">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Category Normalization Rules</span>
+          <span class="badge-count" id="cat-rules-count" style="display:none;"></span>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); loadCategoryRules()">↻ Refresh</button>
+          <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); openCatRuleForm(null)">+ Add Rule</button>
+          <span class="collapse-arrow">▼</span>
         </div>
       </div>
-      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-        Maps raw bank categories to your normalized taxonomy. After saving rules, click "Apply Normalization" to update all transactions.
-      </p>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Raw Bank Category</th>
-              <th>→ Normalized Category</th>
-              <th>Parent Group</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="category-rules-tbody">
-            <tr><td colspan="4" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
-          </tbody>
-        </table>
+      <div class="card-collapsible-body">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
+          Maps raw bank categories to your normalized taxonomy. After saving rules, click "Apply Normalization" to update all transactions.
+        </p>
+        <div class="table-wrap rules-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Raw Bank Category</th>
+                <th>→ Normalized Category</th>
+                <th>Parent Group</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="category-rules-tbody">
+              <tr><td colspan="4" class="text-center text-muted" style="padding:32px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
