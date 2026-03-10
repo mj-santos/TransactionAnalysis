@@ -167,6 +167,7 @@ TransactionAnalysis/
     ├── test_income_classification.py ← income rule regression tests (BUG-6/7/8)
     ├── test_recurring.py       ← recurring detection engine tests
     ├── test_utilities.py       ← Utilities endpoint tests
+    ├── test_dashboard.py          ← version endpoint tests (dynamic version from pyproject.toml)
     ├── test_merchant_category_edit.py ← inline category edit, override, fix-for-all, merchant bulk tests
     ├── test_bulk_actions.py    ← bulk-assign-merchant, merchant search, changes() audit tests
     └── test_wizard_mapping.py
@@ -792,6 +793,11 @@ Single-row table seeded with `1` on first migration run.
 - Description: `changes()` is a SQLite-only function that returns the number of rows affected by the last INSERT/UPDATE/DELETE. DuckDB does not support it, causing bulk operations (mark-reviewed, mark-all-reviewed, unsplit, patch transaction) to fail silently or raise errors.
 - Fix: Replaced all 5 occurrences with DuckDB-compatible patterns: COUNT queries before mutations, existence checks, and row count tracking. In `load.py`, replaced INSERT OR IGNORE + `changes()` with pre-insert existence check pattern. Fixed in v2.23.1.
 
+**BUG-13 (FIXED): Sidebar version display is static — shows 2.0.0 instead of current version**
+- File: `pyproject.toml`
+- Description: `pyproject.toml` `[project] version` was never incremented past `2.0.0` despite 24 feature releases. The sidebar version display correctly fetches `GET /version` which reads from `importlib.metadata.version("finance_etl")`, but that reflects the installed package metadata — which comes from `pyproject.toml`. The display chain worked; the source data was stale.
+- Fix: Updated `pyproject.toml` version to `2.24.1`. Added version sync rule to Section 7 requiring pyproject.toml to be incremented on every commit. Fixed in v2.24.1.
+
 **BUG-12 (FIXED): Backup/restore uses `SELECT *` — misses migration-added columns**
 - File: `api.py` (backup export + restore)
 - Description: Backup export used `SELECT * FROM transactions_norm` which relies on column order matching the restore INSERT. Migration-added columns (11 total) may not appear in a consistent order with `SELECT *`, and future migrations could silently break backup roundtrips.
@@ -911,7 +917,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.24.0
+**Current Version:** v2.24.1
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -955,6 +961,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.23.1 | 2026-03-10 | Fix BUG-11: replaced all 5 `SELECT changes()` SQLite-only function calls with DuckDB-compatible patterns (COUNT queries, existence checks, pre-insert dedup); affected endpoints: mark-reviewed, mark-all-reviewed, patch transaction, unsplit, load.py row insert; critical fix — bulk operations were silently failing |
 | v2.23.2 | 2026-03-10 | Fix BUG-12: backup/restore now uses explicit column list for `transactions_norm` (26 columns) via `_TABLE_COLUMNS` dict instead of `SELECT *`; restore INSERT updated to include `category_override`; prevents silent data loss when migration columns are added |
 | v2.24.0 | 2026-03-10 | Category override + shared category picker + inline editing sprint; new `category_override` BOOLEAN column on `transactions_norm` (migration); `apply_category_rules()` skips override rows; shared `openCategoryPicker()` component replaces all previous category edit implementations; transaction row inline category edit with override badge ("edited" pill), click-to-reset, "Fix for All?" merchant prompt; Utilities Merchant List bulk select with Assign Category / Remove Category actions; Merchants tab "Show categorized merchants too" toggle with inline edit; `GET /merchant-categories` and `DELETE /merchant-categories/{merchant}` now used by frontend; 9 new tests (3 files); 294 total tests |
+| v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 
 ### Version Increment Rules
 
@@ -964,6 +971,8 @@ Increment rules:
 - Patch (v2.1.0 → v2.1.1): bug fix, style change, doc update
 - Minor (v2.1.0 → v2.2.0): new feature, new endpoint, new UI section
 - Major (v2.1.0 → v3.0.0): breaking schema change, full rebuild, architecture overhaul
+
+**pyproject.toml `version` MUST be incremented on every commit that touches `src/`, `web/`, or `tests/`.** The sidebar version display reads directly from this value via `GET /version` → `importlib.metadata.version("finance_etl")`. A static sidebar version means pyproject.toml was not updated. All three version sources must stay in sync: pyproject.toml, `GET /version` response, and PROJECT.md VERSION TRACKING current version.
 
 Claude Code must add a row to the changelog on every commit that touches `src/`, `web/`, or `tests/`. Format:
 
