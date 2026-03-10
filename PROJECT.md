@@ -256,7 +256,7 @@ TransactionAnalysis/
 - Tag filter dropdown — filters transactions by assigned tag
 - Per-row tag chips showing assigned tags, "+tag" button opens tag assignment popup
 - Tag assignment popup: checkboxes for all tags, toggle to assign/remove per transaction
-- **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar appears when ≥1 selected; actions: mark reviewed, assign category, assign tag; selection count badge; clear selection button
+- **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar (blue) appears when ≥1 selected with buttons: Assign Category, Mark Reviewed, Exclude, Assign Merchant (inline type-ahead panel), Assign Tag, Clear Selection ×; selected rows get left border accent + light blue tint; "{N} selected" counter updates in real time
 - **Inline Category Editing**: double-click category cell to edit in-place; Enter saves via `/merchant-categories`, Escape/blur cancels; no modal required
 - **Transaction Notes**: per-transaction notes via pencil icon; inline popup editor with textarea; auto-save on Enter or Save click; PATCH endpoint updates `notes` field
 - **Split Transactions**: split one transaction into N sub-rows across categories; parent marked `is_split=TRUE` and excluded from totals; children carry `split_parent_fingerprint`; "split" badge on child descriptions; unsplit restores parent and removes children
@@ -774,6 +774,12 @@ Single-row table seeded with `1` on first migration run.
 **BUG (FIXED): Restore connection conflict after Sprint C (DuckDB single-writer violation)**
 - All 9 Sprint C functions (`_detect_duplicates`, `_create_export_payload`, `resolve_duplicate`, `list_duplicates`, `utilities_categories`, `utilities_merchants`, `utilities_test_rule` ×2, `utilities_health`) now use `conn = None; try: ... finally: conn.close()` pattern. Restore endpoint (`POST /backup/restore`) also wrapped with try/finally. Added restore lock: returns HTTP 409 if background jobs are active or another restore is in progress (`_restore_in_progress` flag). Fixed in v2.17.1.
 
+**BUG-9 (FIXED): Bulk Assign Category sent fingerprints as merchant names**
+- `bulkAssignCategory()` in app.js iterated fingerprints and called `POST /merchant-categories` with `{merchant: fingerprint, category: cat}` — this created merchant_category_map entries keyed by fingerprint strings instead of actual merchant names, and did not update the selected transactions' categories. Fixed in v2.22.0 to use `PATCH /transactions/{fp}` with `category_normalized` field.
+
+**BUG-10 (FIXED): Bulk action bar buttons invisible**
+- Buttons in the `.bulk-bar` (blue background) used `btn-secondary` class which sets `background: var(--card-bg)` (white) and `color: var(--text)` (dark) — making white buttons with dark text that appeared invisible against the blue bar. The `.bulk-bar button` rule had lower specificity than `.btn-secondary`. Fixed in v2.22.0 by using `.bulk-bar .btn` with `background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.4)`.
+
 **BUG (FIXED): Utilities category list column name mismatch**
 - `GET /utilities/categories` queried `category_rules` using `normalized_category` and `parent_category` — columns that don't exist. The actual schema uses `category` and `parent`. Utilities endpoints were written against incorrect assumed column names rather than the actual `category_rules` table schema. Fixed in v2.17.2.
 
@@ -887,7 +893,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.21.0
+**Current Version:** v2.22.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -926,6 +932,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.19.0 | 2026-03-10 | Year filter for transactions + cash flow — new `GET /transactions/years` endpoint; year dropdown on CC and Bank filter bars scopes Quick Date presets to selected year; cash flow period dropdown includes per-year options; clickable category drill-down app-wide — category rows in Cash Flow spending breakdown, Monthly Summary top categories, and Reports category tables now open drill-down modal with date-scoped transaction list; `openCategoryDrilldown()` accepts optional date range for flexible reuse |
 | v2.20.0 | 2026-03-10 | Rule search bars + category rule grouped condition builder + shared rule evaluation utility; inline search/filter on Merchant and Category rule tables (real-time, case-insensitive, match count, Escape to clear); category rule editor replaced with grouped condition builder (exact/contains/starts_with match types, AND/OR groups, NOT support); backward-compatible with legacy exact-match rules; `evaluate_rule_groups()` shared utility in `query_helpers.py` used by both merchant and category rule engines; new `conditions` column on `category_rules` table; 7 new unit tests for shared utility; 281 total tests |
 | v2.21.0 | 2026-03-10 | Suggested category edit + category rule test + retention features; editable category picker dropdown on Suggested Merchant Categories rows (searchable, pre-filled with suggestion, Accept/Accept All respects user changes); Test Conditions button on Category Rule Editor with inline test panel + new `POST /category-rules/test` endpoint (match result + live transaction count); Smart Unreviewed Nudge widget on Dashboard (shows when >5 unreviewed, progressive tone, dismiss options: tomorrow/next week/never via localStorage, estimated review time); Weekly Spending Recap banner on Mondays before 6pm (total spend, txn count, top category, See Details links to filtered transactions, dismissible per week); Budget Pace Indicator per budget row (projected end-of-month spend, color-coded green/yellow/red, only after day 5); new `GET /dashboard/weekly-recap` endpoint; 281 total tests |
+| v2.22.0 | 2026-03-10 | Fixed bulk action bar visibility + added bulk assign merchant + selected row highlight; bulk bar buttons now use semi-transparent white styling (rgba backgrounds, white text/borders) instead of btn-secondary which was invisible against blue bar; full button set: Assign Category, Mark Reviewed, Exclude, Assign Merchant, Assign Tag, Clear Selection; selected rows get left border accent + light blue background tint (works in dark mode); Assign Merchant opens inline panel with debounced type-ahead merchant search (frequency-ordered); bulk merchant assign auto-applies category if merchant→category mapping exists; fixed bulkAssignCategory to use PATCH /transactions/{fp} instead of wrong /merchant-categories endpoint; extended PATCH /transactions/{fp} to accept category_normalized and excluded fields; new `PATCH /transactions/bulk-assign-merchant` and `GET /merchants/search` endpoints; 5 new tests; 286 total tests |
 
 ### Version Increment Rules
 
@@ -974,6 +981,8 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/transactions/unreviewed-count` | transactions | Count of all unreviewed transactions | 🟢 Called |
 | `POST` | `/transactions/mark-reviewed` | transactions | Mark specific transactions as reviewed (by fingerprint) | 🟢 Called |
 | `POST` | `/transactions/mark-all-reviewed` | transactions | Mark all filtered transactions as reviewed | 🟢 Called |
+| `PATCH` | `/transactions/bulk-assign-merchant` | transactions | Assign merchant to multiple transactions; auto-applies category if mapping exists | 🟢 Called |
+| `GET` | `/merchants/search` | merchant | Search distinct merchants by name (type-ahead, frequency-ordered) | 🟢 Called |
 | `GET` | `/reports` | reports | List available analytics CSV reports | 🟢 Called |
 | `GET` | `/reports/{name}` | reports | Download a report CSV | 🟢 Called |
 | `POST` | `/reports/query` | reports | Run a custom parameterized report query | 🟢 Called |
