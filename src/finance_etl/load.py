@@ -36,9 +36,18 @@ def load_normalized(
 
     for row in valid_rows:
         try:
+            fp = row.get("transaction_fingerprint", "")
+            # Check for duplicate before inserting (DuckDB has no changes() function)
+            already_exists = conn.execute(
+                "SELECT 1 FROM transactions_norm WHERE transaction_fingerprint = ?",
+                [fp],
+            ).fetchone()
+            if already_exists:
+                dupes_skipped += 1
+                continue
             conn.execute(
                 """
-                INSERT OR IGNORE INTO transactions_norm (
+                INSERT INTO transactions_norm (
                   transaction_date, posted_date, description, merchant, category,
                   amount, currency, bank_name, account_name, account_id,
                   source_file, source_row, file_hash, transaction_fingerprint,
@@ -60,7 +69,7 @@ def load_normalized(
                     row["source_file"],
                     row["source_row"],
                     row["file_hash"],
-                    row["transaction_fingerprint"],
+                    fp,
                     # Feature 1: 'bank' or 'credit_card' — never mix in aggregations
                     row.get("statement_type"),
                     # Source tracking: links row back to originating run
@@ -70,12 +79,7 @@ def load_normalized(
                     str(row["resolved_amount"]) if row.get("resolved_amount") is not None else None,
                 ],
             )
-            # Check if row was actually inserted
-            changes = conn.execute("SELECT changes()").fetchone()
-            if changes and changes[0] > 0:
-                rows_loaded += 1
-            else:
-                dupes_skipped += 1
+            rows_loaded += 1
         except Exception as e:
             log.warning("Load error on row (fingerprint=%s): %s",
                         row.get("transaction_fingerprint", "?")[:12], e)
