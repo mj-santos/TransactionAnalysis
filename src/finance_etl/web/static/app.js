@@ -3129,6 +3129,9 @@ function _renderDashboard(data) {
     }
   }
 
+  // Savings goals
+  _renderSavingsGoals(data.savings_goals || []);
+
   // Recent transactions
   const tbody = document.getElementById('dash-recent-tbody');
   if (tbody) {
@@ -3610,6 +3613,160 @@ function setReportDatePreset(preset) {
   const t = document.getElementById('report-date-to');
   if (f) f.value = from;
   if (t) t.value = to;
+}
+
+// ── Savings Goals ─────────────────────────────────────────────
+
+let _editingSavingsId = null;
+
+function openSavingsForm(goal) {
+  _editingSavingsId = goal ? goal.id : null;
+  document.getElementById('sf-id').value = goal ? goal.id : '';
+  document.getElementById('sf-name').value = goal ? goal.name : '';
+  document.getElementById('sf-target').value = goal ? goal.target_amount : '';
+  document.getElementById('sf-current').value = goal ? goal.current_amount : 0;
+  document.getElementById('sf-date').value = goal ? (goal.target_date || '') : '';
+  document.getElementById('sf-account').value = goal ? (goal.linked_account || '') : '';
+  document.getElementById('sf-suggestion').textContent = '';
+  document.getElementById('savings-form').style.display = '';
+}
+
+function closeSavingsForm() {
+  document.getElementById('savings-form').style.display = 'none';
+  _editingSavingsId = null;
+}
+
+async function saveSavingsGoal() {
+  const name = document.getElementById('sf-name').value.trim();
+  const target = parseFloat(document.getElementById('sf-target').value);
+  const current = parseFloat(document.getElementById('sf-current').value) || 0;
+  const targetDate = document.getElementById('sf-date').value || null;
+  const account = document.getElementById('sf-account').value.trim() || null;
+  if (!name || isNaN(target) || target <= 0) {
+    toast('Name and a positive target amount are required.', 'error'); return;
+  }
+  const payload = { name, target_amount: target, current_amount: current,
+                    target_date: targetDate, linked_account: account };
+  try {
+    if (_editingSavingsId) {
+      await api('PUT', `/savings-goals/${_editingSavingsId}`, payload);
+      toast('Goal updated.', 'success');
+    } else {
+      await api('POST', '/savings-goals', payload);
+      toast('Goal created.', 'success');
+    }
+    closeSavingsForm();
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function deleteSavingsGoal(id) {
+  if (!confirm('Delete this savings goal?')) return;
+  try {
+    await api('DELETE', `/savings-goals/${id}`);
+    toast('Goal deleted.', 'success');
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function updateSavingsProgress(id) {
+  const input = document.getElementById(`sp-input-${id}`);
+  if (!input) return;
+  const amount = parseFloat(input.value);
+  if (isNaN(amount)) { toast('Enter a valid amount.', 'error'); return; }
+  const mode = document.getElementById(`sp-mode-${id}`)?.value || 'set';
+  try {
+    await api('POST', `/savings-goals/${id}/update-progress`, { amount, mode });
+    toast('Progress updated.', 'success');
+    loadDashboard();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function loadSavingsSuggestion() {
+  const el = document.getElementById('sf-suggestion');
+  if (el) el.textContent = 'Calculating…';
+  try {
+    const data = await api('GET', '/savings-goals/suggestions');
+    if (el) {
+      if (data.suggested_monthly_savings > 0) {
+        el.textContent = `Avg net: ${_fmt$(data.avg_monthly_net)}/mo → Suggested: ${_fmt$(data.suggested_monthly_savings)}/mo (${data.months_analysed} months analysed)`;
+      } else {
+        el.textContent = `Avg net: ${_fmt$(data.avg_monthly_net)}/mo (no surplus to save)`;
+      }
+    }
+  } catch (err) {
+    if (el) el.textContent = 'Could not calculate suggestion.';
+  }
+}
+
+function _renderSavingsGoals(goals) {
+  const el = document.getElementById('dash-savings-list');
+  if (!el) return;
+  if (!goals || !goals.length) {
+    el.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No savings goals yet. Click "+ New Goal" to create one.</span>';
+    return;
+  }
+  el.innerHTML = goals.map(g => {
+    const pct = Math.min(g.pct || 0, 100);
+    const remaining = Math.max(g.target_amount - g.current_amount, 0);
+    const color = pct >= 100 ? '#22c55e' : pct >= 60 ? '#3b82f6' : '#f59e0b';
+
+    // Calculate required monthly savings if target date exists
+    let monthlyNeeded = '';
+    if (g.target_date && remaining > 0) {
+      const today = new Date();
+      const target = new Date(g.target_date);
+      const monthsLeft = Math.max(
+        (target.getFullYear() - today.getFullYear()) * 12 +
+        (target.getMonth() - today.getMonth()), 1
+      );
+      const perMonth = remaining / monthsLeft;
+      monthlyNeeded = `<span style="font-size:11px; color:var(--text-muted);">Need ${_fmt$(perMonth)}/mo to reach target</span>`;
+    } else if (pct >= 100) {
+      monthlyNeeded = '<span style="font-size:11px; color:#22c55e; font-weight:600;">Goal reached!</span>';
+    }
+
+    const dateLabel = g.target_date
+      ? `<span style="font-size:11px; color:var(--text-muted);">Target: ${g.target_date}</span>`
+      : '';
+
+    return `<div class="savings-goal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <span style="font-weight:600; font-size:13px;">${esc(g.name)}</span>
+        <div style="display:flex; gap:4px; align-items:center;">
+          ${dateLabel}
+          <button class="btn btn-secondary btn-sm" style="padding:2px 6px; font-size:10px;" onclick="openSavingsForm(${esc(JSON.stringify(g))})">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="padding:2px 6px; font-size:10px; color:var(--danger);" onclick="deleteSavingsGoal(${g.id})">Del</button>
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:3px;">
+        <span>${_fmt$(g.current_amount)} / ${_fmt$(g.target_amount)}</span>
+        <span style="color:${color}; font-weight:600;">${pct}%</span>
+      </div>
+      <div class="savings-bar-track">
+        <div class="savings-bar-fill" style="width:${pct}%; background:${color};"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+        ${monthlyNeeded}
+        <div style="display:flex; gap:4px; align-items:center;">
+          <select id="sp-mode-${g.id}" style="padding:2px 4px; font-size:11px; border:1px solid var(--border); border-radius:4px;">
+            <option value="set">Set to</option>
+            <option value="add">Add</option>
+          </select>
+          <input type="number" id="sp-input-${g.id}" placeholder="$" min="0" step="0.01"
+            style="width:80px; padding:3px 6px; font-size:11px; border:1px solid var(--border); border-radius:4px;" />
+          <button class="btn btn-primary btn-sm" style="padding:2px 8px; font-size:10px;"
+            onclick="updateSavingsProgress(${g.id})">Update</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ── Cash Flow ──────────────────────────────────────────────────

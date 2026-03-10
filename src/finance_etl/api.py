@@ -2778,6 +2778,180 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
+    # Savings Goals
+    # -----------------------------------------------------------------------
+
+    @app.get("/savings-goals", tags=["savings"], summary="List all savings goals")
+    def list_savings_goals():
+        """Return all savings goals ordered by target date."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, name, target_amount, current_amount, target_date, "
+                "linked_account, created_at, updated_at "
+                "FROM savings_goals ORDER BY target_date NULLS LAST, name"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"goals": []}
+        cols = ["id", "name", "target_amount", "current_amount", "target_date",
+                "linked_account", "created_at", "updated_at"]
+        goals = []
+        for r in rows:
+            g = dict(zip(cols, r))
+            g["target_amount"] = float(g["target_amount"])
+            g["current_amount"] = float(g["current_amount"])
+            goals.append(g)
+        return {"goals": goals}
+
+    @app.post("/savings-goals", tags=["savings"], summary="Create a savings goal",
+              status_code=201)
+    def create_savings_goal(payload: dict):
+        """Create a new savings goal."""
+        name = (payload.get("name") or "").strip()
+        target_amount = payload.get("target_amount")
+        if not name or target_amount is None:
+            raise HTTPException(status_code=400, detail="name and target_amount are required")
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO savings_goals "
+                "(name, target_amount, current_amount, target_date, linked_account, "
+                "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                [name, float(target_amount),
+                 float(payload.get("current_amount", 0)),
+                 payload.get("target_date") or None,
+                 payload.get("linked_account") or None,
+                 now, now],
+            )
+            row = conn.execute(
+                "SELECT id FROM savings_goals WHERE name=? ORDER BY id DESC LIMIT 1",
+                [name],
+            ).fetchone()
+        finally:
+            conn.close()
+        return {"id": row[0] if row else None, "status": "created"}
+
+    @app.put("/savings-goals/{goal_id}", tags=["savings"],
+             summary="Update a savings goal")
+    def update_savings_goal(goal_id: int, payload: dict):
+        """Update an existing savings goal."""
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        try:
+            existing = conn.execute(
+                "SELECT id FROM savings_goals WHERE id=?", [goal_id]
+            ).fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Goal not found")
+            sets = []
+            params = []
+            for field in ("name", "target_amount", "current_amount",
+                          "target_date", "linked_account"):
+                if field in payload:
+                    sets.append(f"{field}=?")
+                    val = payload[field]
+                    if field in ("target_amount", "current_amount"):
+                        val = float(val) if val is not None else 0
+                    params.append(val)
+            if not sets:
+                raise HTTPException(status_code=400, detail="No fields to update")
+            sets.append("updated_at=?")
+            params.append(now)
+            params.append(goal_id)
+            conn.execute(
+                f"UPDATE savings_goals SET {', '.join(sets)} WHERE id=?", params
+            )
+        finally:
+            conn.close()
+        return {"id": goal_id, "status": "updated"}
+
+    @app.delete("/savings-goals/{goal_id}", tags=["savings"],
+                summary="Delete a savings goal")
+    def delete_savings_goal(goal_id: int):
+        """Delete a savings goal by ID."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute("DELETE FROM savings_goals WHERE id=?", [goal_id])
+        finally:
+            conn.close()
+        return {"status": "deleted"}
+
+    @app.post("/savings-goals/{goal_id}/update-progress", tags=["savings"],
+              summary="Add a manual progress update to a savings goal")
+    def update_savings_progress(goal_id: int, payload: dict):
+        """Add or set the current saved amount for a goal."""
+        amount = payload.get("amount")
+        mode = payload.get("mode", "set")  # "set" or "add"
+        if amount is None:
+            raise HTTPException(status_code=400, detail="amount is required")
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        try:
+            existing = conn.execute(
+                "SELECT id, current_amount FROM savings_goals WHERE id=?", [goal_id]
+            ).fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Goal not found")
+            if mode == "add":
+                new_amount = float(existing[1]) + float(amount)
+            else:
+                new_amount = float(amount)
+            conn.execute(
+                "UPDATE savings_goals SET current_amount=?, updated_at=? WHERE id=?",
+                [new_amount, now, goal_id],
+            )
+        finally:
+            conn.close()
+        return {"id": goal_id, "current_amount": new_amount, "status": "updated"}
+
+    @app.get("/savings-goals/suggestions", tags=["savings"],
+             summary="Suggest monthly savings based on average net cash flow")
+    def savings_suggestions():
+        """
+        Calculate average monthly net cash flow over the last 6 months and
+        suggest a monthly savings amount (50% of average net if positive).
+        """
+        import datetime as _dt
+        today = _dt.date.today()
+        d_from = (today.replace(day=1) - _dt.timedelta(days=180)).replace(day=1)
+        conn = get_connection(db_path, read_only=True)
+        try:
+            rows = conn.execute(
+                """SELECT
+                     DATE_TRUNC('month', transaction_date) AS month,
+                     COALESCE(SUM(amount), 0) AS net
+                   FROM transactions_norm
+                   WHERE transaction_date >= ?
+                   GROUP BY 1 ORDER BY 1""",
+                [d_from.isoformat()],
+            ).fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return {
+                "avg_monthly_net": 0,
+                "suggested_monthly_savings": 0,
+                "months_analysed": 0,
+            }
+        nets = [float(r[1]) for r in rows]
+        avg_net = sum(nets) / len(nets)
+        suggested = round(max(avg_net * 0.5, 0), 2)
+        return {
+            "avg_monthly_net": round(avg_net, 2),
+            "suggested_monthly_savings": suggested,
+            "months_analysed": len(nets),
+        }
+
+    # -----------------------------------------------------------------------
     # Dashboard summary
     # -----------------------------------------------------------------------
 
@@ -2930,6 +3104,27 @@ No cloud services, no external dependencies — all data stays on your machine.
             ).fetchone()
             unreviewed_count = int(unrev_row[0]) if unrev_row else 0
 
+            # Active savings goals summary
+            savings_goals_summary = []
+            try:
+                sg_rows = conn.execute(
+                    "SELECT id, name, target_amount, current_amount, target_date "
+                    "FROM savings_goals ORDER BY target_date NULLS LAST, name"
+                ).fetchall()
+                for sg in sg_rows:
+                    target = float(sg[2])
+                    current = float(sg[3])
+                    pct_done = round(current / target * 100, 1) if target > 0 else 0
+                    savings_goals_summary.append({
+                        "id": sg[0], "name": sg[1],
+                        "target_amount": target,
+                        "current_amount": current,
+                        "target_date": sg[4],
+                        "pct": min(pct_done, 100),
+                    })
+            except Exception:
+                pass  # table may not exist yet
+
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Dashboard query failed: {exc}") from exc
@@ -2944,6 +3139,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "recent_transactions": recent_transactions,
             "budgets_vs_actual": budgets_vs_actual,
             "unreviewed_count": unreviewed_count,
+            "savings_goals": savings_goals_summary,
         }
 
     # -----------------------------------------------------------------------
@@ -3235,6 +3431,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         "transactions_norm",
         "tags",
         "transaction_tags",
+        "savings_goals",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
@@ -3538,6 +3735,20 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("created_at", now)],
                 )
 
+            # 12. savings_goals
+            conn.execute("DELETE FROM savings_goals")
+            for r in data.get("savings_goals", []):
+                conn.execute(
+                    """INSERT INTO savings_goals
+                       (name, target_amount, current_amount, target_date,
+                        linked_account, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    [r["name"], r.get("target_amount", 0),
+                     r.get("current_amount", 0),
+                     r.get("target_date"), r.get("linked_account"),
+                     r.get("created_at", now), r.get("updated_at", now)],
+                )
+
             conn.close()
         except HTTPException:
             raise
@@ -3572,6 +3783,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "transactions_norm_restored": tx_count,
             "tags_restored": len(data.get("tags", [])),
             "transaction_tags_restored": len(data.get("transaction_tags", [])),
+            "savings_goals_restored": len(data.get("savings_goals", [])),
             "wizard_profiles_restored": profiles_restored,
         }
 

@@ -155,6 +155,47 @@
       </div>
     </div>
 
+    <!-- Savings Goals -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Savings Goals</span>
+        <button class="btn btn-secondary btn-sm" onclick="openSavingsForm()">+ New Goal</button>
+      </div>
+      <div id="dash-savings-list" style="display:flex; flex-direction:column; gap:10px; margin-top:4px;"></div>
+      <!-- Savings goal form (inline, hidden by default) -->
+      <div id="savings-form" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt,#f8f9fa); border-radius:8px;">
+        <input type="hidden" id="sf-id" value="" />
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Goal Name
+            <input type="text" id="sf-name" placeholder="e.g. Emergency Fund" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Target Amount ($)
+            <input type="number" id="sf-target" placeholder="10000" min="0" step="0.01" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Current Saved ($)
+            <input type="number" id="sf-current" placeholder="0" min="0" step="0.01" value="0" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Target Date (optional)
+            <input type="date" id="sf-date" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+          </label>
+          <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+            Linked Account (optional)
+            <input type="text" id="sf-account" placeholder="e.g. Savings Account" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+          </label>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-primary btn-sm" onclick="saveSavingsGoal()">Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="closeSavingsForm()">Cancel</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadSavingsSuggestion()" style="margin-left:auto; font-size:11px;">Suggest monthly amount</button>
+          <span id="sf-suggestion" style="font-size:12px; color:var(--text-muted);"></span>
+        </div>
+      </div>
+    </div>
+
     <!-- Recent transactions -->
     <div class="card">
       <div class="card-title">Recent Transactions</div>
