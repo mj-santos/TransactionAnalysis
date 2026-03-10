@@ -845,6 +845,7 @@ Single-row table seeded with `1` on first migration run.
 - `esc(str)` is used throughout `app.js` to HTML-encode user data before inserting into innerHTML.
 - **`INCOME_FILTER`** constant in `utils/query_helpers.py` defines the canonical income SQL condition: `amount > 0 AND statement_type = 'bank'`. All income queries must import and use this constant (or reference it in a comment when table aliases prevent direct use). CC positive amounts (payments, refunds) are never income. See BUG-6/7/8 history. A tripwire test (`test_income_filter_constant_unchanged`) guards against accidental changes.
 - **Collapsible card panels**: Cards on Merchants and Categories pages use `.card-header-toggle` + `.card-collapsible-body` pattern. `toggleCardCollapse()` toggles `.collapsed` class and persists state in localStorage (`collapse_<cardId>`). Badge counts (`.badge-count`) show item totals even when collapsed. `ensureCardExpanded(cardId)` auto-opens a panel before scrolling to its content (e.g., when opening a form). Suggestion lists use `.suggestions-scroll` (max-height 400px), rule tables use `.rules-table-scroll` (max-height 450px). Note: localStorage is used for collapse state (alongside dark mode, colorblind palette, and onboarding prefs). If a DB-backed settings store is added later, consider migrating these UI prefs for cross-device consistency.
+- **Docker BuildKit cache corruption**: If Docker build fails with `parent snapshot does not exist` or similar layer cache errors, run `docker builder prune --all --force` before investigating code. Cache corruption from failed builds is a known Docker BuildKit issue and is not always a code problem.
 
 ---
 
@@ -876,7 +877,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.17.2
+**Current Version:** v2.17.3
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -909,6 +910,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.17.0 | 2026-03-10 | Duplicate detection + Utilities tab + category picker fix; near-duplicate detection runs automatically after every import commit — flags transactions with same merchant, amount within 1%, date within 3 days; results stored in new `duplicate_candidates` table; non-blocking banner shown post-import linking to Duplicate Review; new Utilities tab with 5 collapsible sections: Category List (searchable taxonomy with counts), Merchant List (sortable with inline category edit), Rule Tester (full classification trace), Duplicate Review (side-by-side comparison with resolve actions), Data Health (5 quality metrics with navigation links); structured category picker replaces free-text input in Uncategorized Merchants with type-ahead dropdown from taxonomy + custom option; new `GET /duplicates`, `POST /duplicates/{id}/resolve`, `GET /utilities/categories`, `GET /utilities/merchants`, `POST /utilities/test-rule`, `GET /utilities/health` endpoints; backup/restore updated for `duplicate_candidates` table |
 | v2.17.1 | 2026-03-10 | Fixed restore connection conflict introduced by Sprint C; all Sprint C connection sites now use try/finally guard pattern; added restore lock (HTTP 409 when background jobs active); `_restore_in_progress` flag prevents concurrent restores; 3 new backup/restore tests |
 | v2.17.2 | 2026-03-10 | Fixed Utilities category list column name mismatch; `GET /utilities/categories` query used `normalized_category`/`parent_category` instead of correct `category`/`parent` from `category_rules` schema; audited merchants and health endpoints (no issues); added utility endpoint test |
+| v2.17.3 | 2026-03-10 | Fixed Docker build cache corruption after category list fix; verified clean build — no code changes needed; issue was Docker BuildKit layer cache corruption, not a dependency or packaging problem; added Docker cache troubleshooting note to architectural decisions |
 
 ### Version Increment Rules
 
