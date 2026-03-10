@@ -887,7 +887,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.20.0
+**Current Version:** v2.21.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -925,6 +925,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.18.1 | 2026-03-10 | Fixed dashboard error loading (undefined values for `category_parent`/`total_amount`/`prev_spend`/`pct_change`); fixed analytics reports empty after backup restore — restore now auto-regenerates reports; new `POST /reports/regenerate` endpoint |
 | v2.19.0 | 2026-03-10 | Year filter for transactions + cash flow — new `GET /transactions/years` endpoint; year dropdown on CC and Bank filter bars scopes Quick Date presets to selected year; cash flow period dropdown includes per-year options; clickable category drill-down app-wide — category rows in Cash Flow spending breakdown, Monthly Summary top categories, and Reports category tables now open drill-down modal with date-scoped transaction list; `openCategoryDrilldown()` accepts optional date range for flexible reuse |
 | v2.20.0 | 2026-03-10 | Rule search bars + category rule grouped condition builder + shared rule evaluation utility; inline search/filter on Merchant and Category rule tables (real-time, case-insensitive, match count, Escape to clear); category rule editor replaced with grouped condition builder (exact/contains/starts_with match types, AND/OR groups, NOT support); backward-compatible with legacy exact-match rules; `evaluate_rule_groups()` shared utility in `query_helpers.py` used by both merchant and category rule engines; new `conditions` column on `category_rules` table; 7 new unit tests for shared utility; 281 total tests |
+| v2.21.0 | 2026-03-10 | Suggested category edit + category rule test + retention features; editable category picker dropdown on Suggested Merchant Categories rows (searchable, pre-filled with suggestion, Accept/Accept All respects user changes); Test Conditions button on Category Rule Editor with inline test panel + new `POST /category-rules/test` endpoint (match result + live transaction count); Smart Unreviewed Nudge widget on Dashboard (shows when >5 unreviewed, progressive tone, dismiss options: tomorrow/next week/never via localStorage, estimated review time); Weekly Spending Recap banner on Mondays before 6pm (total spend, txn count, top category, See Details links to filtered transactions, dismissible per week); Budget Pace Indicator per budget row (projected end-of-month spend, color-coded green/yellow/red, only after day 5); new `GET /dashboard/weekly-recap` endpoint; 281 total tests |
 
 ### Version Increment Rules
 
@@ -1002,6 +1003,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `DELETE` | `/category-rules/{id}` | categories | Delete a category rule | 🟢 Called |
 | `GET` | `/category-rules/unmapped` | categories | List unmapped raw categories with counts | 🟡 Exists but unused by frontend |
 | `GET` | `/category-rules/suggestions` | categories | Suggest mappings using built-in taxonomy | 🟢 Called |
+| `POST` | `/category-rules/test` | categories | Test grouped conditions against sample text + count matching live transactions | 🟢 Called |
 | `POST` | `/category-rules/apply` | categories | Start category normalization background job | 🟢 Called |
 | `GET` | `/budgets` | budgets | List all budget goals | 🟢 Called |
 | `POST` | `/budgets` | budgets | Create or update a budget goal | 🟢 Called |
@@ -1010,6 +1012,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `POST` | `/budgets/rebalance/apply` | budgets | Apply user-selected budget adjustments | 🟢 Called |
 | `GET` | `/merchant-analytics` | merchant | Per-merchant spend, trends, frequency, acceleration flags | 🟢 Called |
 | `GET` | `/dashboard/summary` | dashboard | MTD spend, top categories, budgets vs actual, spending alerts, net worth summary, recent transactions | 🟢 Called |
+| `GET` | `/dashboard/weekly-recap` | dashboard | Weekly spending recap: total spend, txn count, top category for a given week | 🟢 Called |
 | `GET` | `/cashflow/summary` | cashflow | Income vs spending vs net, monthly breakdown, category breakdown, MoM delta | 🟢 Called |
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
 | `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) | 🟢 Called |

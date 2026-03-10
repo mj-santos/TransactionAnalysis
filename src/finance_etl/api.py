@@ -3127,6 +3127,41 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn.close()
         return {"status": "deleted"}
 
+    class CategoryRuleTestRequest(BaseModel):
+        groups: list = Field(..., description="Grouped conditions to test")
+        test_value: Optional[str] = Field(None, description="Text to test against")
+        normalized_category: Optional[str] = Field(None)
+        parent: Optional[str] = Field(None)
+
+    @app.post("/category-rules/test", tags=["categories"],
+              summary="Test category rule conditions against a sample and live transactions")
+    def test_category_rule(payload: CategoryRuleTestRequest):
+        """
+        Test grouped conditions against a user-provided text value and count
+        matching raw categories in transactions_norm.
+
+        Returns: {matches_input: bool|null, live_count: int}
+        """
+        from finance_etl.utils.query_helpers import evaluate_rule_groups
+        groups = payload.groups
+        test_value = payload.test_value
+        matches_input = None
+        if test_value and groups:
+            matches_input = evaluate_rule_groups(groups, test_value)
+        live_count = 0
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT DISTINCT category FROM transactions_norm WHERE category IS NOT NULL"
+            ).fetchall()
+            conn.close()
+            for (raw_cat,) in rows:
+                if evaluate_rule_groups(groups, raw_cat):
+                    live_count += 1
+        except Exception:
+            pass
+        return {"matches_input": matches_input, "live_count": live_count}
+
     @app.get("/category-rules/unmapped", tags=["categories"],
              summary="List raw categories not covered by any rule")
     def get_unmapped_categories():
@@ -4373,6 +4408,56 @@ No cloud services, no external dependencies — all data stays on your machine.
             "unreviewed_count": unreviewed_count,
             "savings_goals": savings_goals_summary,
             "net_worth": nw_summary,
+        }
+
+    # -----------------------------------------------------------------------
+    # Weekly Recap
+    # -----------------------------------------------------------------------
+
+    @app.get("/dashboard/weekly-recap", tags=["dashboard"],
+             summary="Weekly spending recap for the previous week")
+    def get_weekly_recap(
+        week_start: Optional[str] = Query(None, description="ISO date for Monday of the week (defaults to last Monday)"),
+    ):
+        """Return total spend, transaction count, and top category for a given week."""
+        import datetime as _dt
+        if week_start:
+            ws = _dt.date.fromisoformat(week_start)
+        else:
+            today = _dt.date.today()
+            ws = today - _dt.timedelta(days=today.weekday() + 7)  # Last Monday
+        we = ws + _dt.timedelta(days=6)  # Sunday
+        try:
+            conn = get_connection(db_path, read_only=True)
+            row = conn.execute(
+                f"""SELECT COALESCE(SUM(ABS(amount)),0), COUNT(*)
+                    FROM transactions_norm
+                    WHERE date >= ? AND date <= ?
+                      AND amount < 0
+                      AND COALESCE(is_split, FALSE) = FALSE""",
+                [ws.isoformat(), we.isoformat()],
+            ).fetchone()
+            total_spend = row[0]
+            txn_count = row[1]
+            top_row = conn.execute(
+                f"""SELECT COALESCE(category_parent, category, 'Other'), SUM(ABS(amount)) as s
+                    FROM transactions_norm
+                    WHERE date >= ? AND date <= ?
+                      AND amount < 0
+                      AND COALESCE(is_split, FALSE) = FALSE
+                    GROUP BY 1 ORDER BY s DESC LIMIT 1""",
+                [ws.isoformat(), we.isoformat()],
+            ).fetchone()
+            conn.close()
+        except Exception:
+            return {"total_spend": 0, "txn_count": 0, "top_category": None,
+                    "week_start": ws.isoformat(), "week_end": we.isoformat()}
+        return {
+            "total_spend": round(total_spend, 2),
+            "txn_count": txn_count,
+            "top_category": top_row[0] if top_row else None,
+            "week_start": ws.isoformat(),
+            "week_end": we.isoformat(),
         }
 
     # -----------------------------------------------------------------------

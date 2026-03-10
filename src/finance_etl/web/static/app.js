@@ -3648,21 +3648,28 @@ function _renderCategorySuggestions() {
     document.getElementById('cat-suggest-accept-all').style.display = 'none';
     return;
   }
+  // Ensure taxonomy is loaded for picker dropdowns
+  _ensureCategoryTaxonomy();
   listEl.innerHTML = visible.map(s => {
     const realIdx = _catSuggestions.indexOf(s);
     const confColor = s.confidence === 'high' ? '#16a34a' : '#d97706';
-    const jsonMerchant = JSON.stringify(s.merchant).replace(/"/g, '&quot;');
-    const jsonCat = JSON.stringify(s.suggested_category).replace(/"/g, '&quot;');
+    const pickerId = 'csug-pick-' + realIdx;
     return `
       <div style="display:flex; align-items:center; gap:10px; padding:7px 10px; background:var(--bg-alt,#f8faff); border-radius:6px; border:1px solid var(--border);">
         <span style="flex:1; font-size:13px;">${esc(s.merchant)}</span>
         <span style="color:var(--text-muted); font-size:12px;">→</span>
-        <span style="font-size:13px;">${esc(s.suggested_category)}</span>
+        ${_buildCategoryPickerHTML(pickerId)}
         <span style="font-size:11px; font-weight:600; color:${confColor}; background:${confColor}18; border-radius:4px; padding:2px 6px;">${s.confidence}</span>
         <button class="btn btn-primary btn-sm" onclick="acceptMerchantCatSuggestion(${realIdx})" title="Assign this category">✓</button>
         <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissMerchantCatSuggestion(${realIdx})" title="Dismiss">✗</button>
       </div>`;
   }).join('');
+  // Pre-fill each picker with the suggested category
+  for (const s of visible) {
+    const realIdx = _catSuggestions.indexOf(s);
+    const input = document.getElementById('csug-pick-' + realIdx);
+    if (input) input.value = s.suggested_category;
+  }
 }
 
 /** Accept a merchant→category suggestion. Operates on _catSuggestions data
@@ -3670,10 +3677,13 @@ function _renderCategorySuggestions() {
 async function acceptMerchantCatSuggestion(idx) {
   const s = _catSuggestions[idx];
   if (!s) return;
+  const input = document.getElementById('csug-pick-' + idx);
+  const category = input ? input.value.trim() : s.suggested_category;
+  if (!category) { toast('Select a category first.', 'error'); return; }
   try {
-    await api('POST', '/merchant-categories', { merchant: s.merchant, category: s.suggested_category });
+    await api('POST', '/merchant-categories', { merchant: s.merchant, category });
     s._dismissed = true;
-    toast(`"${s.merchant}" → ${s.suggested_category}`, 'success');
+    toast(`"${s.merchant}" → ${category}`, 'success');
     _renderCategorySuggestions();
     loadUncategorized();
   } catch (err) {
@@ -3692,8 +3702,12 @@ async function acceptAllCategorySuggestions() {
   if (!visible.length) return;
   let ok = 0, fail = 0;
   for (const s of visible) {
+    const realIdx = _catSuggestions.indexOf(s);
+    const input = document.getElementById('csug-pick-' + realIdx);
+    const category = input ? input.value.trim() : s.suggested_category;
+    if (!category) { fail++; continue; }
     try {
-      await api('POST', '/merchant-categories', { merchant: s.merchant, category: s.suggested_category });
+      await api('POST', '/merchant-categories', { merchant: s.merchant, category });
       s._dismissed = true;
       ok++;
     } catch (_) { fail++; }
@@ -3729,6 +3743,7 @@ async function loadDashboard() {
   try {
     const data = await api('GET', `/dashboard/summary?year=${_dashYear}&month=${_dashMonth}`);
     _renderDashboard(data);
+    _renderWeeklyRecap();
   } catch (err) {
     const el = document.getElementById('dash-mtd');
     if (el) el.textContent = 'Error loading';
@@ -3818,6 +3833,12 @@ function _renderDashboard(data) {
   // Net Worth widget
   _renderNetWorthWidget(data.net_worth || {});
 
+  // Unreviewed nudge
+  _renderUnreviewedNudge(data.unreviewed_count || 0);
+
+  // Budget pace indicators
+  _renderBudgetPace(data.budgets_vs_actual || []);
+
   // Recent transactions
   const tbody = document.getElementById('dash-recent-tbody');
   if (tbody) {
@@ -3843,6 +3864,159 @@ function _renderDashboard(data) {
       tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px;">No transactions found.</td></tr>';
     }
   }
+}
+
+// ── Unreviewed Nudge Widget ─────────────────────────────────────
+
+function _renderUnreviewedNudge(count) {
+  const el = document.getElementById('unreviewed-nudge');
+  if (!el) return;
+  if (count <= 5) { el.style.display = 'none'; return; }
+
+  // Check dismiss state from localStorage
+  const dismissed = localStorage.getItem('nudge_dismissed');
+  if (dismissed) {
+    const parsed = JSON.parse(dismissed);
+    if (parsed.type === 'never') { el.style.display = 'none'; return; }
+    if (parsed.type === 'tomorrow' || parsed.type === 'next_week') {
+      const until = new Date(parsed.until);
+      if (new Date() < until) { el.style.display = 'none'; return; }
+    }
+  }
+
+  // Progressive tone based on how long since last review
+  const lastReview = localStorage.getItem('nudge_last_review');
+  const daysSince = lastReview ? Math.floor((Date.now() - new Date(lastReview).getTime()) / 86400000) : 14;
+  let message, tone;
+  if (daysSince < 7) {
+    message = `You have <strong>${count}</strong> unreviewed transactions waiting.`;
+    tone = '';
+  } else if (daysSince <= 30) {
+    message = `There are <strong>${count}</strong> transactions that could use your attention.`;
+    tone = '';
+  } else {
+    message = `Whenever you have a moment, <strong>${count}</strong> transactions are ready for review.`;
+    tone = '';
+  }
+  const estTime = Math.ceil(count / 15);
+  const timeStr = estTime <= 3 ? `~${estTime} min` : 'a few minutes';
+
+  el.style.display = '';
+  el.innerHTML = `<div class="card" style="padding:14px 20px; border-left:4px solid var(--warning,#f59e0b); display:flex; align-items:center; gap:12px;">
+    <div style="flex:1; font-size:13px;">
+      ${message} <span style="color:var(--text-muted); font-size:12px;">(est. ${timeStr})</span>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="_goReviewFromNudge()">Review Now</button>
+    <div style="position:relative;">
+      <button class="btn btn-secondary btn-sm" onclick="_toggleNudgeDismissMenu()" style="font-size:11px;">Dismiss ▾</button>
+      <div id="nudge-dismiss-menu" style="display:none; position:absolute; right:0; top:100%; margin-top:4px; background:var(--card-bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.1); z-index:50; min-width:140px;">
+        <div style="padding:6px 12px; cursor:pointer; font-size:12px; white-space:nowrap;" onmouseenter="this.style.background='var(--bg-alt)'" onmouseleave="this.style.background=''" onclick="_dismissNudge('tomorrow')">Until tomorrow</div>
+        <div style="padding:6px 12px; cursor:pointer; font-size:12px; white-space:nowrap;" onmouseenter="this.style.background='var(--bg-alt)'" onmouseleave="this.style.background=''" onclick="_dismissNudge('next_week')">Until next week</div>
+        <div style="padding:6px 12px; cursor:pointer; font-size:12px; white-space:nowrap; border-top:1px solid var(--border);" onmouseenter="this.style.background='var(--bg-alt)'" onmouseleave="this.style.background=''" onclick="_dismissNudge('never')">Don't show again</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function _toggleNudgeDismissMenu() {
+  const menu = document.getElementById('nudge-dismiss-menu');
+  if (menu) menu.style.display = menu.style.display === 'none' ? '' : 'none';
+}
+
+function _dismissNudge(type) {
+  let until = null;
+  if (type === 'tomorrow') {
+    const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0);
+    until = d.toISOString();
+  } else if (type === 'next_week') {
+    const d = new Date(); d.setDate(d.getDate() + 7); d.setHours(0, 0, 0, 0);
+    until = d.toISOString();
+  }
+  localStorage.setItem('nudge_dismissed', JSON.stringify({ type, until }));
+  document.getElementById('unreviewed-nudge').style.display = 'none';
+}
+
+function _goReviewFromNudge() {
+  localStorage.setItem('nudge_last_review', new Date().toISOString());
+  showPage('transactions');
+  // Filter to unreviewed
+  const sel = document.getElementById('filter-reviewed');
+  if (sel) { sel.value = 'unreviewed'; loadTransactions(); }
+}
+
+// ── Weekly Spending Recap ───────────────────────────────────────
+
+async function _renderWeeklyRecap() {
+  const el = document.getElementById('weekly-recap-banner');
+  if (!el) return;
+  const now = new Date();
+  // Only show on Monday before 6pm
+  if (now.getDay() !== 1 || now.getHours() >= 18) { el.style.display = 'none'; return; }
+  // Check if dismissed for this week
+  const today = now.toISOString().slice(0, 10);
+  const lastMonday = new Date(now); lastMonday.setDate(now.getDate() - 7);
+  const weekKey = lastMonday.toISOString().slice(0, 10);
+  const dismissed = localStorage.getItem('recap_dismissed_week');
+  if (dismissed === weekKey) { el.style.display = 'none'; return; }
+  try {
+    const data = await api('GET', `/dashboard/weekly-recap?week_start=${weekKey}`);
+    if (!data.txn_count) { el.style.display = 'none'; return; }
+    el.style.display = '';
+    el.innerHTML = `<div class="card" style="padding:14px 20px; border-left:4px solid var(--primary,#3b82f6); display:flex; align-items:center; gap:12px;">
+      <div style="flex:1; font-size:13px;">
+        <strong>Last Week Recap</strong> (${esc(data.week_start)} – ${esc(data.week_end)}):
+        You spent <strong>${_fmt$(data.total_spend)}</strong> across <strong>${data.txn_count}</strong> transactions.
+        ${data.top_category ? `Top category: <strong>${esc(data.top_category)}</strong>.` : ''}
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="_recapSeeDetails('${esc(data.week_start)}','${esc(data.week_end)}')">See Details</button>
+      <button class="btn btn-secondary btn-sm" onclick="_dismissRecap('${esc(weekKey)}')" title="Dismiss" style="font-size:11px;">✕</button>
+    </div>`;
+  } catch {
+    el.style.display = 'none';
+  }
+}
+
+function _dismissRecap(weekKey) {
+  localStorage.setItem('recap_dismissed_week', weekKey);
+  document.getElementById('weekly-recap-banner').style.display = 'none';
+}
+
+function _recapSeeDetails(start, end) {
+  showPage('transactions');
+  const startInput = document.getElementById('filter-start');
+  const endInput = document.getElementById('filter-end');
+  if (startInput) startInput.value = start;
+  if (endInput) endInput.value = end;
+  loadTransactions();
+}
+
+// ── Budget Pace Indicator ──────────────────────────────────────
+
+function _renderBudgetPace(bva) {
+  const budgetList = document.getElementById('dash-budget-list');
+  if (!budgetList || !bva.length) return;
+  const now = new Date();
+  const dayOfMonth = now.getDate();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  if (dayOfMonth < 5) return; // Only show after day 5
+
+  // Append pace info to each budget row
+  bva.forEach((b, i) => {
+    const rows = budgetList.children;
+    if (i >= rows.length) return;
+    const actual = b.actual_amount || 0;
+    if (actual === 0) return; // No spending yet
+    const projected = (actual / dayOfMonth) * daysInMonth;
+    const paceRatio = projected / (b.monthly_amount || 1);
+    let paceColor, paceLabel;
+    if (paceRatio > 1.1) { paceColor = '#ef4444'; paceLabel = 'over budget'; }
+    else if (paceRatio >= 0.9) { paceColor = '#f59e0b'; paceLabel = 'near limit'; }
+    else { paceColor = '#22c55e'; paceLabel = 'on track'; }
+    const paceEl = document.createElement('div');
+    paceEl.style.cssText = 'font-size:11px; color:var(--text-muted); margin-top:2px;';
+    paceEl.innerHTML = `At this pace: <span style="color:${paceColor}; font-weight:600;">${_fmt$(projected)}</span> by month end <span style="font-size:10px; color:${paceColor};">(${paceLabel})</span>`;
+    rows[i].appendChild(paceEl);
+  });
 }
 
 // ── Year-in-Review Reports ──────────────────────────────────────
@@ -4741,6 +4915,47 @@ async function saveCatRule() {
     loadCategoryRules();
   } catch (err) {
     toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function testCatRule() {
+  const panel = document.getElementById('crf-test-panel');
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
+  if (panel.style.display !== 'none') document.getElementById('crf-test-input').focus();
+}
+
+async function runCatRuleTest() {
+  const testInput = document.getElementById('crf-test-input').value.trim();
+  const resultEl = document.getElementById('crf-test-result');
+  const grouped = _getCatRuleConditions();
+  grouped.groups = grouped.groups.map(g => ({
+    ...g, conditions: g.conditions.filter(c => c.pattern),
+  })).filter(g => g.conditions.length > 0);
+  if (!grouped.groups.length) {
+    resultEl.innerHTML = '<span style="color:var(--danger,#dc3545);">Add at least one condition pattern first.</span>';
+    return;
+  }
+  const category = document.getElementById('crf-category').value.trim();
+  const parent = document.getElementById('crf-parent').value;
+  resultEl.innerHTML = '<span style="color:var(--text-muted);">Testing…</span>';
+  try {
+    const data = await api('POST', '/category-rules/test', {
+      groups: grouped.groups,
+      normalized_category: category || null,
+      parent: parent || null,
+      test_value: testInput || null,
+    });
+    let html = '';
+    if (testInput) {
+      html += data.matches_input
+        ? `<span style="color:#16a34a;">✅ "${esc(testInput)}" matches these conditions</span>`
+        : `<span style="color:#dc3545;">❌ "${esc(testInput)}" does NOT match</span>`;
+      html += '<br/>';
+    }
+    html += `<span style="color:var(--text-muted);">Live transactions with matching raw category: <strong>${data.live_count}</strong></span>`;
+    resultEl.innerHTML = html;
+  } catch (err) {
+    resultEl.innerHTML = `<span style="color:var(--danger,#dc3545);">Error: ${esc(err.message)}</span>`;
   }
 }
 
