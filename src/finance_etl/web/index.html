@@ -73,6 +73,7 @@
       <span id="dash-month-label" style="font-weight:600; font-size:15px;"></span>
       <button class="btn btn-secondary btn-sm" onclick="dashboardNextMonth()">Next →</button>
       <button class="btn btn-secondary btn-sm" onclick="loadDashboard()" style="margin-left:8px;">↻ Refresh</button>
+      <button class="btn btn-primary btn-sm" onclick="openMonthlySummary()" style="margin-left:auto;">Monthly Summary</button>
     </div>
 
     <!-- KPI row -->
@@ -1302,6 +1303,46 @@
 
   </div><!-- .wizard-modal -->
 </div><!-- #wizard-overlay -->
+
+<!-- Monthly Summary Modal -->
+<div id="monthly-summary-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeMonthlySummary()">
+  <div class="modal-dialog" style="max-width:620px; max-height:90vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button class="btn btn-secondary btn-sm" onclick="summaryPrevMonth()" style="padding:2px 8px;">←</button>
+        <span id="ms-title" style="font-size:16px; font-weight:700;">Monthly Summary</span>
+        <button class="btn btn-secondary btn-sm" onclick="summaryNextMonth()" style="padding:2px 8px;">→</button>
+      </div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <span id="ms-stored-badge" style="font-size:11px; color:var(--text-muted);"></span>
+        <button class="btn btn-primary btn-sm" onclick="generateAndStoreSummary()" style="font-size:11px;">Save Summary</button>
+        <button class="wm-close" onclick="closeMonthlySummary()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); padding:2px 6px; border-radius:4px;">×</button>
+      </div>
+    </div>
+    <div id="ms-body" style="overflow-y:auto; flex:1; padding-right:4px;">
+      <div style="text-align:center; padding:40px; color:var(--text-muted);">Loading…</div>
+    </div>
+    <div style="margin-top:12px; border-top:1px solid var(--border); padding-top:10px; flex-shrink:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <button class="btn btn-secondary btn-sm" onclick="openSummaryHistory()" style="font-size:11px;">Browse History</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeMonthlySummary()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Monthly Summary History Modal -->
+<div id="summary-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSummaryHistory()">
+  <div class="modal-dialog" style="max-width:500px; max-height:80vh; display:flex; flex-direction:column;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
+      <span style="font-size:16px; font-weight:700;">Saved Summaries</span>
+      <button class="wm-close" onclick="closeSummaryHistory()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); padding:2px 6px; border-radius:4px;">×</button>
+    </div>
+    <div id="sh-body" style="overflow-y:auto; flex:1;">
+      <div style="text-align:center; padding:24px; color:var(--text-muted);">Loading…</div>
+    </div>
+  </div>
+</div>
 
 <!-- Delete Run confirmation modal -->
 <div id="delete-run-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideDeleteModal()">

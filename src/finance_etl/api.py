@@ -2952,6 +2952,310 @@ No cloud services, no external dependencies — all data stays on your machine.
         }
 
     # -----------------------------------------------------------------------
+    # Monthly Summaries
+    # -----------------------------------------------------------------------
+
+    def _generate_monthly_summary(conn, year: int, month: int) -> dict:
+        """Build a monthly summary dict with metrics and plain-language narrative."""
+        import datetime as _dt, json as _json, calendar as _cal
+
+        month_name = _cal.month_name[month]
+
+        # Total spending
+        spend_row = conn.execute(
+            """SELECT COALESCE(SUM(resolved_amount), 0), COUNT(*)
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?""",
+            [year, month],
+        ).fetchone()
+        total_spent = float(spend_row[0])
+        txn_count = int(spend_row[1])
+
+        # Total income
+        income_row = conn.execute(
+            """SELECT COALESCE(SUM(amount), 0)
+               FROM transactions_norm
+               WHERE amount > 0
+                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?""",
+            [year, month],
+        ).fetchone()
+        total_income = float(income_row[0])
+        net_savings = total_income - total_spent
+
+        # Prior month spending for delta
+        prev_month = month - 1 if month > 1 else 12
+        prev_year = year if month > 1 else year - 1
+        prev_row = conn.execute(
+            """SELECT COALESCE(SUM(resolved_amount), 0)
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?""",
+            [prev_year, prev_month],
+        ).fetchone()
+        prev_spent = float(prev_row[0])
+        spend_delta_pct = (
+            round((total_spent - prev_spent) / prev_spent * 100, 1)
+            if prev_spent > 0 else None
+        )
+
+        # Top 3 categories
+        top_cats = conn.execute(
+            """SELECT COALESCE(category_parent, category) AS grp,
+                      SUM(resolved_amount) AS amt
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?
+                 AND COALESCE(category_parent, category) IS NOT NULL
+               GROUP BY grp ORDER BY amt DESC LIMIT 3""",
+            [year, month],
+        ).fetchall()
+        top_categories = [{"name": r[0], "amount": float(r[1])} for r in top_cats]
+
+        # Per-category delta vs prior month
+        for cat in top_categories:
+            prev_cat = conn.execute(
+                """SELECT COALESCE(SUM(resolved_amount), 0)
+                   FROM transactions_norm
+                   WHERE transaction_subtype = 'spending'
+                     AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?
+                     AND COALESCE(category_parent, category) = ?""",
+                [prev_year, prev_month, cat["name"]],
+            ).fetchone()
+            prev_amt = float(prev_cat[0])
+            cat["delta_pct"] = (
+                round((cat["amount"] - prev_amt) / prev_amt * 100, 1)
+                if prev_amt > 0 else None
+            )
+
+        # Top 3 merchants
+        top_merchs = conn.execute(
+            """SELECT merchant, SUM(resolved_amount) AS amt
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?
+                 AND merchant IS NOT NULL
+               GROUP BY merchant ORDER BY amt DESC LIMIT 3""",
+            [year, month],
+        ).fetchall()
+        top_merchants = [{"name": r[0], "amount": float(r[1])} for r in top_merchs]
+
+        # Biggest single transaction
+        big_row = conn.execute(
+            """SELECT description, merchant, resolved_amount, transaction_date,
+                      COALESCE(category_parent, category_normalized) AS cat
+               FROM transactions_norm
+               WHERE transaction_subtype = 'spending'
+                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?
+               ORDER BY resolved_amount DESC LIMIT 1""",
+            [year, month],
+        ).fetchone()
+        biggest_txn = None
+        if big_row:
+            biggest_txn = {
+                "description": big_row[0],
+                "merchant": big_row[1],
+                "amount": float(big_row[2]),
+                "date": _isoformat(big_row[3]) if big_row[3] else None,
+                "category": big_row[4],
+            }
+
+        # Build narrative
+        def _fmt(v):
+            return f"${abs(v):,.2f}"
+
+        lines = [f"In {month_name} {year}, you spent {_fmt(total_spent)} across {txn_count} transactions."]
+
+        if spend_delta_pct is not None:
+            direction = "up" if spend_delta_pct > 0 else "down"
+            lines.append(
+                f"That's {direction} {abs(spend_delta_pct)}% compared to "
+                f"{_cal.month_name[prev_month]}."
+            )
+
+        if top_categories:
+            cat_parts = []
+            for c in top_categories:
+                part = f"{_fmt(c['amount'])} on {c['name']}"
+                if c.get("delta_pct") is not None:
+                    d = c["delta_pct"]
+                    part += f" ({'up' if d > 0 else 'down'} {abs(d)}%)"
+                cat_parts.append(part)
+            lines.append("Your top categories were: " + ", ".join(cat_parts) + ".")
+
+        if top_merchants:
+            merch_parts = [f"{m['name']} ({_fmt(m['amount'])})" for m in top_merchants]
+            lines.append("Top merchants: " + ", ".join(merch_parts) + ".")
+
+        if biggest_txn:
+            label = biggest_txn["merchant"] or biggest_txn["description"]
+            lines.append(
+                f"Your biggest single purchase was {_fmt(biggest_txn['amount'])} "
+                f"at {label}"
+                + (f" in {biggest_txn['category']}" if biggest_txn["category"] else "")
+                + "."
+            )
+
+        if total_income > 0:
+            lines.append(f"You earned {_fmt(total_income)} in income.")
+            if net_savings >= 0:
+                lines.append(f"Net savings for the month: {_fmt(net_savings)}.")
+            else:
+                lines.append(
+                    f"You spent {_fmt(abs(net_savings))} more than you earned."
+                )
+
+        narrative = " ".join(lines)
+
+        summary = {
+            "year": year,
+            "month": month,
+            "month_name": month_name,
+            "total_spent": total_spent,
+            "total_income": total_income,
+            "net_savings": net_savings,
+            "txn_count": txn_count,
+            "spend_delta_pct": spend_delta_pct,
+            "prev_month_spent": prev_spent,
+            "top_categories": top_categories,
+            "top_merchants": top_merchants,
+            "biggest_transaction": biggest_txn,
+        }
+        return {"summary": summary, "narrative": narrative}
+
+    @app.post("/monthly-summaries/generate", tags=["summaries"],
+              summary="Generate or regenerate a monthly summary")
+    def generate_monthly_summary(
+        year: int = Query(..., description="Year"),
+        month: int = Query(..., description="Month (1-12)"),
+    ):
+        """Generate a monthly summary and store it. Overwrites if exists."""
+        import json as _json
+        if month < 1 or month > 12:
+            raise HTTPException(status_code=400, detail="month must be 1-12")
+
+        now = __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).isoformat()
+        conn = get_connection(db_path)
+        try:
+            result = _generate_monthly_summary(conn, year, month)
+            summary_json = _json.dumps(result["summary"])
+            narrative = result["narrative"]
+
+            existing = conn.execute(
+                "SELECT id FROM monthly_summaries WHERE year=? AND month=?",
+                [year, month],
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE monthly_summaries SET summary_json=?, narrative=?, "
+                    "created_at=? WHERE id=?",
+                    [summary_json, narrative, now, existing[0]],
+                )
+                row_id = existing[0]
+            else:
+                conn.execute(
+                    "INSERT INTO monthly_summaries (year, month, summary_json, "
+                    "narrative, created_at) VALUES (?,?,?,?,?)",
+                    [year, month, summary_json, narrative, now],
+                )
+                row = conn.execute(
+                    "SELECT id FROM monthly_summaries WHERE year=? AND month=?",
+                    [year, month],
+                ).fetchone()
+                row_id = row[0] if row else None
+        finally:
+            conn.close()
+
+        return {
+            "id": row_id,
+            "year": year,
+            "month": month,
+            "summary": result["summary"],
+            "narrative": narrative,
+            "created_at": now,
+        }
+
+    @app.get("/monthly-summaries", tags=["summaries"],
+             summary="List all stored monthly summaries")
+    def list_monthly_summaries():
+        """Return all stored monthly summaries, newest first."""
+        import json as _json
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT id, year, month, summary_json, narrative, created_at "
+                "FROM monthly_summaries ORDER BY year DESC, month DESC"
+            ).fetchall()
+            conn.close()
+        except Exception:
+            return {"summaries": []}
+        result = []
+        for r in rows:
+            try:
+                summary = _json.loads(r[3])
+            except Exception:
+                summary = {}
+            result.append({
+                "id": r[0], "year": r[1], "month": r[2],
+                "summary": summary, "narrative": r[4], "created_at": r[5],
+            })
+        return {"summaries": result}
+
+    @app.get("/monthly-summaries/{year}/{month}", tags=["summaries"],
+             summary="Get a specific monthly summary")
+    def get_monthly_summary(year: int, month: int):
+        """Return a stored monthly summary, or generate on-the-fly if not found."""
+        import json as _json
+        conn = get_connection(db_path, read_only=True)
+        try:
+            row = conn.execute(
+                "SELECT id, summary_json, narrative, created_at "
+                "FROM monthly_summaries WHERE year=? AND month=?",
+                [year, month],
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row:
+            try:
+                summary = _json.loads(row[1])
+            except Exception:
+                summary = {}
+            return {
+                "id": row[0], "year": year, "month": month,
+                "summary": summary, "narrative": row[2],
+                "created_at": row[3], "stored": True,
+            }
+
+        # Not stored yet — generate on-the-fly without storing
+        conn = get_connection(db_path, read_only=True)
+        try:
+            result = _generate_monthly_summary(conn, year, month)
+        finally:
+            conn.close()
+        return {
+            "id": None, "year": year, "month": month,
+            "summary": result["summary"], "narrative": result["narrative"],
+            "created_at": None, "stored": False,
+        }
+
+    @app.delete("/monthly-summaries/{year}/{month}", tags=["summaries"],
+                summary="Delete a stored monthly summary")
+    def delete_monthly_summary(year: int, month: int):
+        """Delete a stored monthly summary."""
+        conn = get_connection(db_path)
+        try:
+            conn.execute(
+                "DELETE FROM monthly_summaries WHERE year=? AND month=?",
+                [year, month],
+            )
+        finally:
+            conn.close()
+        return {"status": "deleted"}
+
+    # -----------------------------------------------------------------------
     # Dashboard summary
     # -----------------------------------------------------------------------
 
@@ -3432,6 +3736,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         "tags",
         "transaction_tags",
         "savings_goals",
+        "monthly_summaries",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
@@ -3749,6 +4054,17 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("created_at", now), r.get("updated_at", now)],
                 )
 
+            # 13. monthly_summaries
+            conn.execute("DELETE FROM monthly_summaries")
+            for r in data.get("monthly_summaries", []):
+                conn.execute(
+                    """INSERT INTO monthly_summaries
+                       (year, month, summary_json, narrative, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    [r["year"], r["month"], r.get("summary_json", "{}"),
+                     r.get("narrative", ""), r.get("created_at", now)],
+                )
+
             conn.close()
         except HTTPException:
             raise
@@ -3784,6 +4100,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "tags_restored": len(data.get("tags", [])),
             "transaction_tags_restored": len(data.get("transaction_tags", [])),
             "savings_goals_restored": len(data.get("savings_goals", [])),
+            "monthly_summaries_restored": len(data.get("monthly_summaries", [])),
             "wizard_profiles_restored": profiles_restored,
         }
 

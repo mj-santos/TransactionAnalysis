@@ -287,11 +287,21 @@ CREATE TABLE IF NOT EXISTS savings_goals (
   updated_at      TEXT    NOT NULL
 )
 """,
+
+    # ── Monthly Summaries ─────────────────────────────────────────────────
+    "CREATE SEQUENCE IF NOT EXISTS seq_monthly_summaries_id",
+    """
+CREATE TABLE IF NOT EXISTS monthly_summaries (
+  id           BIGINT DEFAULT nextval('seq_monthly_summaries_id') PRIMARY KEY,
+  year         INTEGER NOT NULL,
+  month        INTEGER NOT NULL,
+  summary_json TEXT    NOT NULL,
+  narrative    TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  UNIQUE(year, month)
+)
+""",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Connection factory
 # ---------------------------------------------------------------------------
 
 def get_connection(db_path: str | Path, read_only: bool = False) -> duckdb.DuckDBPyConnection:

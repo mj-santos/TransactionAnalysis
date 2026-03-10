@@ -3769,6 +3769,158 @@ function _renderSavingsGoals(goals) {
   }).join('');
 }
 
+// ── Monthly Summary ───────────────────────────────────────────
+
+let _summaryYear = _dashYear;
+let _summaryMonth = _dashMonth;
+
+function openMonthlySummary() {
+  _summaryYear = _dashYear;
+  _summaryMonth = _dashMonth;
+  document.getElementById('monthly-summary-modal').classList.remove('hidden');
+  _loadMonthlySummary();
+}
+function closeMonthlySummary() {
+  document.getElementById('monthly-summary-modal').classList.add('hidden');
+}
+function summaryPrevMonth() {
+  _summaryMonth--;
+  if (_summaryMonth < 1) { _summaryMonth = 12; _summaryYear--; }
+  _loadMonthlySummary();
+}
+function summaryNextMonth() {
+  _summaryMonth++;
+  if (_summaryMonth > 12) { _summaryMonth = 1; _summaryYear++; }
+  _loadMonthlySummary();
+}
+
+async function _loadMonthlySummary() {
+  const title = document.getElementById('ms-title');
+  const body = document.getElementById('ms-body');
+  const badge = document.getElementById('ms-stored-badge');
+  if (title) title.textContent = `${_MONTH_NAMES[_summaryMonth - 1]} ${_summaryYear}`;
+  if (body) body.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);">Loading…</div>';
+  if (badge) badge.textContent = '';
+
+  try {
+    const data = await api('GET', `/monthly-summaries/${_summaryYear}/${_summaryMonth}`);
+    if (badge) badge.textContent = data.stored ? 'Saved' : 'Not saved';
+    _renderMonthlySummary(body, data);
+  } catch (err) {
+    if (body) body.innerHTML = `<div style="color:var(--danger); padding:20px;">Failed to load: ${esc(err.message)}</div>`;
+  }
+}
+
+function _renderMonthlySummary(el, data) {
+  if (!el) return;
+  const s = data.summary || {};
+  const narrative = data.narrative || '';
+
+  // Narrative paragraph
+  let html = `<div class="ms-narrative">${esc(narrative)}</div>`;
+
+  // KPI grid
+  html += `<div class="ms-kpi-grid">
+    <div class="ms-kpi"><div class="ms-kpi-label">Total Spent</div><div class="ms-kpi-value">${_fmt$(s.total_spent)}</div></div>
+    <div class="ms-kpi"><div class="ms-kpi-label">Total Income</div><div class="ms-kpi-value" style="color:#22c55e;">${_fmt$(s.total_income)}</div></div>
+    <div class="ms-kpi"><div class="ms-kpi-label">Net Savings</div><div class="ms-kpi-value" style="color:${(s.net_savings||0)>=0?'#22c55e':'#ef4444'};">${_fmt$(s.net_savings)}</div></div>
+    <div class="ms-kpi"><div class="ms-kpi-label">Transactions</div><div class="ms-kpi-value">${s.txn_count || 0}</div></div>
+  </div>`;
+
+  // vs Prior Month
+  if (s.spend_delta_pct != null) {
+    const arrow = s.spend_delta_pct >= 0 ? '▲' : '▼';
+    const color = s.spend_delta_pct >= 0 ? '#ef4444' : '#22c55e';
+    html += `<div style="font-size:13px; margin-bottom:12px;">vs. prior month: <span style="color:${color}; font-weight:600;">${arrow} ${Math.abs(s.spend_delta_pct)}%</span> (was ${_fmt$(s.prev_month_spent)})</div>`;
+  }
+
+  // Top categories
+  if (s.top_categories && s.top_categories.length) {
+    html += '<div style="font-size:13px; font-weight:600; margin-bottom:6px;">Top Categories</div>';
+    const maxAmt = Math.max(...s.top_categories.map(c => c.amount), 1);
+    html += s.top_categories.map(c => {
+      const pct = Math.round(c.amount / maxAmt * 100);
+      const delta = c.delta_pct != null
+        ? ` <span style="font-size:11px; color:${c.delta_pct >= 0 ? '#ef4444' : '#22c55e'};">${c.delta_pct >= 0 ? '▲' : '▼'}${Math.abs(c.delta_pct)}%</span>`
+        : '';
+      return `<div style="margin-bottom:6px;">
+        <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px;">
+          <span>${esc(c.name)}${delta}</span><span style="font-weight:600;">${_fmt$(c.amount)}</span>
+        </div>
+        <div style="background:var(--border); border-radius:4px; height:5px;">
+          <div style="background:var(--primary,#3b82f6); border-radius:4px; height:5px; width:${pct}%;"></div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Top merchants
+  if (s.top_merchants && s.top_merchants.length) {
+    html += '<div style="font-size:13px; font-weight:600; margin:10px 0 6px;">Top Merchants</div>';
+    html += '<div style="display:flex; flex-wrap:wrap; gap:6px;">';
+    html += s.top_merchants.map(m =>
+      `<span class="ms-merchant-chip">${esc(m.name)} · ${_fmt$(m.amount)}</span>`
+    ).join('');
+    html += '</div>';
+  }
+
+  // Biggest transaction
+  if (s.biggest_transaction) {
+    const b = s.biggest_transaction;
+    const label = b.merchant || b.description;
+    html += `<div style="margin-top:12px; padding:10px; background:var(--bg-alt,#f8f9fa); border-radius:8px; font-size:12px;">
+      <span style="font-weight:600;">Biggest Purchase:</span> ${_fmt$(b.amount)} at ${esc(label)}${b.category ? ' (' + esc(b.category) + ')' : ''}${b.date ? ' on ' + esc(b.date) : ''}
+    </div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+async function generateAndStoreSummary() {
+  try {
+    await api('POST', `/monthly-summaries/generate?year=${_summaryYear}&month=${_summaryMonth}`);
+    toast('Summary saved.', 'success');
+    _loadMonthlySummary();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+async function openSummaryHistory() {
+  const modal = document.getElementById('summary-history-modal');
+  const body = document.getElementById('sh-body');
+  modal.classList.remove('hidden');
+  body.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-muted);">Loading…</div>';
+
+  try {
+    const data = await api('GET', '/monthly-summaries');
+    if (!data.summaries || !data.summaries.length) {
+      body.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-muted);">No saved summaries yet. Use "Save Summary" to store one.</div>';
+      return;
+    }
+    body.innerHTML = data.summaries.map(s => {
+      const spent = s.summary?.total_spent;
+      const net = s.summary?.net_savings;
+      return `<div class="sh-item" onclick="closeSummaryHistory();_summaryYear=${s.year};_summaryMonth=${s.month};openMonthlySummary();" style="cursor:pointer;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-weight:600; font-size:13px;">${_MONTH_NAMES[s.month-1]} ${s.year}</span>
+          <div style="font-size:12px; text-align:right;">
+            <span>Spent: ${spent != null ? _fmt$(spent) : '—'}</span>
+            ${net != null ? `<span style="margin-left:8px; color:${net>=0?'#22c55e':'#ef4444'};">Net: ${_fmt$(net)}</span>` : ''}
+          </div>
+        </div>
+        <div style="font-size:11px; color:var(--text-muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(s.narrative || '').substring(0, 120)}…</div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    body.innerHTML = `<div style="color:var(--danger); padding:20px;">${esc(err.message)}</div>`;
+  }
+}
+
+function closeSummaryHistory() {
+  document.getElementById('summary-history-modal').classList.add('hidden');
+}
+
 // ── Cash Flow ──────────────────────────────────────────────────
 
 function onCfPeriodChange() {
