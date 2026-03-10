@@ -33,6 +33,8 @@ data/logs/
 data/reports/
 data/master/
 data/uploads/
+data/auto_backups/
+data/staged/
 
 # Wizard profiles are user data generated at runtime
 config/wizard_profiles/
