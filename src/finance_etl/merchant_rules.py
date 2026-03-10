@@ -44,19 +44,37 @@ class CompiledRule:
     priority: int
     _regex: re.Pattern | None = None
     # Compound condition support — when set, overrides single pattern/match_type
-    conditions: list[dict] | None = None   # [{pattern, match_type, negate}]
-    logic: str = "AND"                     # 'AND' | 'OR'
+    # Can be a flat list [{pattern, match_type, negate}] (legacy)
+    # or a grouped structure {"groups": [{group_logic, conditions: [...]}]}
+    conditions: list[dict] | dict | None = None
+    logic: str = "AND"                     # 'AND' | 'OR' (legacy flat mode)
     _condition_regexes: dict[int, re.Pattern | None] = field(default_factory=dict)
+    # Grouped condition support — parsed from conditions on init
+    _groups: list[dict] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if self.conditions:
-            for i, cond in enumerate(self.conditions):
-                if cond.get("match_type") == "regex":
-                    try:
-                        self._condition_regexes[i] = re.compile(cond["pattern"], re.IGNORECASE)
-                    except re.error as exc:
-                        log.warning("Invalid regex in merchant_rule id=%s condition %d: %s", self.id, i, exc)
-                        self._condition_regexes[i] = None
+        # Detect and normalize grouped vs flat conditions
+        if isinstance(self.conditions, dict) and "groups" in self.conditions:
+            # New grouped format
+            self._groups = self.conditions["groups"]
+        elif isinstance(self.conditions, list) and self.conditions:
+            # Legacy flat format — wrap in single group
+            self._groups = [{"group_logic": self.logic, "conditions": self.conditions}]
+        else:
+            self._groups = None
+
+        if self._groups:
+            # Compile regexes for all conditions across all groups
+            idx = 0
+            for group in self._groups:
+                for cond in group.get("conditions", []):
+                    if cond.get("match_type") == "regex":
+                        try:
+                            self._condition_regexes[idx] = re.compile(cond["pattern"], re.IGNORECASE)
+                        except re.error as exc:
+                            log.warning("Invalid regex in merchant_rule id=%s condition %d: %s", self.id, idx, exc)
+                            self._condition_regexes[idx] = None
+                    idx += 1
         elif self.match_type == "regex":
             try:
                 self._regex = re.compile(self.pattern, re.IGNORECASE)
@@ -74,17 +92,31 @@ class CompiledRule:
             return bool(compiled and compiled.search(text))
         return False
 
+    def _eval_condition(self, cond: dict, idx: int, text: str) -> bool:
+        """Evaluate a single condition with negate support."""
+        result = self._match_single(
+            cond["pattern"], cond.get("match_type", "contains"),
+            self._condition_regexes.get(idx), text
+        )
+        return (not result) if cond.get("negate") else result
+
     def matches(self, text: str) -> bool:
-        if self.conditions:
-            results = [
-                (not self._match_single(c["pattern"], c.get("match_type", "contains"),
-                                        self._condition_regexes.get(i), text))
-                if c.get("negate")
-                else self._match_single(c["pattern"], c.get("match_type", "contains"),
-                                        self._condition_regexes.get(i), text)
-                for i, c in enumerate(self.conditions)
-            ]
-            return all(results) if self.logic == "AND" else any(results)
+        if self._groups:
+            # Evaluate each group, then AND all group results together
+            idx = 0
+            for group in self._groups:
+                group_logic = group.get("group_logic", "AND")
+                conditions = group.get("conditions", [])
+                group_results = []
+                for cond in conditions:
+                    group_results.append(self._eval_condition(cond, idx, text))
+                    idx += 1
+                if not group_results:
+                    continue
+                group_pass = all(group_results) if group_logic == "AND" else any(group_results)
+                if not group_pass:
+                    return False  # Inter-group AND: any group failing means no match
+            return True
         return self._match_single(self.pattern, self.match_type, self._regex, text)
 
 
