@@ -987,6 +987,11 @@ No cloud services, no external dependencies — all data stays on your machine.
         conn = get_connection(db_path)
         try:
             if not keep_transactions:
+                # Primary path: delete by run_id (works even after stage rows purged)
+                conn.execute(
+                    "DELETE FROM transactions_norm WHERE run_id = ?", [run_id]
+                )
+                # Fallback: also delete by file_hash from stage (covers rows with NULL run_id)
                 file_hashes = [
                     r[0] for r in conn.execute(
                         "SELECT DISTINCT file_hash FROM transactions_stage WHERE run_id = ?",
@@ -2809,13 +2814,13 @@ No cloud services, no external dependencies — all data stays on your machine.
                 conn.execute(
                     """INSERT INTO runs (run_id, started_at, finished_at, status,
                        statement_type, run_label, files_count, rows_in, rows_staged,
-                       rows_normalized, rows_loaded, errors_count, notes)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       rows_normalized, rows_loaded, errors_count, notes, imported_file)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [r.get("run_id"), r.get("started_at"), r.get("finished_at"),
                      r.get("status"), r.get("statement_type"), r.get("run_label"),
                      r.get("files_count"), r.get("rows_in"), r.get("rows_staged"),
                      r.get("rows_normalized"), r.get("rows_loaded"),
-                     r.get("errors_count"), r.get("notes")],
+                     r.get("errors_count"), r.get("notes"), r.get("imported_file")],
                 )
 
             # 2. merchant_rules — includes conditions/logic for compound rules
