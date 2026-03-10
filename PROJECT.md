@@ -768,6 +768,9 @@ Single-row table seeded with `1` on first migration run.
 **BUG (FIXED): Restore connection conflict after Sprint C (DuckDB single-writer violation)**
 - All 9 Sprint C functions (`_detect_duplicates`, `_create_export_payload`, `resolve_duplicate`, `list_duplicates`, `utilities_categories`, `utilities_merchants`, `utilities_test_rule` ×2, `utilities_health`) now use `conn = None; try: ... finally: conn.close()` pattern. Restore endpoint (`POST /backup/restore`) also wrapped with try/finally. Added restore lock: returns HTTP 409 if background jobs are active or another restore is in progress (`_restore_in_progress` flag). Fixed in v2.17.1.
 
+**BUG (FIXED): Utilities category list column name mismatch**
+- `GET /utilities/categories` queried `category_rules` using `normalized_category` and `parent_category` — columns that don't exist. The actual schema uses `category` and `parent`. Utilities endpoints were written against incorrect assumed column names rather than the actual `category_rules` table schema. Fixed in v2.17.2.
+
 ### Hardcoded Values & Workarounds
 
 - **Parent group list** is hardcoded in `index.html` (the `<select id="crf-parent">`) with exactly 12 options. These match `BUILT_IN_CATEGORY_MAP`'s parent groups exactly but are not dynamically derived — adding a new taxonomy parent requires editing both `category_rules.py` and `index.html`.
@@ -873,7 +876,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.17.1
+**Current Version:** v2.17.2
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -905,6 +908,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.16.0 | 2026-03-10 | Transaction Notes + Split Transactions; per-transaction `notes` TEXT field with inline popup editor (pencil icon, auto-save on Enter); new `PATCH /transactions/{fingerprint}` endpoint for notes updates; split transactions: `POST /transactions/{fingerprint}/split` divides one transaction into N sub-rows with category/amount/description; amounts validated to sum to parent; parent marked `is_split=TRUE` and excluded from all totals/queries via `_build_txn_where`; `DELETE /transactions/{fingerprint}/split` unsplits (removes children, restores parent); split children show "split" badge on description; split modal UI with dynamic row editor and remaining-amount tracker; new columns: `notes`, `is_split`, `split_parent_fingerprint` on `transactions_norm`; backup/restore updated for all 3 new columns |
 | v2.17.0 | 2026-03-10 | Duplicate detection + Utilities tab + category picker fix; near-duplicate detection runs automatically after every import commit — flags transactions with same merchant, amount within 1%, date within 3 days; results stored in new `duplicate_candidates` table; non-blocking banner shown post-import linking to Duplicate Review; new Utilities tab with 5 collapsible sections: Category List (searchable taxonomy with counts), Merchant List (sortable with inline category edit), Rule Tester (full classification trace), Duplicate Review (side-by-side comparison with resolve actions), Data Health (5 quality metrics with navigation links); structured category picker replaces free-text input in Uncategorized Merchants with type-ahead dropdown from taxonomy + custom option; new `GET /duplicates`, `POST /duplicates/{id}/resolve`, `GET /utilities/categories`, `GET /utilities/merchants`, `POST /utilities/test-rule`, `GET /utilities/health` endpoints; backup/restore updated for `duplicate_candidates` table |
 | v2.17.1 | 2026-03-10 | Fixed restore connection conflict introduced by Sprint C; all Sprint C connection sites now use try/finally guard pattern; added restore lock (HTTP 409 when background jobs active); `_restore_in_progress` flag prevents concurrent restores; 3 new backup/restore tests |
+| v2.17.2 | 2026-03-10 | Fixed Utilities category list column name mismatch; `GET /utilities/categories` query used `normalized_category`/`parent_category` instead of correct `category`/`parent` from `category_rules` schema; audited merchants and health endpoints (no issues); added utility endpoint test |
 
 ### Version Increment Rules
 
