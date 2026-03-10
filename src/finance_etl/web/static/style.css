@@ -817,6 +817,88 @@ tr.unreviewed-row {
   box-shadow: 0 8px 24px rgba(0,0,0,.2);
 }
 
+/* ── Merchant Intelligence ─────────────────────────────────── */
+.mi-kpi {
+  text-align: center;
+  padding: 8px;
+  background: var(--bg-alt, #f8f9fa);
+  border-radius: 8px;
+}
+.mi-kpi-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-muted);
+}
+.mi-kpi-value {
+  font-size: 20px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+.mi-row {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: background .12s;
+}
+.mi-row:hover {
+  background: var(--bg-alt, #f8f9fa);
+}
+.mi-merchant-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.mi-accel-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--danger, #ef4444);
+  border-radius: 10px;
+}
+.mi-trend {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mi-amount {
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 80px;
+  text-align: right;
+}
+.mi-bar-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 3px;
+  margin: 4px 0;
+}
+.mi-bar-fill {
+  height: 100%;
+  background: var(--primary, #3b82f6);
+  border-radius: 3px;
+  transition: width .3s ease;
+}
+.mi-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.mi-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 24px;
+}
+.mi-spark-bar {
+  width: 6px;
+  background: var(--primary, #3b82f6);
+  border-radius: 2px;
+  opacity: 0.7;
+}
+
 /* ── Monthly Summary Modal ─────────────────────────────────── */
 .modal-dialog {
   background: var(--card-bg);

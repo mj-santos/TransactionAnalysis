@@ -2184,6 +2184,168 @@ No cloud services, no external dependencies — all data stays on your machine.
         return dict(zip(cols, row))
 
     # -----------------------------------------------------------------------
+    # Merchant Intelligence
+    # -----------------------------------------------------------------------
+
+    @app.get("/merchant-analytics", tags=["merchant"],
+             summary="Merchant intelligence: per-merchant spend, trends, frequency")
+    def get_merchant_analytics(
+        sort_by: str = Query(
+            "total_spend",
+            description="Sort by: total_spend, frequency, recent, trend",
+        ),
+        search: Optional[str] = Query(None, description="Filter merchants by name (case-insensitive)"),
+        limit: int = Query(100, description="Max results"),
+    ):
+        """
+        Return per-merchant analytics: total spend, monthly average, frequency,
+        last transaction, 3-month trend, and acceleration flag.
+        """
+        import datetime as _dt
+
+        today = _dt.date.today()
+        # Last 3 full calendar months for trend calculation
+        m3_end = today.replace(day=1) - _dt.timedelta(days=1)  # last day of prior month
+        m3_start = (m3_end.replace(day=1) - _dt.timedelta(days=60)).replace(day=1)  # ~3 months back
+
+        search_clause = ""
+        params: list = []
+        if search:
+            search_clause = " AND LOWER(merchant) LIKE ?"
+            params.append(f"%{search.lower()}%")
+
+        conn = get_connection(db_path, read_only=True)
+        try:
+            # All-time per-merchant stats
+            alltime_rows = conn.execute(
+                f"""SELECT merchant,
+                       SUM(resolved_amount) AS total_spend,
+                       COUNT(*) AS txn_count,
+                       MAX(transaction_date) AS last_date,
+                       MIN(transaction_date) AS first_date
+                    FROM transactions_norm
+                    WHERE transaction_subtype = 'spending'
+                      AND merchant IS NOT NULL
+                      {search_clause}
+                    GROUP BY merchant""",
+                params,
+            ).fetchall()
+
+            # Monthly totals for the last 3 months (for trend)
+            trend_rows = conn.execute(
+                f"""SELECT merchant,
+                       YEAR(transaction_date) AS y,
+                       MONTH(transaction_date) AS m,
+                       SUM(resolved_amount) AS spend
+                    FROM transactions_norm
+                    WHERE transaction_subtype = 'spending'
+                      AND merchant IS NOT NULL
+                      AND transaction_date >= ?
+                      {search_clause}
+                    GROUP BY merchant, y, m
+                    ORDER BY merchant, y, m""",
+                [m3_start.isoformat()] + params,
+            ).fetchall()
+
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Merchant analytics failed: {exc}"
+            ) from exc
+
+        # Build trend map: merchant -> list of (year, month, spend)
+        trend_map: dict[str, list] = {}
+        for r in trend_rows:
+            trend_map.setdefault(r[0], []).append({
+                "year": int(r[1]), "month": int(r[2]), "spend": float(r[3])
+            })
+
+        merchants = []
+        for r in alltime_rows:
+            merchant_name = r[0]
+            total_spend = float(r[1])
+            txn_count = int(r[2])
+            last_date = _isoformat(r[3]) if r[3] else None
+            first_date = _isoformat(r[4]) if r[4] else None
+
+            # Monthly average: total / months active
+            if first_date and last_date:
+                fd = _dt.date.fromisoformat(first_date[:10])
+                ld = _dt.date.fromisoformat(last_date[:10])
+                months_active = max(
+                    (ld.year - fd.year) * 12 + (ld.month - fd.month) + 1, 1
+                )
+            else:
+                months_active = 1
+            monthly_avg = round(total_spend / months_active, 2)
+
+            # Trend analysis: compare most recent month to the one before
+            monthly_data = trend_map.get(merchant_name, [])
+            trend = "flat"
+            trend_pct = 0.0
+            accelerating = False
+
+            if len(monthly_data) >= 2:
+                latest = monthly_data[-1]["spend"]
+                prior = monthly_data[-2]["spend"]
+                if prior > 0:
+                    trend_pct = round((latest - prior) / prior * 100, 1)
+                    if trend_pct > 5:
+                        trend = "increasing"
+                    elif trend_pct < -5:
+                        trend = "decreasing"
+                    if trend_pct > 20:
+                        accelerating = True
+
+                # Check for sustained acceleration (3 months)
+                if len(monthly_data) >= 3:
+                    m1, m2, m3 = (
+                        monthly_data[-3]["spend"],
+                        monthly_data[-2]["spend"],
+                        monthly_data[-1]["spend"],
+                    )
+                    if m1 > 0 and m2 > 0:
+                        d1 = (m2 - m1) / m1 * 100
+                        d2 = (m3 - m2) / m2 * 100
+                        if d1 > 20 and d2 > 20:
+                            accelerating = True
+
+            merchants.append({
+                "merchant": merchant_name,
+                "total_spend": total_spend,
+                "txn_count": txn_count,
+                "monthly_avg": monthly_avg,
+                "months_active": months_active,
+                "first_date": first_date,
+                "last_date": last_date,
+                "trend": trend,
+                "trend_pct": trend_pct,
+                "accelerating": accelerating,
+                "monthly_data": monthly_data,
+            })
+
+        # Sort
+        sort_keys = {
+            "total_spend": lambda m: -m["total_spend"],
+            "frequency": lambda m: -m["txn_count"],
+            "recent": lambda m: m["last_date"] or "",
+            "trend": lambda m: -abs(m["trend_pct"]),
+        }
+        key_fn = sort_keys.get(sort_by, sort_keys["total_spend"])
+        merchants.sort(key=key_fn, reverse=(sort_by == "recent"))
+        merchants = merchants[:limit]
+
+        # Summary stats
+        total_merchants = len(alltime_rows)
+        accelerating_count = sum(1 for m in merchants if m["accelerating"])
+
+        return {
+            "merchants": merchants,
+            "total_merchants": total_merchants,
+            "accelerating_count": accelerating_count,
+        }
+
+    # -----------------------------------------------------------------------
     # Category rules CRUD
     # -----------------------------------------------------------------------
 

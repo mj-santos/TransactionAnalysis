@@ -851,6 +851,36 @@
   <!-- ─── MERCHANT RULES PAGE ─── -->
   <section id="page-merchant-rules" class="page">
 
+    <!-- ── Merchant Intelligence ───────────────────────────────── -->
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Merchant Intelligence</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="text" id="mi-search" placeholder="Search merchants…"
+            style="width:180px; padding:5px 10px; border-radius:6px; border:1px solid var(--border); font-size:12px;"
+            oninput="_debouncedMerchantSearch()" />
+          <select id="mi-sort" style="padding:5px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;"
+            onchange="loadMerchantAnalytics()">
+            <option value="total_spend">Sort: Total Spend</option>
+            <option value="frequency">Sort: Frequency</option>
+            <option value="recent">Sort: Recent Activity</option>
+            <option value="trend">Sort: Trend</option>
+          </select>
+          <button class="btn btn-secondary btn-sm" onclick="loadMerchantAnalytics()">↻</button>
+        </div>
+      </div>
+      <!-- Summary KPIs -->
+      <div id="mi-kpis" style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:14px;">
+        <div class="mi-kpi"><div class="mi-kpi-label">Merchants</div><div id="mi-total" class="mi-kpi-value">—</div></div>
+        <div class="mi-kpi"><div class="mi-kpi-label">Accelerating Spend</div><div id="mi-accel" class="mi-kpi-value" style="color:var(--danger);">—</div></div>
+        <div class="mi-kpi"><div class="mi-kpi-label">Shown</div><div id="mi-shown" class="mi-kpi-value">—</div></div>
+      </div>
+      <!-- Merchant list -->
+      <div id="mi-list" style="display:flex; flex-direction:column; gap:6px; max-height:480px; overflow-y:auto;">
+        <span style="color:var(--text-muted); font-size:13px;">Click "↻" or navigate here to load.</span>
+      </div>
+    </div>
+
     <!-- ── Recommended Rules ─────────────────────────────────── -->
     <div class="card" style="margin-bottom:24px;">
       <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">

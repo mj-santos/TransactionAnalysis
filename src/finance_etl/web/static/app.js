@@ -60,7 +60,7 @@ function navigate(page) {
   if (page === 'settings')           loadSettings();
   if (page === 'credit-cards')       loadTxnTab('credit_card');
   if (page === 'bank-transactions')  loadTxnTab('bank');
-  if (page === 'merchant-rules')     { loadMerchantRules(); loadUncategorized(); _clearSuggestions(); }
+  if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); loadUncategorized(); _clearSuggestions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
 }
@@ -2407,6 +2407,80 @@ async function refreshUnreviewedBadge() {
 // _renderTxnTfoot has been extracted to table_controls.js as renderTxnTotals().
 // See table_controls.js for the implementation with proper labeled column cells.
 
+
+// ── Merchant Intelligence ─────────────────────────────────────
+
+let _miSearchTimer = null;
+function _debouncedMerchantSearch() {
+  clearTimeout(_miSearchTimer);
+  _miSearchTimer = setTimeout(loadMerchantAnalytics, 300);
+}
+
+async function loadMerchantAnalytics() {
+  const listEl = document.getElementById('mi-list');
+  const sortBy = document.getElementById('mi-sort')?.value || 'total_spend';
+  const search = document.getElementById('mi-search')?.value?.trim() || '';
+  if (!listEl) return;
+  listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Loading…</span>';
+
+  let url = `/merchant-analytics?sort_by=${sortBy}&limit=100`;
+  if (search) url += `&search=${encodeURIComponent(search)}`;
+
+  try {
+    const data = await api('GET', url);
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('mi-total', String(data.total_merchants));
+    set('mi-accel', String(data.accelerating_count));
+    set('mi-shown', String(data.merchants.length));
+
+    if (!data.merchants.length) {
+      listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No merchants found.</span>';
+      return;
+    }
+    const maxSpend = Math.max(...data.merchants.map(m => m.total_spend), 1);
+    listEl.innerHTML = data.merchants.map(m => {
+      const barPct = Math.round(m.total_spend / maxSpend * 100);
+      const trendArrow = m.trend === 'increasing' ? '▲' : m.trend === 'decreasing' ? '▼' : '→';
+      const trendColor = m.trend === 'increasing' ? '#ef4444' : m.trend === 'decreasing' ? '#22c55e' : 'var(--text-muted)';
+      const accelBadge = m.accelerating
+        ? '<span class="mi-accel-badge">Accelerating</span>' : '';
+      const lastDate = m.last_date ? m.last_date.substring(0, 10) : '—';
+
+      // Mini sparkline from monthly_data (up to 3 bars)
+      let sparkline = '';
+      if (m.monthly_data && m.monthly_data.length > 0) {
+        const maxM = Math.max(...m.monthly_data.map(d => d.spend), 1);
+        sparkline = '<div class="mi-spark">' + m.monthly_data.map(d => {
+          const h = Math.max(Math.round(d.spend / maxM * 24), 2);
+          return `<div class="mi-spark-bar" style="height:${h}px;" title="${_MONTH_NAMES[d.month-1]}: ${_fmt$(d.spend)}"></div>`;
+        }).join('') + '</div>';
+      }
+
+      return `<div class="mi-row">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="mi-merchant-name">${esc(m.merchant)}</span>
+            ${accelBadge}
+          </div>
+          <div style="display:flex; align-items:center; gap:12px;">
+            ${sparkline}
+            <span class="mi-trend" style="color:${trendColor};" title="MoM trend: ${m.trend_pct}%">${trendArrow} ${Math.abs(m.trend_pct)}%</span>
+            <span class="mi-amount">${_fmt$(m.total_spend)}</span>
+          </div>
+        </div>
+        <div class="mi-bar-track"><div class="mi-bar-fill" style="width:${barPct}%;"></div></div>
+        <div class="mi-meta">
+          <span>${m.txn_count} txns</span>
+          <span>Avg ${_fmt$(m.monthly_avg)}/mo</span>
+          <span>${m.months_active} mo active</span>
+          <span>Last: ${lastDate}</span>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    listEl.innerHTML = `<span style="color:var(--danger);font-size:13px;">Error: ${esc(err.message)}</span>`;
+  }
+}
 
 // ── Merchant Rules page ───────────────────────────────────────
 
