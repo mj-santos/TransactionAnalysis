@@ -159,6 +159,33 @@ def test_merchant_search_returns_frequency_ordered_results(tmp_path: Path):
 # Test 5: merchant search is case-insensitive
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Test: no changes() function in codebase
+# ---------------------------------------------------------------------------
+
+def test_no_changes_function_in_codebase():
+    """Verify that the SQLite-only changes() function is not used anywhere in src/."""
+    import os
+    src_dir = Path(__file__).parent.parent / "src"
+    for root, dirs, files in os.walk(src_dir):
+        for fname in files:
+            if not fname.endswith(".py"):
+                continue
+            filepath = Path(root) / fname
+            content = filepath.read_text()
+            # Allow comments mentioning changes() but not actual SQL usage
+            for i, line in enumerate(content.splitlines(), 1):
+                if "SELECT changes()" in line:
+                    pytest.fail(
+                        f"Found 'SELECT changes()' in {filepath}:{i} — "
+                        "DuckDB does not support this SQLite function"
+                    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5: merchant search is case-insensitive
+# ---------------------------------------------------------------------------
+
 def test_merchant_search_case_insensitive(tmp_path: Path):
     client, db_path = _make_client(tmp_path)
     _seed_transactions(db_path, [

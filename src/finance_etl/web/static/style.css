@@ -1535,6 +1535,53 @@ tr.bulk-selected > td:first-child {
   .rules-table-scroll { max-height: 300px; }
 }
 
+/* ── Category Override Badge ────────────────────────────────── */
+.override-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  background: var(--staged);
+  color: #fff;
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+/* ── Fix-for-all Prompt ─────────────────────────────────────── */
+.fix-for-all-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-alt, #f8f9fa);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin: 4px 0;
+  animation: fadeIn .15s ease;
+}
+
+/* ── Inline Category Picker (shared) ───────────────────────── */
+.cat-picker-inline .cat-picker-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1050;
+  min-width: 220px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+}
+[data-theme="dark"] .override-badge { background: #7c3aed; }
+[data-theme="dark"] .fix-for-all-prompt { background: var(--bg-alt); }
+
 /* ── Global Search Panel ────────────────────────────────────── */
 .global-search-panel {
   position: absolute;

@@ -1813,8 +1813,12 @@ No cloud services, no external dependencies — all data stays on your machine.
                 f"WHERE transaction_fingerprint IN ({placeholders})",
                 fingerprints,
             )
-            row = conn.execute("SELECT changes()").fetchone()
-            updated = int(row[0]) if row else 0
+            count_row = conn.execute(
+                f"SELECT COUNT(*) FROM transactions_norm "
+                f"WHERE transaction_fingerprint IN ({placeholders})",
+                fingerprints,
+            ).fetchone()
+            updated = int(count_row[0]) if count_row else 0
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
@@ -1904,9 +1908,10 @@ No cloud services, no external dependencies — all data stays on your machine.
         """
         Update mutable fields on one transaction identified by its fingerprint.
 
-        Supported fields: notes (TEXT | null), category_normalized (TEXT), excluded (BOOL)
+        Supported fields: notes (TEXT | null), category_normalized (TEXT),
+        category_parent (TEXT), category_override (BOOL), excluded (BOOL)
         """
-        allowed = {"notes", "category_normalized", "excluded"}
+        allowed = {"notes", "category_normalized", "category_parent", "category_override", "excluded"}
         updates = {k: v for k, v in body.items() if k in allowed}
         if not updates:
             raise HTTPException(status_code=400, detail=f"No valid fields. Allowed: {sorted(allowed)}")
@@ -1919,8 +1924,11 @@ No cloud services, no external dependencies — all data stays on your machine.
                 f"WHERE transaction_fingerprint = ?",
                 vals,
             )
-            row = conn.execute("SELECT changes()").fetchone()
-            updated = int(row[0]) if row else 0
+            exists = conn.execute(
+                "SELECT 1 FROM transactions_norm WHERE transaction_fingerprint = ?",
+                [fingerprint],
+            ).fetchone()
+            updated = 1 if exists else 0
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
@@ -2042,12 +2050,16 @@ No cloud services, no external dependencies — all data stays on your machine.
             if not parent[0]:
                 conn.close()
                 raise HTTPException(status_code=400, detail="Transaction is not split.")
-            # Delete children
+            # Count children before deleting
+            child_count = conn.execute(
+                "SELECT COUNT(*) FROM transactions_norm WHERE split_parent_fingerprint = ?",
+                [fingerprint],
+            ).fetchone()
+            deleted = int(child_count[0]) if child_count else 0
             conn.execute(
                 "DELETE FROM transactions_norm WHERE split_parent_fingerprint = ?",
                 [fingerprint],
             )
-            deleted = int(conn.execute("SELECT changes()").fetchone()[0])
             # Restore parent
             conn.execute(
                 "UPDATE transactions_norm SET is_split = FALSE WHERE transaction_fingerprint = ?",
@@ -2079,12 +2091,16 @@ No cloud services, no external dependencies — all data stays on your machine.
         where_sql = " WHERE " + " AND ".join(where) if where else ""
         try:
             conn = get_connection(db_path)
+            # Count matching rows before update
+            count_sql = f"SELECT COUNT(*) FROM transactions_norm WHERE COALESCE(unreviewed, TRUE) = TRUE"
+            if where:
+                count_sql = f"SELECT COUNT(*) FROM transactions_norm WHERE " + " AND ".join(where) + " AND COALESCE(unreviewed, TRUE) = TRUE"
+            count_row = conn.execute(count_sql, params).fetchone()
+            updated = int(count_row[0]) if count_row else 0
             conn.execute(
                 f"UPDATE transactions_norm SET unreviewed = FALSE{where_sql}",
                 params,
             )
-            row = conn.execute("SELECT changes()").fetchone()
-            updated = int(row[0]) if row else 0
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Bulk update failed: {exc}") from exc
@@ -5357,11 +5373,24 @@ No cloud services, no external dependencies — all data stays on your machine.
         from finance_etl.backup_migrations import CURRENT_BACKUP_VERSION
         from finance_etl.db import get_connection as _gc
 
+        # Explicit column lists for each table to ensure all columns round-trip
+        _TABLE_COLUMNS = {
+            "transactions_norm": (
+                "transaction_date, posted_date, description, merchant, category, "
+                "amount, currency, bank_name, account_name, account_id, "
+                "source_file, source_row, file_hash, transaction_fingerprint, "
+                "ingested_at, statement_type, run_id, transaction_subtype, "
+                "resolved_amount, category_normalized, category_parent, "
+                "unreviewed, notes, is_split, split_parent_fingerprint, "
+                "category_override"
+            ),
+        }
         conn = _gc(db_path, read_only=True)
         try:
             data: dict[str, Any] = {}
             for table in _BACKUP_TABLES:
-                data[table] = _rows_to_dicts(conn.execute(f"SELECT * FROM {table}"))
+                cols = _TABLE_COLUMNS.get(table, "*")
+                data[table] = _rows_to_dicts(conn.execute(f"SELECT {cols} FROM {table}"))
             schema_ver = _get_schema_version(conn)
         finally:
             conn.close()
@@ -5587,8 +5616,9 @@ No cloud services, no external dependencies — all data stays on your machine.
                          transaction_fingerprint, ingested_at, statement_type,
                          run_id, transaction_subtype, resolved_amount,
                          category_normalized, category_parent, unreviewed,
-                         notes, is_split, split_parent_fingerprint
-                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         notes, is_split, split_parent_fingerprint,
+                         category_override
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [
                         r.get("transaction_date"), r.get("posted_date"),
                         r.get("description", ""), r.get("merchant"),
@@ -5603,6 +5633,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                         r.get("category_parent"), r.get("unreviewed", True),
                         r.get("notes"), r.get("is_split", False),
                         r.get("split_parent_fingerprint"),
+                        r.get("category_override", False),
                     ],
                 )
                 tx_count += 1

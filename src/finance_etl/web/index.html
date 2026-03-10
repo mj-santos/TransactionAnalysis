@@ -1184,6 +1184,9 @@
           <span class="badge-count" id="uncategorized-count" style="display:none;"></span>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
+          <label class="toggle-row" style="margin-bottom:0;" onclick="event.stopPropagation();">
+            <input type="checkbox" id="show-categorized-toggle" onchange="loadUncategorized()" /> Show categorized too
+          </label>
           <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); loadUncategorized()">↻ Refresh</button>
           <span class="collapse-arrow">▼</span>
         </div>
@@ -1192,6 +1195,12 @@
         <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px; margin-top:16px;">
           Merchants in the ledger with no category assigned. Assign a category to apply it to all matching transactions.
         </p>
+        <div id="categorized-section" style="display:none; margin-bottom:16px;">
+          <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text-muted);">Categorized Merchants</div>
+          <div id="categorized-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:8px;"></div>
+          <div style="border-bottom:1px solid var(--border); margin:12px 0;"></div>
+          <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text-muted);">Uncategorized Merchants</div>
+        </div>
         <div id="uncategorized-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:8px;">
           <span style="color:var(--text-muted); font-size:13px;">Loading…</span>
         </div>
@@ -1451,6 +1460,14 @@
               <option value="normalized_name">Sort: Name</option>
               <option value="last_seen">Sort: Last Seen</option>
             </select>
+          </div>
+          <!-- Merchant bulk action bar -->
+          <div id="util-merch-bulk-bar" class="bulk-bar" style="display:none; margin-bottom:10px; padding:8px 12px; border-radius:6px; align-items:center; gap:10px; font-size:13px;">
+            <span class="bulk-count"></span>
+            <button class="btn btn-sm" onclick="_utilMerchBulkAssignCat()">Assign Category</button>
+            <span class="bulk-cat-anchor" style="display:inline-block;"></span>
+            <button class="btn btn-sm" onclick="_utilMerchBulkRemoveCat()">Remove Category</button>
+            <button class="btn btn-sm" onclick="_utilMerchClearSelection()">×</button>
           </div>
           <div id="util-merch-list" class="suggestions-scroll" style="font-size:13px; max-height:400px; overflow-y:auto;">
             <span style="color:var(--text-muted);">Loading…</span>

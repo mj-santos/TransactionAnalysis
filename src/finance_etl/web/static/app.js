@@ -2546,7 +2546,7 @@ function _renderTxnBody(p, rows, cols, append) {
     'amount', 'total_spend', 'total_income', 'total_outflow', 'net_amount', 'row_count',
   ]);
   // Columns hidden from the user (used for review logic only)
-  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed', 'notes', 'is_split', 'split_parent_fingerprint']);
+  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed', 'notes', 'is_split', 'split_parent_fingerprint', 'category_override']);
 
   const visibleCols = cols.filter(c => !HIDDEN_COLS.has(c));
 
@@ -2565,9 +2565,17 @@ function _renderTxnBody(p, rows, cols, append) {
     const cells = visibleCols.map(c => {
       const val = row[c] != null ? String(row[c]) : '';
       const cls = NUMERIC_COLS.has(c) ? ' class="mono text-right"' : '';
-      // Inline category edit: make category cells double-clickable
+      // Inline category edit: make category cells clickable with pencil icon
       if ((c === 'category_parent' || c === 'category_normalized' || c === 'category') && fp) {
-        return `<td${cls} ondblclick="inlineCategoryEdit(this,'${esc(fp)}','${c}')" title="Double-click to edit" style="cursor:pointer;">${esc(val)}</td>`;
+        const isOverride = row.category_override === true || row.category_override === 'true';
+        const displayVal = val || '— No category —';
+        const displayStyle = val ? '' : ' color:var(--text-muted);';
+        const badge = isOverride ? ' <span class="override-badge" onclick="event.stopPropagation(); _resetCategoryOverride(this)" title="Click to reset to rule-based category">edited</span>' : '';
+        return `<td${cls} onclick="inlineCategoryEdit(this,'${esc(fp)}')" data-override="${isOverride}" data-col="${c}" title="Click to edit" style="cursor:pointer;${displayStyle}"><span>${esc(displayVal)}</span>${badge}</td>`;
+      }
+      // Tag merchant column for Fix-for-all lookup
+      if (c === 'merchant' && fp) {
+        return `<td${cls} data-col="merchant">${esc(val)}</td>`;
       }
       // Prepend split badge to description
       if (c === 'description' && isSplitChild) {
@@ -3435,7 +3443,35 @@ async function loadUncategorized() {
   const container = document.getElementById('uncategorized-list');
   if (!container) return;
   container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Loading…</span>';
+  const showCategorized = document.getElementById('show-categorized-toggle')?.checked || false;
+  const catSection = document.getElementById('categorized-section');
+  const catList = document.getElementById('categorized-list');
+
   try {
+    // Load categorized merchants if toggle is on
+    if (showCategorized && catSection && catList) {
+      catSection.style.display = 'block';
+      try {
+        const catData = await api('GET', '/merchant-categories');
+        const entries = catData.categories || catData.merchant_categories || [];
+        if (entries.length) {
+          catList.innerHTML = entries.map(e => {
+            const jsonArg = JSON.stringify(e.merchant).replace(/"/g, '&quot;');
+            const safeId  = e.merchant.replace(/[^a-zA-Z0-9]/g, '_');
+            return `
+              <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
+                <span style="flex:1; font-size:13px;">${esc(e.merchant)}</span>
+                <span style="font-size:12px; color:var(--text-muted); cursor:pointer;" onclick="_editCategorizedMerchant(this, ${jsonArg}, '${esc(e.category)}')">${esc(e.category)} ✎</span>
+              </div>`;
+          }).join('');
+        } else {
+          catList.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No categorized merchants.</span>';
+        }
+      } catch { catList.innerHTML = ''; }
+    } else if (catSection) {
+      catSection.style.display = 'none';
+    }
+
     const data = await api('GET', '/merchant-categories/uncategorized');
     if (!data.merchants.length) {
       container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All merchants are categorized.</span>';
@@ -3459,6 +3495,24 @@ async function loadUncategorized() {
   } catch (err) {
     container.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">Error: ${esc(err.message)}</span>`;
   }
+}
+
+function _editCategorizedMerchant(el, merchant, currentCat) {
+  const parentDiv = el.closest('div');
+  const catSpan = el;
+  openCategoryPicker(catSpan, {
+    currentCategory: currentCat,
+    onSave: async (cat) => {
+      await api('POST', '/merchant-categories', { merchant, category: cat.subcategory });
+      catSpan.innerHTML = `${esc(cat.subcategory)} ✎`;
+      toast(`${merchant} → ${cat.subcategory}`, 'success');
+    },
+    onRemove: async () => {
+      await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
+      toast('Category removed from ' + merchant, 'info');
+      loadUncategorized(); // Refresh to move to uncategorized list
+    },
+  });
 }
 
 async function assignCategory(merchant) {
@@ -6245,36 +6299,213 @@ async function bulkAssignMerchantConfirm(type) {
   }
 }
 
-// ── Inline Category Editing ────────────────────────────────────
+// ── Shared Category Picker Component ─────────────────────────────────────
+// Single reusable category picker used by transaction rows, merchant list,
+// and uncategorized merchants panel.
 
-function inlineCategoryEdit(td, fp, field) {
-  if (td.querySelector('input')) return; // Already editing
-  const current = td.textContent.trim();
-  td.innerHTML = `<input type="text" class="inline-cat-input" value="${esc(current)}"
-    onkeydown="if(event.key==='Enter')inlineCategorySave(this,'${esc(fp)}','${field}');if(event.key==='Escape')inlineCategoryCancel(this,'${esc(current)}')"
-    onblur="inlineCategoryCancel(this,'${esc(current)}')" />`;
-  td.querySelector('input').focus();
-  td.querySelector('input').select();
+/**
+ * openCategoryPicker(targetElement, options)
+ * Transforms targetElement inline into a searchable category dropdown.
+ *
+ * options: {
+ *   currentCategory: str|null,
+ *   onSave: async (selectedCategory) => {},  // {subcategory, parent}
+ *   onRemove: async () => {},
+ *   allowRemove: bool (default true),
+ *   placeholder: str (default "Search categories…")
+ * }
+ */
+function openCategoryPicker(targetEl, options = {}) {
+  if (targetEl.querySelector('.cat-picker-inline')) return; // Already open
+  const current = options.currentCategory || '';
+  const allowRemove = options.allowRemove !== false;
+  const placeholder = options.placeholder || 'Search categories…';
+  const originalHTML = targetEl.innerHTML;
+  const originalText = targetEl.textContent.trim();
+
+  targetEl.innerHTML = `<div class="cat-picker-inline" style="position:relative;">
+    <input type="text" class="cat-picker-input" value="${esc(current)}"
+           placeholder="${esc(placeholder)}" autocomplete="off"
+           style="width:160px; padding:3px 6px; font-size:12px; border:1px solid var(--primary); border-radius:4px;" />
+    <div class="cat-picker-dropdown" style="display:none;"></div>
+  </div>`;
+
+  const wrap = targetEl.querySelector('.cat-picker-inline');
+  const input = wrap.querySelector('.cat-picker-input');
+  const dd = wrap.querySelector('.cat-picker-dropdown');
+
+  function renderOptions(query) {
+    _ensureCategoryTaxonomy().then(cats => {
+      let html = '';
+      for (const group of cats) {
+        for (const sub of group.subcategories) {
+          const label = `${group.parent} > ${sub.name}`;
+          if (query && !label.toLowerCase().includes(query.toLowerCase())) continue;
+          html += `<div class="cat-picker-option" data-sub="${esc(sub.name)}" data-parent="${esc(group.parent)}">${esc(label)}</div>`;
+        }
+      }
+      if (allowRemove) {
+        html += `<div class="cat-picker-option cat-picker-remove" style="color:var(--danger); border-top:1px solid var(--border);">— Remove Category —</div>`;
+      }
+      dd.innerHTML = html || '<div style="padding:6px 8px; color:var(--text-muted); font-size:11px;">No matches</div>';
+      dd.style.display = 'block';
+
+      // Attach click handlers
+      dd.querySelectorAll('.cat-picker-option[data-sub]').forEach(opt => {
+        opt.addEventListener('click', async () => {
+          const sub = opt.dataset.sub;
+          const parent = opt.dataset.parent;
+          dd.style.display = 'none';
+          if (options.onSave) {
+            try {
+              await options.onSave({ subcategory: sub, parent });
+            } catch (err) { toast('Failed: ' + err.message, 'error'); }
+          }
+          cleanup();
+        });
+      });
+      const removeOpt = dd.querySelector('.cat-picker-remove');
+      if (removeOpt) {
+        removeOpt.addEventListener('click', async () => {
+          dd.style.display = 'none';
+          if (options.onRemove) {
+            try {
+              await options.onRemove();
+            } catch (err) { toast('Failed: ' + err.message, 'error'); }
+          }
+          cleanup();
+        });
+      }
+    });
+  }
+
+  function cleanup() {
+    document.removeEventListener('keydown', escHandler);
+    document.removeEventListener('mousedown', outsideHandler);
+  }
+
+  function cancel() {
+    targetEl.innerHTML = originalHTML;
+    cleanup();
+  }
+
+  function escHandler(e) {
+    if (e.key === 'Escape') { cancel(); }
+  }
+
+  function outsideHandler(e) {
+    if (!wrap.contains(e.target)) { cancel(); }
+  }
+
+  input.addEventListener('input', () => renderOptions(input.value));
+  input.addEventListener('focus', () => renderOptions(input.value));
+  document.addEventListener('keydown', escHandler);
+  setTimeout(() => document.addEventListener('mousedown', outsideHandler), 0);
+
+  input.focus();
+  input.select();
+  renderOptions(input.value);
 }
 
-function inlineCategoryCancel(input, original) {
-  const td = input.closest('td');
-  if (td) td.textContent = original;
+// ── Transaction Row Inline Category Edit ─────────────────────────────────
+
+function inlineCategoryEdit(td, fp) {
+  const currentCat = td.textContent.trim();
+  const isOverride = td.dataset.override === 'true';
+  openCategoryPicker(td, {
+    currentCategory: currentCat === '—' ? '' : currentCat,
+    onSave: async (cat) => {
+      await api('PATCH', '/transactions/' + fp, {
+        category_normalized: cat.subcategory,
+        category_parent: cat.parent,
+        category_override: true,
+      });
+      _updateTxnCategoryCell(td, cat.subcategory, true);
+      // Show "Fix for all?" prompt if merchant exists
+      const row = td.closest('tr');
+      if (row) {
+        const merchantCell = row.querySelector('[data-col="merchant"]');
+        const merchant = merchantCell ? merchantCell.textContent.trim() : '';
+        if (merchant && merchant !== '—') {
+          _showFixForAllPrompt(td, fp, merchant, cat);
+        }
+      }
+      toast('Category updated.', 'success');
+    },
+    onRemove: async () => {
+      await api('PATCH', '/transactions/' + fp, {
+        category_normalized: null,
+        category_parent: null,
+        category_override: false,
+      });
+      _updateTxnCategoryCell(td, null, false);
+      toast('Category removed.', 'info');
+    },
+  });
 }
 
-async function inlineCategorySave(input, fp, field) {
-  const newVal = input.value.trim();
-  const td = input.closest('td');
-  if (!newVal) { if (td) td.textContent = ''; return; }
-  // Use merchant-categories endpoint to assign the category
+function _updateTxnCategoryCell(td, category, overridden) {
+  const display = category || '— No category —';
+  const style = category ? '' : ' style="color:var(--text-muted);"';
+  const badge = overridden ? ' <span class="override-badge" onclick="event.stopPropagation(); _resetCategoryOverride(this)" title="Click to reset to rule-based category">edited</span>' : '';
+  td.innerHTML = `<span${style}>${esc(display)}</span>${badge}`;
+  td.dataset.override = overridden ? 'true' : 'false';
+}
+
+async function _resetCategoryOverride(badgeEl) {
+  const td = badgeEl.closest('td');
+  const fp = td?.closest('tr')?.dataset.fp;
+  if (!fp) return;
+  if (!confirm('Reset to rule-based category? Your manual assignment will be removed.')) return;
   try {
-    await api('POST', '/merchant-categories', { merchant: fp, category: newVal });
-    if (td) td.textContent = newVal;
-    toast('Category updated.', 'success');
+    await api('PATCH', '/transactions/' + fp, {
+      category_override: false,
+    });
+    // Trigger single-row re-normalization by removing override flag
+    // The actual category will be re-applied on next normalization run
+    _updateTxnCategoryCell(td, td.querySelector('span')?.textContent || '', false);
+    toast('Override removed. Run "Apply Category Rules" to re-apply rule-based category.', 'info');
   } catch (err) {
     toast('Failed: ' + err.message, 'error');
-    if (td) td.textContent = newVal;
   }
+}
+
+function _showFixForAllPrompt(anchorTd, fp, merchant, cat) {
+  // Remove any existing prompt
+  document.querySelectorAll('.fix-for-all-prompt').forEach(el => el.remove());
+  const prompt = document.createElement('div');
+  prompt.className = 'fix-for-all-prompt';
+  prompt.innerHTML = `
+    <span>Apply '${esc(cat.subcategory)}' to all '${esc(merchant)}' transactions?</span>
+    <button class="btn btn-primary btn-sm" onclick="_fixForAllMerchant('${esc(merchant)}', '${esc(cat.subcategory)}', '${esc(cat.parent)}', this)">Yes, fix all</button>
+    <button class="btn btn-secondary btn-sm" onclick="this.closest('.fix-for-all-prompt').remove()">No, just this one</button>
+  `;
+  anchorTd.closest('tr')?.after(prompt);
+  // Auto-dismiss after 8 seconds
+  setTimeout(() => { if (prompt.parentNode) prompt.remove(); }, 8000);
+}
+
+async function _fixForAllMerchant(merchant, category, parent, btn) {
+  const prompt = btn.closest('.fix-for-all-prompt');
+  try {
+    await api('POST', '/merchant-categories', { merchant, category });
+    // Now update all non-overridden transactions for this merchant
+    const data = await api('GET', `/transactions?merchant=${encodeURIComponent(merchant)}&limit=9999`);
+    const txns = data.transactions || [];
+    let count = 0;
+    for (const t of txns) {
+      if (t.category_override) continue; // Skip existing overrides
+      await api('PATCH', '/transactions/' + t.transaction_fingerprint, {
+        category_normalized: category,
+        category_parent: parent,
+      });
+      count++;
+    }
+    toast(`${count} transactions updated for ${merchant}`, 'success');
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+  }
+  if (prompt) prompt.remove();
 }
 
 // ── Onboarding Flow ────────────────────────────────────────────
@@ -6381,20 +6612,23 @@ function _renderUtilMerchants(merchants) {
   if (!merchants.length) { el.innerHTML = '<span style="color:var(--text-muted);">No merchants found.</span>'; return; }
   el.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:12px;">
     <thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
+      <th style="padding:4px 6px;"><input type="checkbox" id="util-merch-select-all" onchange="_utilMerchToggleAll(this)" /></th>
       <th style="padding:4px 6px;">Merchant</th>
       <th style="padding:4px 6px;">Raw Name</th>
       <th style="padding:4px 6px; text-align:right;">Count</th>
       <th style="padding:4px 6px;">Category</th>
       <th style="padding:4px 6px;">Last Seen</th>
     </tr></thead><tbody>` +
-    merchants.map(m => `<tr style="border-bottom:1px solid var(--border);">
+    merchants.map(m => `<tr style="border-bottom:1px solid var(--border);" data-merchant="${esc(m.normalized_name)}">
+      <td style="padding:4px 6px;"><input type="checkbox" class="util-merch-check" data-merchant="${esc(m.normalized_name)}" onchange="_utilMerchUpdateBulkBar()" /></td>
       <td style="padding:4px 6px;">${esc(m.normalized_name)}</td>
       <td style="padding:4px 6px; color:var(--text-muted);">${esc(m.raw_name)}</td>
       <td style="padding:4px 6px; text-align:right;" class="mono">${m.txn_count}</td>
-      <td style="padding:4px 6px;" ondblclick="inlineUtilMerchCatEdit(this, '${esc(m.normalized_name)}')" title="Double-click to edit" class="util-cat-cell">${esc(m.assigned_category || '—')}</td>
+      <td style="padding:4px 6px; cursor:pointer;" onclick="_utilMerchCatClick(this, '${esc(m.normalized_name)}')" title="Click to edit" class="util-cat-cell">${esc(m.assigned_category || '—')}</td>
       <td style="padding:4px 6px; color:var(--text-muted);">${m.last_seen || '—'}</td>
     </tr>`).join('') +
     '</tbody></table>';
+  _utilMerchUpdateBulkBar();
 }
 
 function _filterUtilMerchants() {
@@ -6408,26 +6642,87 @@ function _filterUtilMerchants() {
   _renderUtilMerchants(filtered);
 }
 
-function inlineUtilMerchCatEdit(td, merchant) {
+function _utilMerchCatClick(td, merchant) {
   const current = td.textContent.trim() === '—' ? '' : td.textContent.trim();
-  td.innerHTML = `<input type="text" value="${esc(current)}" style="width:100%; padding:2px 4px; font-size:12px; border:1px solid var(--primary); border-radius:3px;"
-    onblur="saveUtilMerchCat(this, '${esc(merchant)}')"
-    onkeydown="if(event.key==='Enter')this.blur(); if(event.key==='Escape'){this.value='${esc(current)}'; this.blur();}" />`;
-  td.querySelector('input').focus();
+  openCategoryPicker(td, {
+    currentCategory: current,
+    onSave: async (cat) => {
+      await api('POST', '/merchant-categories', { merchant, category: cat.subcategory });
+      td.textContent = cat.subcategory;
+      toast(`${merchant} → ${cat.subcategory}`, 'success');
+    },
+    onRemove: async () => {
+      await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
+      td.textContent = '—';
+      toast('Category removed from ' + merchant, 'info');
+    },
+  });
 }
 
-async function saveUtilMerchCat(input, merchant) {
-  const category = input.value.trim();
-  const td = input.closest('td');
-  if (!category) { td.textContent = '—'; return; }
-  try {
-    await api('POST', '/merchant-categories', { merchant, category });
-    td.textContent = category;
-    toast(`Category "${category}" assigned to "${merchant}".`, 'success');
-  } catch (err) {
-    td.textContent = '—';
-    toast(`Failed: ${err.message}`, 'error');
+// ── Utilities Merchant List Bulk Actions ──────────────────────────────────
+
+let _utilMerchSelected = new Set();
+
+function _utilMerchToggleAll(el) {
+  document.querySelectorAll('.util-merch-check').forEach(cb => {
+    cb.checked = el.checked;
+  });
+  _utilMerchUpdateBulkBar();
+}
+
+function _utilMerchUpdateBulkBar() {
+  const checked = document.querySelectorAll('.util-merch-check:checked');
+  _utilMerchSelected = new Set([...checked].map(cb => cb.dataset.merchant));
+  const bar = document.getElementById('util-merch-bulk-bar');
+  if (!bar) return;
+  if (_utilMerchSelected.size >= 2) {
+    bar.style.display = 'flex';
+    bar.querySelector('.bulk-count').textContent = `${_utilMerchSelected.size} merchants`;
+  } else {
+    bar.style.display = 'none';
   }
+}
+
+function _utilMerchBulkAssignCat() {
+  const bar = document.getElementById('util-merch-bulk-bar');
+  const anchor = bar.querySelector('.bulk-cat-anchor');
+  openCategoryPicker(anchor, {
+    currentCategory: '',
+    allowRemove: false,
+    placeholder: 'Category for selected…',
+    onSave: async (cat) => {
+      let count = 0;
+      for (const merchant of _utilMerchSelected) {
+        await api('POST', '/merchant-categories', { merchant, category: cat.subcategory });
+        count++;
+      }
+      toast(`Category updated for ${count} merchants`, 'success');
+      _utilMerchClearSelection();
+      loadUtilMerchants();
+    },
+  });
+}
+
+async function _utilMerchBulkRemoveCat() {
+  if (!confirm(`Remove category from ${_utilMerchSelected.size} merchants?`)) return;
+  let count = 0;
+  for (const merchant of _utilMerchSelected) {
+    try {
+      await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
+      count++;
+    } catch { /* skip errors */ }
+  }
+  toast(`Category removed from ${count} merchants`, 'info');
+  _utilMerchClearSelection();
+  loadUtilMerchants();
+}
+
+function _utilMerchClearSelection() {
+  _utilMerchSelected.clear();
+  document.querySelectorAll('.util-merch-check').forEach(cb => cb.checked = false);
+  const selectAll = document.getElementById('util-merch-select-all');
+  if (selectAll) selectAll.checked = false;
+  _utilMerchUpdateBulkBar();
 }
 
 // -- Rule Tester --
