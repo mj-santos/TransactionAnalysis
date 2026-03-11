@@ -268,7 +268,8 @@ def apply_category_rules(db_path: str, job_id: str) -> None:
         grouped_rules = load_grouped_category_rules(conn)
         rows = conn.execute(
             "SELECT transaction_fingerprint, category FROM transactions_norm "
-            "WHERE COALESCE(category_override, FALSE) = FALSE"
+            "WHERE COALESCE(category_override, FALSE) = FALSE "
+            "AND COALESCE(excluded, FALSE) = FALSE"
         ).fetchall()
         total = len(rows)
         done = 0

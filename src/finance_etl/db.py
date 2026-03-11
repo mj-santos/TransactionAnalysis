@@ -245,7 +245,12 @@ CREATE TABLE IF NOT EXISTS budget_goals (
 """,
 
     # ── Transaction review tracking ──────────────────────────────────────────
-    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS unreviewed BOOLEAN DEFAULT TRUE",
+    # NOTE: DO NOT use "ADD COLUMN IF NOT EXISTS ... DEFAULT <value>" for
+    # BOOLEAN columns — DuckDB >=1.5 re-applies the DEFAULT to all existing
+    # rows even when the column already exists (value-clobbering bug).
+    # Dropping "IF NOT EXISTS" makes DuckDB raise on re-run, caught by the
+    # blanket except below, which preserves existing data.
+    "ALTER TABLE transactions_norm ADD COLUMN unreviewed BOOLEAN DEFAULT TRUE",
 
     # ── Schema version tracking (for backup compatibility) ────────────────
     "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
@@ -360,11 +365,14 @@ CREATE TABLE IF NOT EXISTS annual_reports (
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS notes TEXT",
 
     # ── Split Transactions ────────────────────────────────────────────────────
-    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS is_split BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE transactions_norm ADD COLUMN is_split BOOLEAN DEFAULT FALSE",
     "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS split_parent_fingerprint TEXT",
 
     # ── Category Override flag ─────────────────────────────────────────────────
-    "ALTER TABLE transactions_norm ADD COLUMN IF NOT EXISTS category_override BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE transactions_norm ADD COLUMN category_override BOOLEAN DEFAULT FALSE",
+
+    # ── Excluded flag (hide transaction from totals/queries) ──────────────────
+    "ALTER TABLE transactions_norm ADD COLUMN excluded BOOLEAN DEFAULT FALSE",
 ]
 # ---------------------------------------------------------------------------
 

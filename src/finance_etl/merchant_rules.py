@@ -258,7 +258,8 @@ def renormalize_merchant(db_path_or_conn, merchant: str) -> int:
                 "UPDATE transactions_norm "
                 "SET category_normalized = ?, category_parent = ? "
                 "WHERE merchant = ? "
-                "AND COALESCE(category_override, FALSE) = FALSE",
+                "AND COALESCE(category_override, FALSE) = FALSE "
+                "AND COALESCE(excluded, FALSE) = FALSE",
                 [cat_normalized, cat_parent, merchant],
             )
         else:
@@ -273,7 +274,8 @@ def renormalize_merchant(db_path_or_conn, merchant: str) -> int:
             grouped_rules = load_grouped_category_rules(conn)
             rows = conn.execute(
                 "SELECT transaction_fingerprint, category FROM transactions_norm "
-                "WHERE merchant = ? AND COALESCE(category_override, FALSE) = FALSE",
+                "WHERE merchant = ? AND COALESCE(category_override, FALSE) = FALSE "
+                "AND COALESCE(excluded, FALSE) = FALSE",
                 [merchant],
             ).fetchall()
             for fp, raw_cat in rows:
@@ -287,7 +289,8 @@ def renormalize_merchant(db_path_or_conn, merchant: str) -> int:
 
         updated = conn.execute(
             "SELECT COUNT(*) FROM transactions_norm "
-            "WHERE merchant = ? AND COALESCE(category_override, FALSE) = FALSE",
+            "WHERE merchant = ? AND COALESCE(category_override, FALSE) = FALSE "
+            "AND COALESCE(excluded, FALSE) = FALSE",
             [merchant],
         ).fetchone()[0]
         return updated
@@ -342,9 +345,12 @@ def batch_renormalize(db_path: str, job_id: str, batch_size: int = 500) -> None:
         cat_map = load_category_map(conn)
 
         # Fetch fingerprint + description + existing merchant + existing category
+        # Skip rows where user has manually overridden the category or excluded the transaction
         all_rows = conn.execute(
             "SELECT transaction_fingerprint, description, merchant, category "
-            "FROM transactions_norm"
+            "FROM transactions_norm "
+            "WHERE COALESCE(category_override, FALSE) = FALSE "
+            "AND COALESCE(excluded, FALSE) = FALSE"
         ).fetchall()
 
         total = len(all_rows)
