@@ -171,6 +171,9 @@ TransactionAnalysis/
     ├── test_merchant_category_edit.py ← inline category edit, override, fix-for-all, merchant bulk tests
     ├── test_merchant_list_edit.py ← merchant-level category edit, one-row-per-merchant, override respect, orphan detection tests
     ├── test_bulk_actions.py    ← bulk-assign-merchant, merchant search, changes() audit tests
+    ├── test_normalization.py      ← batch_renormalize override skip, NULL override, all-paths tests (BUG-16)
+    ├── test_split_transactions.py ← split/unsplit endpoint tests, backup roundtrip, child re-split guard
+    ├── test_transactions.py       ← excluded column tests (BUG-17)
     └── test_wizard_mapping.py
 ```
 
@@ -263,7 +266,7 @@ TransactionAnalysis/
 - **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar (blue) appears when ≥1 selected with buttons: Assign Category, Mark Reviewed, Exclude, Assign Merchant (inline type-ahead panel), Assign Tag, Clear Selection ×; selected rows get left border accent + light blue tint; "{N} selected" counter updates in real time
 - **Inline Category Editing**: click category cell to edit via `openCategoryPicker`; sets `category_override=TRUE` on save to protect from batch normalization; override badge ("edited" pill) shown on overridden rows with click-to-reset; "Fix for All?" prompt after save offers to apply category to all transactions from same merchant (auto-dismiss 8s); `_fixForAllMerchant()` updates merchant→category map and patches non-override transactions
 - **Transaction Notes**: per-transaction notes via pencil icon; inline popup editor with textarea; auto-save on Enter or Save click; PATCH endpoint updates `notes` field
-- **Split Transactions**: split one transaction into N sub-rows across categories; parent marked `is_split=TRUE` and excluded from totals; children carry `split_parent_fingerprint`; "split" badge on child descriptions; unsplit restores parent and removes children. **⚠️ AUDIT-1: Backend endpoints exist but `openSplitModal()` and `unsplitTransaction()` are never called from any UI element — the split feature has no entry point.**
+- **Split Transactions**: split one transaction into N sub-rows across categories; parent marked `is_split=TRUE` and excluded from totals; children carry `split_parent_fingerprint`; "split" badge on child descriptions; unsplit restores parent and removes children. Per-row "⚡ Split" button on eligible transactions; "Unsplit" button on split child rows (triggers `unsplitTransaction` with parent fingerprint). Fixed in v2.26.0.
 - API: `GET /transactions`, `GET /transactions/totals`, `GET /transactions/sources`, `GET /transactions/years`, `POST /transactions/mark-reviewed`, `POST /transactions/mark-all-reviewed`, `PATCH /transactions/{fingerprint}`, `POST /transactions/{fingerprint}/split`, `DELETE /transactions/{fingerprint}/split`
 
 **Cash Flow (`#page-cashflow`)**
@@ -875,13 +878,13 @@ Single-row table seeded with `1` on first migration run.
 - ~~`config/canonical_schema.yaml` — removed (v2.2.0).~~
 - `app.js:3093` — `addConditionRow()`: superseded by `addConditionGroup()`; only self-references internally
 - `app.js:4569` — `deleteBudget()`: fully implemented but no UI element calls it (no delete button rendered)
-- `app.js:2734` — `openSplitModal()`: function exists but no UI element triggers it (split feature is dead UI)
-- `app.js:2832` — `unsplitTransaction()`: companion to `openSplitModal()`, also never called
+- ~~`app.js:2734` — `openSplitModal()`: wired to per-row "⚡ Split" button in v2.26.0~~
+- ~~`app.js:2832` — `unsplitTransaction()`: wired to per-row "Unsplit" button on split children in v2.26.0~~
 - `app.js:6930-6995` — `_buildCategoryPickerHTML()` + 5 helpers: second category picker implementation, should be consolidated into `openCategoryPicker()`
 - `api.py:1173` — `POST /wizard/validate`: never called from frontend (validates locally instead)
 - `api.py:1304` — `GET /wizard/profiles`: never called from frontend
 - `api.py:5320` — `DELETE /recurring/override/{merchant}`: only mentioned in a JS comment, never invoked
-- `api.py:2035` — `DELETE /transactions/{fingerprint}/split`: only reachable through dead `unsplitTransaction()`
+- ~~`api.py:2035` — `DELETE /transactions/{fingerprint}/split`: wired via per-row "Unsplit" button in v2.26.0~~
 - `hashing.py:18` — `sha256_str()`: defined but never imported/called
 - `wizard_mapping.py:296` — `get_canonical_fields_for_type()`: defined but never called
 - **Tracked `.DS_Store` and `.env` files**: 5 `.DS_Store` files and `.env` are tracked in git despite being listed in `.gitignore` (added before gitignore existed). Should be untracked via `git rm --cached`.
@@ -891,13 +894,13 @@ Single-row table seeded with `1` on first migration run.
 #### FEATURE INVENTORY STATUS
 
 **✅ Complete (18 of 20 checked features):**
-openCategoryPicker shared component, merchant_filter on POST /normalize/apply, duplicate detection + utilities tab (5 sections), weekly recap banner, unreviewed nudge widget, budget pace indicator, year filter on transactions, global search, backup/restore full column coverage, resolveTransactionTab, transaction notes, savings goals, monthly summaries, net worth, annual reports, tags, recurring transactions, split transactions (backend only)
+openCategoryPicker shared component, merchant_filter on POST /normalize/apply, duplicate detection + utilities tab (5 sections), weekly recap banner, unreviewed nudge widget, budget pace indicator, year filter on transactions, global search, backup/restore full column coverage, resolveTransactionTab, transaction notes, savings goals, monthly summaries, net worth, annual reports, tags, recurring transactions, split transactions
 
 **⚠️ Partial (1):**
 - Grouped mode category edit: `openCategoryPicker` is never invoked in grouped mode — the `&& fp` guard at `app.js:2569` silently disables editing when rows lack a fingerprint (all grouped/aggregated rows)
 
-**❌ Broken (1):**
-- `batch_renormalize()` ignores `category_override` (BUG-16) — "Re-normalize All" clobbers manual edits
+**~~❌ Broken (0):~~**
+- ~~`batch_renormalize()` ignores `category_override` (BUG-16) — fixed in v2.25.2~~
 
 #### DUPLICATE LOGIC FOUND
 
@@ -913,7 +916,7 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 
 #### DEAD CODE
 
-**Dead JS functions:** `addConditionRow` (3093), `deleteBudget` (4569), `openSplitModal` (2734), `unsplitTransaction` (2832)
+**Dead JS functions:** `addConditionRow` (3093), `deleteBudget` (4569)
 
 **Dead API endpoints:** `GET /mappings` (786), `POST /runs` (897), `POST /wizard/validate` (1173), `GET /wizard/profiles` (1304), `DELETE /recurring/override/{merchant}` (5320), `DELETE /transactions/{fp}/split` (2035)
 
@@ -958,9 +961,9 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 
 #### CRITICAL FINDINGS (ranked by risk)
 
-1. **BUG-16: `batch_renormalize()` ignores `category_override`** — "Re-normalize All Transactions" silently destroys all manual category edits. Data loss risk.
-2. **BUG-17: `excluded` column doesn't exist** — PATCH endpoint will throw DuckDB error when bulk "Exclude" is used.
-3. **Split transaction UI is dead** — `openSplitModal()` and `unsplitTransaction()` are never called from any UI element. The split feature appears to have lost its entry point.
+1. ~~**BUG-16: `batch_renormalize()` ignores `category_override`** — fixed in v2.25.2~~
+2. ~~**BUG-17: `excluded` column doesn't exist** — fixed in v2.25.3~~
+3. ~~**Split transaction UI is dead** — fixed in v2.26.0; per-row Split/Unsplit buttons wired to existing functions~~
 4. **Two category picker implementations** diverging in behavior — maintenance risk, users get inconsistent UX between uncategorized panel and other edit surfaces.
 5. **`raw_files` excluded from backup** — restore loses file registry, breaking file_hash references.
 
@@ -1047,7 +1050,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.25.3
+**Current Version:** v2.26.0
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -1094,6 +1097,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.26.0 | 2026-03-11 | feat: wire split transaction UI entry point — openSplitModal and unsplitTransaction now reachable from transaction rows (audit finding) |
 | v2.25.3 | 2026-03-11 | fix: add excluded column to transactions_norm — PATCH /transactions/{fp} no longer throws on excluded field (BUG-17) |
 | v2.25.2 | 2026-03-11 | fix: batch_renormalize skips category_override transactions — manual category edits no longer silently overwritten (BUG-16) |
 | v2.25.0 | 2026-03-10 | Merchant List category edit now merchant-level only — all transactions updated atomically, no orphaned categories; `assign_category()` writes merchant_category_map only (no longer backfills transactions_norm.category directly); `renormalize_merchant()` re-normalizes all transactions for a single merchant respecting `category_override`; `POST /normalize/apply` supports optional `merchant_filter` for targeted single-merchant re-normalization; `GET /utilities/merchants` query fixed to return one row per normalized merchant with category from `merchant_category_map` JOIN; `GET /utilities/health` includes `orphaned_categories` metric with Fix Now button; bulk assign/remove operations run sequentially with re-normalization per merchant; `DELETE /merchant-categories/{merchant}` triggers re-normalization; 6 new tests; 307 total tests |
@@ -1150,8 +1154,8 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `POST` | `/transactions/mark-all-reviewed` | transactions | Mark all filtered transactions as reviewed | 🟢 Called |
 | `PATCH` | `/transactions/{fingerprint}` | transactions | Update transaction fields: `notes`, `category_normalized`, `category_parent`, `category_override`, `excluded` | 🟢 Called |
 | `PATCH` | `/transactions/bulk-assign-merchant` | transactions | Assign merchant to multiple transactions; auto-applies category if mapping exists | 🟢 Called |
-| `POST` | `/transactions/{fingerprint}/split` | transactions | Split a transaction into N sub-rows across categories | ⚠️ Backend exists but UI entry point missing |
-| `DELETE` | `/transactions/{fingerprint}/split` | transactions | Unsplit: remove children and restore parent | ⚠️ Backend exists but UI entry point missing |
+| `POST` | `/transactions/{fingerprint}/split` | transactions | Split a transaction into N sub-rows across categories | 🟢 Called |
+| `DELETE` | `/transactions/{fingerprint}/split` | transactions | Unsplit: remove children and restore parent | 🟢 Called |
 | `GET` | `/merchants/search` | merchant | Search distinct merchants by name (type-ahead, frequency-ordered) | 🟢 Called |
 | `GET` | `/reports` | reports | List available analytics CSV reports | 🟢 Called |
 | `GET` | `/reports/{name}` | reports | Download a report CSV | 🟢 Called |

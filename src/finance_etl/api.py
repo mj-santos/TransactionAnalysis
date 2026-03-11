@@ -1995,7 +1995,8 @@ No cloud services, no external dependencies — all data stays on your machine.
             )
 
             # Insert child rows
-            now = _isoformat(conn.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0])
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
             for idx, s in enumerate(splits):
                 child_fp = f"{fingerprint}_split_{idx}"
                 conn.execute(
