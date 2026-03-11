@@ -3499,7 +3499,13 @@ async function loadUncategorized() {
       return `
         <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
           <span style="flex:1; font-size:13px;">${esc(m)}</span>
-          ${_buildCategoryPickerHTML('cat-input-' + safeId, jsonArg)}
+          <span class="cat-picker-target" id="cat-target-${safeId}"
+                style="display:inline-block; min-width:160px; padding:3px 6px; font-size:12px;
+                       border:1px solid var(--border); border-radius:4px; cursor:pointer; color:var(--text-muted);"
+                onclick="openCategoryPickerForMerchant(this, '${safeId}')">
+            Search categories…
+          </span>
+          <input type="hidden" id="cat-input-${safeId}" value="" />
           <button class="btn btn-primary btn-sm" onclick="assignCategory(${jsonArg})">Assign</button>
         </div>`;
     }).join('');
@@ -3522,6 +3528,18 @@ function _editCategorizedMerchant(el, merchant, currentCat) {
       await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
       toast('Category removed from ' + merchant, 'info');
       loadUncategorized(); // Refresh to move to uncategorized list
+    },
+  });
+}
+
+function openCategoryPickerForMerchant(el, safeId) {
+  openCategoryPicker(el, {
+    allowRemove: false,
+    allowCustom: true,
+    onSave: (cat) => {
+      document.getElementById('cat-input-' + safeId).value = cat.subcategory;
+      el.textContent = cat.subcategory;
+      el.style.color = 'var(--text)';
     },
   });
 }
@@ -3732,23 +3750,34 @@ function _renderCategorySuggestions() {
   listEl.innerHTML = visible.map(s => {
     const realIdx = _catSuggestions.indexOf(s);
     const confColor = s.confidence === 'high' ? '#16a34a' : '#d97706';
-    const pickerId = 'csug-pick-' + realIdx;
     return `
       <div style="display:flex; align-items:center; gap:10px; padding:7px 10px; background:var(--bg-alt,#f8faff); border-radius:6px; border:1px solid var(--border);">
         <span style="flex:1; font-size:13px;">${esc(s.merchant)}</span>
         <span style="color:var(--text-muted); font-size:12px;">→</span>
-        ${_buildCategoryPickerHTML(pickerId)}
+        <span class="cat-picker-target" id="cat-target-csug-${realIdx}"
+              style="display:inline-block; min-width:160px; padding:3px 6px; font-size:12px;
+                     border:1px solid var(--border); border-radius:4px; cursor:pointer;"
+              onclick="openCategoryPickerForSuggestion(this, ${realIdx})">
+          ${esc(s.suggested_category)}
+        </span>
+        <input type="hidden" id="csug-pick-${realIdx}" value="${esc(s.suggested_category)}" />
         <span style="font-size:11px; font-weight:600; color:${confColor}; background:${confColor}18; border-radius:4px; padding:2px 6px;">${s.confidence}</span>
         <button class="btn btn-primary btn-sm" onclick="acceptMerchantCatSuggestion(${realIdx})" title="Assign this category">✓</button>
         <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissMerchantCatSuggestion(${realIdx})" title="Dismiss">✗</button>
       </div>`;
   }).join('');
-  // Pre-fill each picker with the suggested category
-  for (const s of visible) {
-    const realIdx = _catSuggestions.indexOf(s);
-    const input = document.getElementById('csug-pick-' + realIdx);
-    if (input) input.value = s.suggested_category;
-  }
+}
+
+function openCategoryPickerForSuggestion(el, idx) {
+  openCategoryPicker(el, {
+    currentCategory: el.textContent.trim(),
+    allowRemove: false,
+    allowCustom: true,
+    onSave: (cat) => {
+      document.getElementById('csug-pick-' + idx).value = cat.subcategory;
+      el.textContent = cat.subcategory;
+    },
+  });
 }
 
 /** Accept a merchant→category suggestion. Operates on _catSuggestions data
@@ -6345,6 +6374,7 @@ async function bulkAssignMerchantConfirm(type) {
  *   onSave: async (selectedCategory) => {},  // {subcategory, parent}
  *   onRemove: async () => {},
  *   allowRemove: bool (default true),
+ *   allowCustom: bool (default false) — show [ Custom ] free-text entry option,
  *   placeholder: str (default "Search categories…")
  * }
  */
@@ -6352,6 +6382,7 @@ function openCategoryPicker(targetEl, options = {}) {
   if (targetEl.querySelector('.cat-picker-inline')) return; // Already open
   const current = options.currentCategory || '';
   const allowRemove = options.allowRemove !== false;
+  const allowCustom = options.allowCustom === true;
   const placeholder = options.placeholder || 'Search categories…';
   const originalHTML = targetEl.innerHTML;
   const originalText = targetEl.textContent.trim();
@@ -6376,6 +6407,9 @@ function openCategoryPicker(targetEl, options = {}) {
           if (query && !label.toLowerCase().includes(query.toLowerCase())) continue;
           html += `<div class="cat-picker-option" data-sub="${esc(sub.name)}" data-parent="${esc(group.parent)}">${esc(label)}</div>`;
         }
+      }
+      if (allowCustom) {
+        html += `<div class="cat-picker-option cat-picker-custom" style="font-style:italic; color:var(--text-muted); border-top:1px solid var(--border);">[ Custom ]</div>`;
       }
       if (allowRemove) {
         html += `<div class="cat-picker-option cat-picker-remove" style="color:var(--danger); border-top:1px solid var(--border);">— Remove Category —</div>`;
@@ -6407,6 +6441,29 @@ function openCategoryPicker(targetEl, options = {}) {
             } catch (err) { toast('Failed: ' + err.message, 'error'); }
           }
           cleanup();
+        });
+      }
+      const customOpt = dd.querySelector('.cat-picker-custom');
+      if (customOpt) {
+        customOpt.addEventListener('click', () => {
+          dd.style.display = 'none';
+          input.value = '';
+          input.placeholder = 'Type custom category…';
+          input.focus();
+          const customEnter = (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              input.removeEventListener('keydown', customEnter);
+              const val = input.value.trim();
+              if (!val) return;
+              if (options.onSave) {
+                try { options.onSave({ subcategory: val, parent: null }); }
+                catch (err) { toast('Failed: ' + err.message, 'error'); }
+              }
+              cleanup();
+            }
+          };
+          input.addEventListener('keydown', customEnter);
         });
       }
     });
@@ -6936,73 +6993,6 @@ async function _ensureCategoryTaxonomy() {
     _categoryTaxonomy = [];
   }
   return _categoryTaxonomy;
-}
-
-function _buildCategoryPickerHTML(inputId, safeMerchantArg) {
-  return `<div class="cat-picker-wrap" style="position:relative; width:220px;">
-    <input type="text" id="${inputId}" placeholder="Search categories…"
-           class="cat-picker-input"
-           autocomplete="off"
-           onfocus="_openCatPicker(this)"
-           oninput="_filterCatPicker(this)" />
-    <div class="cat-picker-dropdown" style="display:none;"></div>
-  </div>`;
-}
-
-function _openCatPicker(input) {
-  const wrap = input.closest('.cat-picker-wrap');
-  const dd = wrap.querySelector('.cat-picker-dropdown');
-  _ensureCategoryTaxonomy().then(cats => {
-    _renderCatPickerOptions(dd, cats, '');
-    dd.style.display = 'block';
-  });
-  // Close on click outside
-  setTimeout(() => {
-    const closer = (e) => {
-      if (!wrap.contains(e.target)) { dd.style.display = 'none'; document.removeEventListener('click', closer); }
-    };
-    document.addEventListener('click', closer);
-  }, 0);
-}
-
-function _filterCatPicker(input) {
-  const wrap = input.closest('.cat-picker-wrap');
-  const dd = wrap.querySelector('.cat-picker-dropdown');
-  const q = input.value.toLowerCase();
-  _ensureCategoryTaxonomy().then(cats => {
-    _renderCatPickerOptions(dd, cats, q);
-    dd.style.display = 'block';
-  });
-}
-
-function _renderCatPickerOptions(dd, cats, query) {
-  let html = '';
-  for (const group of cats) {
-    for (const sub of group.subcategories) {
-      const label = `${group.parent} > ${sub.name}`;
-      if (query && !label.toLowerCase().includes(query)) continue;
-      html += `<div class="cat-picker-option" onclick="_selectCatOption(this, '${esc(sub.name)}')"
-                title="${esc(label)}">${esc(label)}</div>`;
-    }
-  }
-  html += `<div class="cat-picker-option cat-picker-custom" onclick="_selectCatCustom(this)">[ Custom ]</div>`;
-  dd.innerHTML = html || '<div style="padding:6px 8px; color:var(--text-muted); font-size:11px;">No matches</div>';
-}
-
-function _selectCatOption(optEl, value) {
-  const wrap = optEl.closest('.cat-picker-wrap');
-  const input = wrap.querySelector('.cat-picker-input');
-  input.value = value;
-  wrap.querySelector('.cat-picker-dropdown').style.display = 'none';
-}
-
-function _selectCatCustom(optEl) {
-  const wrap = optEl.closest('.cat-picker-wrap');
-  const input = wrap.querySelector('.cat-picker-input');
-  input.value = '';
-  input.placeholder = 'Type custom category…';
-  wrap.querySelector('.cat-picker-dropdown').style.display = 'none';
-  input.focus();
 }
 
 // Trigger onboarding check after initial load

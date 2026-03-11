@@ -761,11 +761,8 @@ Single-row table seeded with `1` on first migration run.
 ~~**BUG-17 (FIXED): `PATCH /transactions/{fp}` accepts `excluded` field but column doesn't exist**~~
 - Fixed in v2.25.3 (Option A — column added). Investigation found `excluded` is actively referenced in frontend `bulkExclude()` (app.js:6216). Added `excluded BOOLEAN DEFAULT FALSE` column via migration; updated backup export/restore; GET /transactions and search now hide excluded rows by default; all normalization paths skip excluded transactions. 4 new tests.
 
-**BUG-18: Two category picker implementations — `_buildCategoryPickerHTML()` not consolidated**
-- File: `app.js`, Lines: 6930-6995
-- Description: Despite PROJECT.md documenting `openCategoryPicker()` as the ONLY category picker, a second complete implementation `_buildCategoryPickerHTML()` exists with 6 supporting functions (`_openCatPicker`, `_filterCatPicker`, `_renderCatPickerOptions`, `_selectCatOption`, `_selectCatCustom`). Used by: uncategorized merchants panel (line 3491) and merchant category suggestions (line 3729). The two implementations have different behavior: A supports "Remove Category", B supports "[ Custom ]" free-text entry.
-- Impact: Low — both work, but maintenance risk of diverging behavior.
-- Fix: Consolidate into `openCategoryPicker()` with `allowCustom` option.
+~~**BUG-18 (FIXED): Two category picker implementations — `_buildCategoryPickerHTML()` not consolidated**~~
+- Fixed in v2.26.1. Extended `openCategoryPicker()` with `allowCustom` option (supports both Remove and Custom free-text). Migrated uncategorized merchants and suggested merchant categories to use unified picker. Deleted 6 dead functions (`_buildCategoryPickerHTML`, `_openCatPicker`, `_filterCatPicker`, `_renderCatPickerOptions`, `_selectCatOption`, `_selectCatCustom`).
 
 **BUG-19: `bulkAssignCategory()` uses `prompt()` instead of category picker**
 - File: `app.js`, Line: 6196
@@ -880,7 +877,7 @@ Single-row table seeded with `1` on first migration run.
 - `app.js:4569` — `deleteBudget()`: fully implemented but no UI element calls it (no delete button rendered)
 - ~~`app.js:2734` — `openSplitModal()`: wired to per-row "⚡ Split" button in v2.26.0~~
 - ~~`app.js:2832` — `unsplitTransaction()`: wired to per-row "Unsplit" button on split children in v2.26.0~~
-- `app.js:6930-6995` — `_buildCategoryPickerHTML()` + 5 helpers: second category picker implementation, should be consolidated into `openCategoryPicker()`
+- ~~`app.js:6930-6995` — `_buildCategoryPickerHTML()` + 5 helpers: consolidated into `openCategoryPicker()` with `allowCustom` in v2.26.1~~
 - `api.py:1173` — `POST /wizard/validate`: never called from frontend (validates locally instead)
 - `api.py:1304` — `GET /wizard/profiles`: never called from frontend
 - `api.py:5320` — `DELETE /recurring/override/{merchant}`: only mentioned in a JS comment, never invoked
@@ -906,7 +903,7 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 
 | Component | Count | Locations | Recommendation |
 |---|---|---|---|
-| Category picker implementations | **2** | `openCategoryPicker()` (line 6340) + `_buildCategoryPickerHTML()` (line 6930) | Consolidate to single `openCategoryPicker()` with `allowCustom` option |
+| ~~Category picker implementations~~ | ~~**2**~~ | ~~`openCategoryPicker()` (line 6340) + `_buildCategoryPickerHTML()` (line 6930)~~ | ~~Consolidated in v2.26.1~~ |
 | `prompt()` for category/tag input | **2** | `bulkAssignCategory` (line 6196), bulk tag assign (line 6234) | Replace with `openCategoryPicker()` / tag selector |
 | Income filter inline copies | **2** | `api.py:3779`, `api.py:3795` (tag totals with `tn.` alias) | Add comment referencing INCOME_FILTER; can't use constant due to table alias |
 | Income filter stale tooltip | **1** | `api.py:2606` — tooltip omits `statement_type = 'bank'` condition | Update tooltip text |
@@ -1050,7 +1047,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.26.0
+**Current Version:** v2.26.1
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -1097,6 +1094,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.26.1 | 2026-03-11 | fix: consolidate duplicate category pickers into unified openCategoryPicker with allowCustom option (BUG-18) |
 | v2.26.0 | 2026-03-11 | feat: wire split transaction UI entry point — openSplitModal and unsplitTransaction now reachable from transaction rows (audit finding) |
 | v2.25.3 | 2026-03-11 | fix: add excluded column to transactions_norm — PATCH /transactions/{fp} no longer throws on excluded field (BUG-17) |
 | v2.25.2 | 2026-03-11 | fix: batch_renormalize skips category_override transactions — manual category edits no longer silently overwritten (BUG-16) |
