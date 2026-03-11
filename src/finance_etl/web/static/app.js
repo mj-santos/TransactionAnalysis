@@ -2509,7 +2509,7 @@ function _renderTxnHeaders(p, cols, type) {
     const isSorted = c === st.sortBy;
     const arrow    = isSorted ? (st.sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
     return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}</th>`;
-  }).join('') + '<th class="text-center" style="min-width:40px;">Notes</th><th class="text-center" style="min-width:100px;">Tags</th><th class="text-center" style="min-width:90px;">Review</th>';
+  }).join('') + '<th class="text-center" style="min-width:40px;">Notes</th><th class="text-center" style="min-width:100px;">Tags</th><th class="text-center" style="min-width:90px;">Review</th><th class="text-center" style="min-width:70px;">Split</th>';
 }
 
 /**
@@ -2605,7 +2605,18 @@ function _renderTxnBody(p, rows, cols, append) {
             : '<span style="color:var(--success); font-size:11px;">&#10003;</span>'
         }</td>`
       : '<td></td>';
-    return `<tr${rowCls} data-fp="${esc(fp)}">${checkCell}${cells}${notesCell}${tagCell}${reviewCell}</tr>`;
+    // Split action cell: Split button for unsplit non-child rows, Unsplit for child rows
+    let splitCell = '<td></td>';
+    if (fp && isSplitChild) {
+      splitCell = `<td class="text-center" style="white-space:nowrap;">
+        <button class="btn btn-secondary btn-sm" style="padding:2px 6px; font-size:10px; color:var(--danger);" onclick="unsplitTransaction('${esc(row.split_parent_fingerprint)}')" title="Remove split and restore original transaction">Unsplit</button>
+      </td>`;
+    } else if (fp && !isSplitChild) {
+      splitCell = `<td class="text-center" style="white-space:nowrap;">
+        <button class="btn btn-secondary btn-sm" style="padding:2px 6px; font-size:10px;" onclick="openSplitModal('${esc(fp)}')" title="Split this transaction across multiple categories">&#9889; Split</button>
+      </td>`;
+    }
+    return `<tr${rowCls} data-fp="${esc(fp)}">${checkCell}${cells}${notesCell}${tagCell}${reviewCell}${splitCell}</tr>`;
   }).join('');
 
   if (append) {
