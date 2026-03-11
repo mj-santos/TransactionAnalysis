@@ -751,11 +751,8 @@ Single-row table seeded with `1` on first migration run.
 - Impact: Low severity — user must re-enable verbose logs after every restart. Not data-losing, but annoying.
 - Fix: Persist settings to a `user_settings` DB table or a JSON file in `data/`.
 
-**BUG-16: `batch_renormalize()` ignores `category_override` — clobbers user manual edits**
-- File: `merchant_rules.py`, Line: 345
-- Description: `batch_renormalize()` fetches ALL rows from `transactions_norm` with no `WHERE COALESCE(category_override, FALSE) = FALSE` filter. Every other normalization path (`apply_category_rules`, `renormalize_merchant`) correctly skips override rows. Clicking "Re-normalize All Transactions" on the Merchants page will silently destroy all manual category edits.
-- Impact: **HIGH** — data loss of user manual category overrides
-- Fix: Add `WHERE COALESCE(category_override, FALSE) = FALSE` to the SELECT at line 345.
+~~**BUG-16 (FIXED): `batch_renormalize()` ignores `category_override` — clobbers user manual edits**~~
+- Fixed in v2.25.2. Added `WHERE COALESCE(category_override, FALSE) = FALSE` filter to `batch_renormalize()` SELECT query. Also fixed DuckDB 1.5 compatibility issue: `ALTER TABLE ADD COLUMN IF NOT EXISTS ... DEFAULT <value>` silently resets existing BOOLEAN column values — removed `IF NOT EXISTS` from three BOOLEAN DEFAULT migrations (`unreviewed`, `is_split`, `category_override`) so re-runs raise a caught exception instead of clobbering data. 3 new tests.
 
 **BUG-17: `PATCH /transactions/{fp}` accepts `excluded` field but column doesn't exist**
 - File: `api.py`, Line: 1916
@@ -1052,7 +1049,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.25.1
+**Current Version:** v2.25.2
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -1099,6 +1096,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.25.2 | 2026-03-11 | fix: batch_renormalize skips category_override transactions — manual category edits no longer silently overwritten (BUG-16) |
 | v2.25.0 | 2026-03-10 | Merchant List category edit now merchant-level only — all transactions updated atomically, no orphaned categories; `assign_category()` writes merchant_category_map only (no longer backfills transactions_norm.category directly); `renormalize_merchant()` re-normalizes all transactions for a single merchant respecting `category_override`; `POST /normalize/apply` supports optional `merchant_filter` for targeted single-merchant re-normalization; `GET /utilities/merchants` query fixed to return one row per normalized merchant with category from `merchant_category_map` JOIN; `GET /utilities/health` includes `orphaned_categories` metric with Fix Now button; bulk assign/remove operations run sequentially with re-normalization per merchant; `DELETE /merchant-categories/{merchant}` triggers re-normalization; 6 new tests; 307 total tests |
 
 ### Version Increment Rules

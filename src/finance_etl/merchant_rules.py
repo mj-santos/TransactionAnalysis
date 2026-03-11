@@ -342,9 +342,11 @@ def batch_renormalize(db_path: str, job_id: str, batch_size: int = 500) -> None:
         cat_map = load_category_map(conn)
 
         # Fetch fingerprint + description + existing merchant + existing category
+        # Skip rows where user has manually overridden the category
         all_rows = conn.execute(
             "SELECT transaction_fingerprint, description, merchant, category "
-            "FROM transactions_norm"
+            "FROM transactions_norm "
+            "WHERE COALESCE(category_override, FALSE) = FALSE"
         ).fetchall()
 
         total = len(all_rows)
