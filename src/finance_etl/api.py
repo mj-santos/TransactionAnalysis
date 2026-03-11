@@ -1498,6 +1498,8 @@ No cloud services, no external dependencies — all data stays on your machine.
             params.append(int(tag))
         # Exclude split parents from results (children represent the split)
         where.append("COALESCE(is_split, FALSE) = FALSE")
+        # Exclude user-excluded transactions by default
+        where.append("COALESCE(excluded, FALSE) = FALSE")
         return where, params
 
     @app.get("/transactions", tags=["transactions"], summary="List transactions with filters")
@@ -1622,7 +1624,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         """
         import re as _re
 
-        where: list[str] = []
+        where: list[str] = ["COALESCE(excluded, FALSE) = FALSE"]
         params: list = []
         q_stripped = q.strip()
 
@@ -5425,7 +5427,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "ingested_at, statement_type, run_id, transaction_subtype, "
                 "resolved_amount, category_normalized, category_parent, "
                 "unreviewed, notes, is_split, split_parent_fingerprint, "
-                "category_override"
+                "category_override, excluded"
             ),
         }
         conn = _gc(db_path, read_only=True)
@@ -5660,8 +5662,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                          run_id, transaction_subtype, resolved_amount,
                          category_normalized, category_parent, unreviewed,
                          notes, is_split, split_parent_fingerprint,
-                         category_override
-                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                         category_override, excluded
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [
                         r.get("transaction_date"), r.get("posted_date"),
                         r.get("description", ""), r.get("merchant"),
@@ -5677,6 +5679,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                         r.get("notes"), r.get("is_split", False),
                         r.get("split_parent_fingerprint"),
                         r.get("category_override", False),
+                        r.get("excluded", False),
                     ],
                 )
                 tx_count += 1

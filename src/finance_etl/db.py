@@ -370,6 +370,9 @@ CREATE TABLE IF NOT EXISTS annual_reports (
 
     # ── Category Override flag ─────────────────────────────────────────────────
     "ALTER TABLE transactions_norm ADD COLUMN category_override BOOLEAN DEFAULT FALSE",
+
+    # ── Excluded flag (hide transaction from totals/queries) ──────────────────
+    "ALTER TABLE transactions_norm ADD COLUMN excluded BOOLEAN DEFAULT FALSE",
 ]
 # ---------------------------------------------------------------------------
 

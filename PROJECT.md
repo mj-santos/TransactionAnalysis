@@ -422,6 +422,7 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 | `is_split` | BOOLEAN DEFAULT FALSE | TRUE = parent row that has been split; excluded from totals (added by migration) |
 | `split_parent_fingerprint` | TEXT | FK to parent's `transaction_fingerprint`; set on child split rows (added by migration) |
 | `category_override` | BOOLEAN DEFAULT FALSE | When TRUE, category normalization jobs skip this row — preserves user's manual category edit (added by migration) |
+| `excluded` | BOOLEAN DEFAULT FALSE | When TRUE, transaction is hidden from default queries and skipped by normalization — user-excluded via bulk action (added by migration) |
 
 **Index:** `UNIQUE INDEX idx_tx_fingerprint ON transactions_norm(transaction_fingerprint)`
 
@@ -432,7 +433,7 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 - `category` → `category_rules.raw_category` (soft, not enforced)
 
 **⚠️ Schema notes:**
-- 11 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`, `notes`, `is_split`, `split_parent_fingerprint`, `category_override`
+- 12 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`, `notes`, `is_split`, `split_parent_fingerprint`, `category_override`, `excluded`
 - No explicit UNIQUE constraint on `transaction_fingerprint` in DDL — dedup relies on the separate CREATE UNIQUE INDEX statement
 
 ---
@@ -754,11 +755,8 @@ Single-row table seeded with `1` on first migration run.
 ~~**BUG-16 (FIXED): `batch_renormalize()` ignores `category_override` — clobbers user manual edits**~~
 - Fixed in v2.25.2. Added `WHERE COALESCE(category_override, FALSE) = FALSE` filter to `batch_renormalize()` SELECT query. Also fixed DuckDB 1.5 compatibility issue: `ALTER TABLE ADD COLUMN IF NOT EXISTS ... DEFAULT <value>` silently resets existing BOOLEAN column values — removed `IF NOT EXISTS` from three BOOLEAN DEFAULT migrations (`unreviewed`, `is_split`, `category_override`) so re-runs raise a caught exception instead of clobbering data. 3 new tests.
 
-**BUG-17: `PATCH /transactions/{fp}` accepts `excluded` field but column doesn't exist**
-- File: `api.py`, Line: 1916
-- Description: The allowed fields set includes `"excluded"` but no `excluded` column exists in `transactions_norm` DDL or any migration. Any PATCH request with `{"excluded": true}` will produce a DuckDB SQL error.
-- Impact: Medium — bulk "Exclude" action from the UI will fail at runtime.
-- Fix: Either add `excluded` column via migration, or remove it from allowed fields.
+~~**BUG-17 (FIXED): `PATCH /transactions/{fp}` accepts `excluded` field but column doesn't exist**~~
+- Fixed in v2.25.3 (Option A — column added). Investigation found `excluded` is actively referenced in frontend `bulkExclude()` (app.js:6216). Added `excluded BOOLEAN DEFAULT FALSE` column via migration; updated backup export/restore; GET /transactions and search now hide excluded rows by default; all normalization paths skip excluded transactions. 4 new tests.
 
 **BUG-18: Two category picker implementations — `_buildCategoryPickerHTML()` not consolidated**
 - File: `app.js`, Lines: 6930-6995
@@ -929,7 +927,7 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 
 | Table.Column | Issue |
 |---|---|
-| `transactions_norm.excluded` | Referenced in PATCH endpoint allowed fields but column does not exist in DDL or migrations |
+| ~~`transactions_norm.excluded`~~ | ~~Fixed in v2.25.3 — column added via migration, backup/restore updated, queries filter excluded rows~~ |
 | `raw_files` | Excluded from `_BACKUP_TABLES` — lost on restore; `file_hash` references become dangling |
 | `raw_files.original_path/file_size_bytes/header_json/profile_path/ingested_at` | Write-only: populated during ingest but never queried |
 | `runs.notes` | Present in DDL but never written to by any code path |
@@ -1015,7 +1013,7 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 - **`category_override` pattern**: When a user manually edits a transaction's category (via inline edit), the `category_override` flag is set to TRUE. The batch `apply_category_rules()` job and `renormalize_merchant()` both filter with `WHERE COALESCE(category_override, FALSE) = FALSE`, skipping overridden rows. Users can reset the override via the "edited" badge, which sets `category_override=FALSE` and makes the row eligible for normalization again.
 - **Merchant List category edits** ALWAYS target `merchant_category_map` and re-normalize all merchant transactions immediately via `renormalize_merchant()`. Never write `category_normalized` directly to `transactions_norm` from the Merchant List. **⚠️ AUDIT-1: `assign_category()` in `merchant_rules.py` actually DOES backfill `transactions_norm.category` directly (line 196-198)** despite this doc saying it doesn't — it writes both `merchant_category_map` AND `transactions_norm.category`. `renormalize_merchant()` is the targeted single-merchant re-normalizer that respects `category_override`. `POST /normalize/apply` accepts optional `merchant_filter` body param for targeted runs. Orphan categories (stale `category_normalized` not matching `merchant_category_map`) are detected by `GET /utilities/health` and fixed via full `POST /normalize/apply`.
 - **`resolveTransactionTab(transactions)`** derives the correct destination tab (`'credit_card'` or `'bank'`) from the `statement_type` field of fetched transaction data. Use for all navigation from mixed-context views (dashboard drill-down, reports, utilities). Never hardcode destination tab where transaction data is available. Majority wins; tie defaults to `'credit_card'`. When both CC and bank transactions exist, show an info toast telling the user to switch tabs for the rest. Tab-specific contexts (CC filter bar, bank pagination) may hardcode their own tab.
-- **Backup explicit column list policy**: `_TABLE_COLUMNS` in `api.py` maps table names to explicit SELECT column lists for backup export. Only `transactions_norm` currently needs this (26 columns, 11 from migrations). Other tables without migration-added columns continue using `SELECT *`. When adding migration columns to `transactions_norm`, update both `_TABLE_COLUMNS` and the restore INSERT statement.
+- **Backup explicit column list policy**: `_TABLE_COLUMNS` in `api.py` maps table names to explicit SELECT column lists for backup export. Only `transactions_norm` currently needs this (27 columns, 12 from migrations). Other tables without migration-added columns continue using `SELECT *`. When adding migration columns to `transactions_norm`, update both `_TABLE_COLUMNS` and the restore INSERT statement.
 - **Docker BuildKit cache corruption**: If Docker build fails with `parent snapshot does not exist` or similar layer cache errors, run `docker builder prune --all --force` before investigating code. Cache corruption from failed builds is a known Docker BuildKit issue and is not always a code problem.
 - **Dark mode implementation**: Uses `[data-theme="dark"]` attribute on `<html>`, toggled via `toggleTheme()` in sidebar header. Persisted to `localStorage('spendly-theme')`. Initialized on page load via IIFE `_initTheme()` before first render. 11 of 19 root CSS variables have dark overrides. Accent colors (`--primary`, `--success`, `--danger`, `--warning`, `--staged`) intentionally keep their light-mode values (readable on dark backgrounds). Approximately 15 hardcoded color values remain in minor elements (file chip states, run status badges, alert banners) — these have dark-specific overrides via `[data-theme="dark"] .class` rules. Remaining hardcoded inline styles in app.js (e.g., inline `style="color:#22c55e"` for status colors) are impractical to convert to CSS variables without major refactoring — a future sprint could address these via data attributes or class-based styling.
 
@@ -1049,7 +1047,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.25.2
+**Current Version:** v2.25.3
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -1096,6 +1094,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.25.3 | 2026-03-11 | fix: add excluded column to transactions_norm — PATCH /transactions/{fp} no longer throws on excluded field (BUG-17) |
 | v2.25.2 | 2026-03-11 | fix: batch_renormalize skips category_override transactions — manual category edits no longer silently overwritten (BUG-16) |
 | v2.25.0 | 2026-03-10 | Merchant List category edit now merchant-level only — all transactions updated atomically, no orphaned categories; `assign_category()` writes merchant_category_map only (no longer backfills transactions_norm.category directly); `renormalize_merchant()` re-normalizes all transactions for a single merchant respecting `category_override`; `POST /normalize/apply` supports optional `merchant_filter` for targeted single-merchant re-normalization; `GET /utilities/merchants` query fixed to return one row per normalized merchant with category from `merchant_category_map` JOIN; `GET /utilities/health` includes `orphaned_categories` metric with Fix Now button; bulk assign/remove operations run sequentially with re-normalization per merchant; `DELETE /merchant-categories/{merchant}` triggers re-normalization; 6 new tests; 307 total tests |
 
