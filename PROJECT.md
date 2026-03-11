@@ -439,6 +439,17 @@ All tables live in `data/db/finance.duckdb`. Schema is bootstrapped and migrated
 - 12 columns exist only via migration, not in base DDL: `statement_type`, `run_id`, `transaction_subtype`, `resolved_amount`, `category_normalized`, `category_parent`, `unreviewed`, `notes`, `is_split`, `split_parent_fingerprint`, `category_override`, `excluded`
 - No explicit UNIQUE constraint on `transaction_fingerprint` in DDL — dedup relies on the separate CREATE UNIQUE INDEX statement
 
+**Fingerprint formula** (`utils/fingerprint.py:compute_fingerprint`):
+```
+SHA-256( bank_name.strip() | account_id.strip() | transaction_date.isoformat() | normalize_for_fingerprint(description) | amount:.2f | currency.strip().upper() )
+```
+- `normalize_for_fingerprint(description)` = `re.sub(r"\s+", " ", raw.strip().upper())` — uppercased, whitespace-collapsed
+- Fields joined with `"|"` separator, encoded as UTF-8 before hashing
+- Single implementation: `utils/fingerprint.py` called only from `normalize.py:_normalize_row()` (line 229)
+- **Indexed**: YES — `CREATE UNIQUE INDEX idx_tx_fingerprint ON transactions_norm(transaction_fingerprint)`
+- **Stability**: Stable across re-imports IF the bank exports identical field values. Description normalization handles whitespace and case differences. Amount normalization via `parse_signed()` handles `$1,234.56` vs `1234.56`. Date normalization via `parse_date()` handles format differences. However, semantic description changes between exports (e.g. "PENDING AMAZON" → "AMAZON.COM") produce different fingerprints
+- **account_id IS part of the fingerprint** — same transaction on different accounts will NOT collide
+
 ---
 
 ### `duplicate_candidates` — near-duplicate detection results
@@ -863,6 +874,83 @@ Single-row table seeded with `1` on first migration run.
 - **`category` vs `category_normalized`**: `transactions_norm.category` holds the raw bank category string; `category_normalized` holds the applied rule result. If a transaction was imported without a bank category, `category_normalized` and `category_parent` will be NULL even after running Apply Normalization.
 - **`runs.status` value `'committing'`** exists in the UI state machine but is never persisted to the DB — it lives only in the `_async_runs` in-memory dict.
 
+### Audit 2 — Import Pipeline & Duplicate Detection (2026-03-11)
+
+#### FINGERPRINT MECHANISM
+- **Formula**: `SHA-256(bank_name | account_id | date(ISO) | UPPER(description) | amount(.2f) | currency)`
+- **Stable across re-imports**: Conditional — stable if bank exports identical text. Whitespace and case differences are normalized. Amount formatting differences (`$1,234.56` vs `1234.56`) are handled by `parse_signed()`. Date format differences handled by `parse_date()`. BUT: description text changes between exports (pending → settled, truncation differences) break stability.
+- **Single implementation**: Yes — `utils/fingerprint.py:compute_fingerprint()`, called only from `normalize.py:_normalize_row()` line 229.
+- **Indexed**: Yes — `UNIQUE INDEX idx_tx_fingerprint` on `transactions_norm(transaction_fingerprint)`.
+- **Duplicate handling**: Silent skip in `load.py:load_normalized()` — SELECT check before INSERT, counter incremented, logged at INFO level. User is NOT notified of skipped duplicates.
+
+#### FILE HASH MECHANISM
+- **Purpose**: Audit log only — NOT a dedup gate.
+- **Computed from**: SHA-256 of raw file bytes via `utils/hashing.py:sha256_file()`.
+- **Checked at**: `ingest.py:register_files()` — before staging.
+- **Duplicate behavior**: If `file_hash` exists in `raw_files`, INSERT is skipped but pipeline continues through stage/normalize/load. Log message: "File already registered (skipping)" at INFO level. **No user-facing message or warning.**
+
+#### SCENARIO RESULTS
+
+**Scenario 1 — Same file imported twice**: ✅ No duplicates created. File hash check logs skip (audit only). Pipeline continues, fingerprints match, all rows skipped at load stage. `rows_loaded = 0`. User sees success with 0 loaded rows but no explanation of why.
+
+**Scenario 2 — Renamed copy of same file**: ✅ No duplicates created. File content is identical → same file_hash. Same outcome as Scenario 1.
+
+**Scenario 3 — Monthly overlap (MOST IMPORTANT)**: ⚠️ CONDITIONAL. If the overlapping transactions have identical bank_name + account_id + date + description + amount + currency in both exports → fingerprints match → deduplicated correctly. **However**, if the bank alters description text between exports (e.g., pending marker removed, description truncated differently, reference numbers change), fingerprints differ → **duplicate transactions created silently**. No overlap date range warning is shown. No preview indication of which rows already exist. The `duplicate_candidates` fuzzy matcher MAY catch some if merchant/amount/date are close, but only after commit — not preventatively.
+
+**Scenario 4 — Bank re-export with amount change**: ❌ **Both versions stored.** Different file → different file_hash → not caught. Different amount → different fingerprint → not caught at dedup. `duplicate_candidates` may flag if amount within 1% and same merchant, but user must manually resolve. No mechanism to update the original transaction.
+
+**Scenario 5 — Different accounts, same transaction amounts**: ✅ No false collision. `account_id` IS part of the fingerprint formula. Two legitimate transactions on different accounts with same date/amount/description will have different fingerprints.
+
+#### DUPLICATE_CANDIDATES
+- **Populated by**: `_detect_duplicates(run_id)` in `api.py`, called synchronously within `_commit_bg()` after successful commit.
+- **Algorithm**: For each new transaction (by run_id), find existing transactions (different run_id, not split) where: `LOWER(COALESCE(merchant, description))` matches exactly AND `ABS(amount_diff) <= 1% of amount` AND `ABS(date_diff) <= 3 days`. Similarity score: `1.0 - (amt_diff_pct * 0.5) - (day_diff / 3.0 * 0.3)`, clamped to [0, 1].
+- **Catches overlap scenario**: Only for near-misses where fingerprints differ but data is similar. Exact fingerprint duplicates are already prevented by the UNIQUE index, so they never reach `duplicate_candidates`. Scenarios where description text changes slightly between exports AND amount stays the same → yes, caught. Scenarios where both description and amount change → may not be caught.
+- **User resolution flow**: Utilities → Duplicate Review. Three actions: "Keep Both" (marks not_duplicate), "Remove Newer" (deletes fingerprint_b from transactions_norm, marks confirmed_duplicate), "Not a Duplicate" (marks not_duplicate). Banner notification shown on import page when duplicates detected.
+- **Limitation**: Detection only compares new import vs existing data. Does not run cross-run detection on older data. If two overlapping imports happen before either is committed, duplicates between them are not detected.
+
+#### IMPORT UX
+- **Post-import feedback**: Status card shows: rows_in, rows_staged, rows_normalized, rows_loaded, errors_count. **`dupes_skipped` is NOT shown** — the count exists in `load.py` return value but is never propagated to the `counts` dict or API response.
+- **Preview before commit**: Yes — `preview_only=true` stages the run, shows first 200 rows in a preview table. User can commit or discard. However, the preview does NOT indicate which rows are duplicates or will be skipped.
+- **Overlap warning**: No — there is no date range overlap detection. If the user imports March data and February data already has overlapping dates, no warning is shown.
+- **Failed import cleanup**: `runs` table row updated to "failed" status. `raw_files` row persists (orphaned if no transactions loaded). `transactions_stage` rows persist until purged. No automatic cleanup of orphaned staging data.
+
+#### GAPS FOUND (ranked by user impact)
+
+**CRITICAL — can cause silent data corruption:**
+1. **BUG-21: Monthly overlap can create duplicate transactions when bank changes description text between exports.** Fingerprint-based dedup depends on exact description match after normalization. Banks commonly alter descriptions between monthly exports (pending markers, reference number changes, truncation). Duplicated transactions double amounts in all totals, budgets, and reports with no user-visible warning. `duplicate_candidates` may catch some after the fact, but is not guaranteed.
+2. **BUG-22: Bank re-export with settled amount change creates parallel transaction records.** If a pending transaction settles at a different amount, both the pending and settled versions coexist in the DB. No mechanism to update or replace the original. `duplicate_candidates` only flags if amounts are within 1%.
+
+**HIGH — causes wrong data with user visible symptoms:**
+3. **BUG-23: `dupes_skipped` count is computed but never shown to user.** `load_normalized()` returns `{"rows_loaded": N, "dupes_skipped": M}` but `pipeline.py` only reads `rows_loaded`. The API response and UI status card never show how many rows were skipped as duplicates. Users importing overlapping files see `rows_loaded` < `rows_in` with no explanation. Could be mistaken for data loss.
+4. **BUG-24: No date range overlap warning during import.** When importing a file whose date range overlaps with existing data, no warning is shown at any stage (upload, preview, or commit). Users have no way to know that overlapping transactions exist before committing.
+
+**MEDIUM — causes confusion but no data loss:**
+5. **BUG-25: Import preview does not flag duplicate rows.** The staged preview table shows all normalized rows but does not indicate which ones already exist in the ledger and will be skipped on commit. Users cannot assess the impact of an import before committing.
+6. **BUG-26: `file_hash` check in `register_files()` is a no-op for dedup.** The check logs "already registered" but the pipeline continues regardless. This creates a false sense of dedup safety — the file_hash layer appears to be a gate but is actually just an audit log. No user-facing message is shown.
+7. **BUG-27: Failed/partial imports leave orphaned `transactions_stage` and `raw_files` rows.** If an import fails partway through, staging rows and file registry entries persist. No cleanup mechanism exists. Over time this accumulates dead data.
+
+**LOW — minor UX friction:**
+8. **BUG-28: `duplicate_candidates` detection only runs after commit, not during preview.** Users cannot see potential near-duplicates before committing data. The detection would be more useful as a preview-time warning.
+
+#### RECOMMENDED FIXES (do not implement — list only)
+
+**Priority 1 — Data integrity gaps:**
+- Add import-time duplicate preview: during the staged/preview phase, compare fingerprints against existing `transactions_norm` and flag matches in the preview table (solves BUG-25)
+- Surface `dupes_skipped` count in the API response and UI status card (solves BUG-23)
+- Add date range overlap warning: compare incoming transaction date range against existing data per account and warn if overlap detected (solves BUG-24)
+- Consider fuzzy fingerprint matching as a pre-commit check for the monthly overlap scenario (partially solves BUG-21)
+
+**Priority 2 — UX gaps:**
+- Show "N rows skipped (duplicate)" in the post-import status card alongside rows_loaded
+- Add a "duplicates detected" column to the preview table marking rows that will be skipped
+- Run `_detect_duplicates` logic during preview phase (not just after commit) and show results (solves BUG-28)
+- Make `register_files()` either block duplicate files with a user-visible warning or remove the check entirely to avoid false confidence (solves BUG-26)
+
+**Priority 3 — Performance / cleanup gaps:**
+- Add cleanup job for orphaned `transactions_stage` rows from failed imports (solves BUG-27)
+- Add cleanup for orphaned `raw_files` entries with no corresponding transactions
+- Consider batch INSERT for `load_normalized()` instead of row-by-row SELECT+INSERT (current approach does N+1 queries for N rows)
+
 ### Dead / Unreferenced Code
 
 - ~~`resolve_category()` — removed (v2.2.0).~~
@@ -1013,6 +1101,12 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 - **`category_override` pattern**: When a user manually edits a transaction's category (via inline edit), the `category_override` flag is set to TRUE. The batch `apply_category_rules()` job and `renormalize_merchant()` both filter with `WHERE COALESCE(category_override, FALSE) = FALSE`, skipping overridden rows. Users can reset the override via the "edited" badge, which sets `category_override=FALSE` and makes the row eligible for normalization again.
 - **Merchant List category edits** ALWAYS target `merchant_category_map` and re-normalize all merchant transactions immediately via `renormalize_merchant()`. Never write `category_normalized` directly to `transactions_norm` from the Merchant List. **⚠️ AUDIT-1: `assign_category()` in `merchant_rules.py` actually DOES backfill `transactions_norm.category` directly (line 196-198)** despite this doc saying it doesn't — it writes both `merchant_category_map` AND `transactions_norm.category`. `renormalize_merchant()` is the targeted single-merchant re-normalizer that respects `category_override`. `POST /normalize/apply` accepts optional `merchant_filter` body param for targeted runs. Orphan categories (stale `category_normalized` not matching `merchant_category_map`) are detected by `GET /utilities/health` and fixed via full `POST /normalize/apply`.
 - **`resolveTransactionTab(transactions)`** derives the correct destination tab (`'credit_card'` or `'bank'`) from the `statement_type` field of fetched transaction data. Use for all navigation from mixed-context views (dashboard drill-down, reports, utilities). Never hardcode destination tab where transaction data is available. Majority wins; tie defaults to `'credit_card'`. When both CC and bank transactions exist, show an info toast telling the user to switch tabs for the rest. Tab-specific contexts (CC filter bar, bank pagination) may hardcode their own tab.
+- **Import dedup strategy — two layers, one gap**:
+  - **Layer 1 — File hash** (`raw_files.file_hash`): SHA-256 of raw file bytes. Checked in `ingest.py:register_files()`. If hash exists, the INSERT into `raw_files` is skipped BUT the pipeline continues — staging, normalization, and load all proceed. This is an **audit log only**, not a gate. The same file reimported will not be blocked.
+  - **Layer 2 — Transaction fingerprint** (`transactions_norm.transaction_fingerprint`): UNIQUE index. In `load.py:load_normalized()`, each row is checked with `SELECT 1 WHERE transaction_fingerprint = ?` before INSERT. Duplicates are silently skipped (counter incremented, logged). This is the **primary dedup mechanism**.
+  - **Layer 3 — Near-duplicate detection** (`duplicate_candidates`): Post-commit fuzzy matching via `_detect_duplicates()` in `api.py`. Compares new transactions against existing by: same LOWER(merchant or description), amount within 1%, date within 3 days. Flags candidates for user review. Does NOT prevent insertion — only flags after the fact.
+  - **Gap**: `dupes_skipped` count from `load_normalized()` is returned but never propagated to the API response or shown in the UI. Users see `rows_loaded` (which excludes dupes) but have no indication that rows were skipped or why.
+  - **Pipeline flow**: upload → file_hash check (log only) → stage → normalize → fingerprint → load (dedup here) → duplicate detection (fuzzy, post-commit)
 - **Backup explicit column list policy**: `_TABLE_COLUMNS` in `api.py` maps table names to explicit SELECT column lists for backup export. Only `transactions_norm` currently needs this (27 columns, 12 from migrations). Other tables without migration-added columns continue using `SELECT *`. When adding migration columns to `transactions_norm`, update both `_TABLE_COLUMNS` and the restore INSERT statement.
 - **Docker BuildKit cache corruption**: If Docker build fails with `parent snapshot does not exist` or similar layer cache errors, run `docker builder prune --all --force` before investigating code. Cache corruption from failed builds is a known Docker BuildKit issue and is not always a code problem.
 - **Dark mode implementation**: Uses `[data-theme="dark"]` attribute on `<html>`, toggled via `toggleTheme()` in sidebar header. Persisted to `localStorage('spendly-theme')`. Initialized on page load via IIFE `_initTheme()` before first render. 11 of 19 root CSS variables have dark overrides. Accent colors (`--primary`, `--success`, `--danger`, `--warning`, `--staged`) intentionally keep their light-mode values (readable on dark backgrounds). Approximately 15 hardcoded color values remain in minor elements (file chip states, run status badges, alert banners) — these have dark-specific overrides via `[data-theme="dark"] .class` rules. Remaining hardcoded inline styles in app.js (e.g., inline `style="color:#22c55e"` for status colors) are impractical to convert to CSS variables without major refactoring — a future sprint could address these via data attributes or class-based styling.
