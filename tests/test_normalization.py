@@ -57,6 +57,26 @@ def _seed_merchant_category(db_path, merchant, category):
     conn.close()
 
 
+def _seed_transactions_with_desc(db_path, rows):
+    """Seed transactions_norm rows with custom descriptions.
+
+    Each row is (fingerprint, description, merchant, amount).
+    """
+    conn = get_connection(db_path)
+    for fp, desc, merchant, amount in rows:
+        conn.execute(
+            "INSERT INTO transactions_norm "
+            "(transaction_fingerprint, transaction_date, description, amount, merchant, "
+            " category, category_normalized, category_parent, category_override, "
+            " statement_type, run_id, bank_name, account_name, account_id, "
+            " source_file, source_row, file_hash) "
+            "VALUES (?, '2024-06-01', ?, ?, ?, NULL, NULL, NULL, FALSE, "
+            "'bank', 'run1', 'TestBank', 'Acct', 'a1', 'f.csv', 1, 'h1')",
+            [fp, desc, amount, merchant],
+        )
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # 1. batch_renormalize skips category_override=TRUE transactions
 # ---------------------------------------------------------------------------
@@ -229,3 +249,150 @@ def test_batch_renormalize_updates_category_normalized_and_parent(tmp_path: Path
             f"{fp}: category_parent should not be None"
         )
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 5. Fuzzy merge groups similar descriptions
+# ---------------------------------------------------------------------------
+
+def test_fuzzy_merge_groups_similar_descriptions(tmp_path: Path):
+    """Similar description cores should be merged into one suggestion group."""
+    from finance_etl.merchant_rules import analyze_descriptions
+
+    _client, db_path = _make_client(tmp_path)
+
+    _seed_transactions_with_desc(db_path, [
+        ("fp1", "BEST WESTERN INN S REEDSPORT OR", None, -120.00),
+        ("fp2", "BEST WESTERN SEVEN S SAN DIEGO CA", None, -150.00),
+        ("fp3", "BEST WESTERN PLUS PORTLAND OR", None, -130.00),
+    ])
+
+    conn = get_connection(db_path, read_only=True)
+    suggestions = analyze_descriptions(
+        conn, min_transactions=1, fuzzy_threshold=0.75, include_low_frequency=True,
+    )
+    conn.close()
+
+    # All three Best Western variants should be in one group
+    bw = [s for s in suggestions if "best western" in s["merchant"].lower()]
+    assert len(bw) == 1, f"Expected 1 Best Western group, got {len(bw)}: {bw}"
+    assert bw[0]["num_variants"] >= 2, "Should have merged multiple variants"
+    assert bw[0]["fuzzy_merged"] is True
+
+
+def test_fuzzy_does_not_merge_dissimilar(tmp_path: Path):
+    """Dissimilar descriptions should remain separate groups."""
+    from finance_etl.merchant_rules import analyze_descriptions
+
+    _client, db_path = _make_client(tmp_path)
+
+    _seed_transactions_with_desc(db_path, [
+        ("fp1", "WALMART SUPERCENTER 1234", None, -80.00),
+        ("fp2", "WALGREENS PHARMACY 5678", None, -25.00),
+    ])
+
+    conn = get_connection(db_path, read_only=True)
+    suggestions = analyze_descriptions(
+        conn, min_transactions=1, fuzzy_threshold=0.75, include_low_frequency=True,
+    )
+    conn.close()
+
+    merchants = [s["merchant"].lower() for s in suggestions]
+    # Both should appear as separate suggestions
+    walmart = [m for m in merchants if "walmart" in m]
+    walgreens = [m for m in merchants if "walgreens" in m]
+    assert len(walmart) >= 1, "Walmart should appear"
+    assert len(walgreens) >= 1, "Walgreens should appear"
+
+
+# ---------------------------------------------------------------------------
+# 6. auto_normalize_unmatched
+# ---------------------------------------------------------------------------
+
+def test_auto_normalize_unmatched(tmp_path: Path):
+    """Auto-normalize sets merchant from description for NULL-merchant rows."""
+    from finance_etl.merchant_rules import auto_normalize_unmatched
+
+    _client, db_path = _make_client(tmp_path)
+
+    _seed_transactions_with_desc(db_path, [
+        ("fp1", "TRADER JOES #123 LOS ANGELES CA", None, -45.00),
+        ("fp2", "COSTCO WHSE #456 SAN DIEGO CA", None, -200.00),
+    ])
+
+    conn = get_connection(db_path)
+    count = auto_normalize_unmatched(conn)
+    conn.close()
+
+    assert count == 2
+
+    conn = get_connection(db_path, read_only=True)
+    r1 = conn.execute(
+        "SELECT merchant FROM transactions_norm WHERE transaction_fingerprint='fp1'"
+    ).fetchone()
+    r2 = conn.execute(
+        "SELECT merchant FROM transactions_norm WHERE transaction_fingerprint='fp2'"
+    ).fetchone()
+    conn.close()
+
+    assert r1[0] is not None, "fp1 merchant should be set"
+    assert r2[0] is not None, "fp2 merchant should be set"
+
+
+def test_auto_normalize_skips_existing_merchants(tmp_path: Path):
+    """Auto-normalize should not touch rows that already have a merchant."""
+    from finance_etl.merchant_rules import auto_normalize_unmatched
+
+    _client, db_path = _make_client(tmp_path)
+
+    _seed_transactions_with_desc(db_path, [
+        ("fp1", "TRADER JOES #123", "Trader Joe's", -45.00),
+    ])
+
+    conn = get_connection(db_path)
+    count = auto_normalize_unmatched(conn)
+    conn.close()
+
+    assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# 7. Low-frequency includes singletons
+# ---------------------------------------------------------------------------
+
+def test_low_frequency_includes_singletons(tmp_path: Path):
+    """With include_low_frequency=True, single-transaction descriptions appear."""
+    from finance_etl.merchant_rules import analyze_descriptions
+
+    _client, db_path = _make_client(tmp_path)
+
+    _seed_transactions_with_desc(db_path, [
+        ("fp1", "UNIQUE COFFEE SHOP PORTLAND OR", None, -5.00),
+    ])
+
+    conn = get_connection(db_path, read_only=True)
+    suggestions = analyze_descriptions(
+        conn, min_transactions=3, include_low_frequency=True,
+    )
+    conn.close()
+
+    # Should appear (count=1 < min_transactions=3 but include_low_frequency=True)
+    assert len(suggestions) >= 1, "Singleton should appear with include_low_frequency=True"
+    assert suggestions[0]["count"] == 1
+
+
+def test_low_frequency_excluded_by_default(tmp_path: Path):
+    """Without include_low_frequency, singletons are excluded."""
+    from finance_etl.merchant_rules import analyze_descriptions
+
+    _client, db_path = _make_client(tmp_path)
+
+    _seed_transactions_with_desc(db_path, [
+        ("fp1", "UNIQUE COFFEE SHOP PORTLAND OR", None, -5.00),
+    ])
+
+    conn = get_connection(db_path, read_only=True)
+    suggestions = analyze_descriptions(conn, min_transactions=3)
+    conn.close()
+
+    assert len(suggestions) == 0, "Singleton should NOT appear without include_low_frequency"

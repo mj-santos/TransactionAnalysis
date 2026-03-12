@@ -515,6 +515,8 @@ def analyze_descriptions(
     conn,
     min_transactions: int = 3,
     max_suggestions: int = 50,
+    fuzzy_threshold: float = 0.75,
+    include_low_frequency: bool = False,
 ) -> list[dict]:
     """
     Analyze transaction descriptions to suggest merchant normalization rules.
@@ -524,11 +526,14 @@ def analyze_descriptions(
       2. Skip descriptions already matched by an existing rule.
       3. Strip noise from each description to extract a merchant "core".
       4. Group descriptions by their core.
-      5. Emit a suggestion for every group whose total transaction count ≥ min_transactions.
-      6. Sort by count desc and return the top max_suggestions.
+      5. Fuzzy-merge similar cores using token_sort_ratio (rapidfuzz).
+      6. Emit a suggestion for every group whose total transaction count ≥ min_transactions
+         (or ≥ 1 if include_low_frequency is True).
+      7. Sort by count desc and return the top max_suggestions.
 
     Returns a list of suggestion dicts:
-      {pattern, match_type, merchant, count, num_variants, sample_descriptions}
+      {pattern, match_type, merchant, count, num_variants, sample_descriptions,
+       fuzzy_merged, merged_cores}
     """
     from collections import defaultdict
 
@@ -555,10 +560,50 @@ def analyze_descriptions(
             continue
         groups[core].append((raw_desc, int(cnt)))
 
+    # --- Fuzzy merge pass: cluster similar cores ---
+    try:
+        from rapidfuzz import fuzz as _rfuzz
+    except ImportError:
+        _rfuzz = None  # type: ignore[assignment]
+
+    if _rfuzz and fuzzy_threshold < 1.0:
+        core_keys = list(groups.keys())
+        merged: dict[str, list[tuple[str, int]]] = {}
+        merged_core_map: dict[str, list[str]] = {}  # label -> original cores
+        used: set[int] = set()
+
+        for i, key_a in enumerate(core_keys):
+            if i in used:
+                continue
+            cluster = list(groups[key_a])
+            cluster_label = key_a
+            cluster_cores = [key_a]
+            for j in range(i + 1, len(core_keys)):
+                if j in used:
+                    continue
+                key_b = core_keys[j]
+                similarity = _rfuzz.token_set_ratio(key_a, key_b) / 100.0
+                if similarity >= fuzzy_threshold:
+                    cluster.extend(groups[key_b])
+                    cluster_cores.append(key_b)
+                    used.add(j)
+                    # Keep the shorter core as the cluster label (more generic)
+                    if len(key_b) < len(cluster_label):
+                        cluster_label = key_b
+            used.add(i)
+            merged[cluster_label] = cluster
+            merged_core_map[cluster_label] = cluster_cores
+
+        groups = merged  # type: ignore[assignment]
+    else:
+        merged_core_map = {k: [k] for k in groups}
+
+    effective_min = 1 if include_low_frequency else min_transactions
+
     suggestions: list[dict] = []
     for core, items in groups.items():
         total_count = sum(cnt for _, cnt in items)
-        if total_count < min_transactions:
+        if total_count < effective_min:
             continue
 
         items_sorted = sorted(items, key=lambda x: x[1], reverse=True)
@@ -573,16 +618,48 @@ def analyze_descriptions(
         all_start = all(d.lower().startswith(core_lower) for d, _ in items)
         match_type = "startswith" if (all_start and len(core) >= 4) else "contains"
 
+        cores_in_cluster = merged_core_map.get(core, [core])
+        was_merged = len(cores_in_cluster) > 1
+
         suggestions.append({
-            "pattern":            core,
-            "match_type":         match_type,
-            "merchant":           _merchant_name_from_core(core),
-            "count":              total_count,
-            "num_variants":       len(items),
+            "pattern":             core,
+            "match_type":          match_type,
+            "merchant":            _merchant_name_from_core(core),
+            "count":               total_count,
+            "num_variants":        len(items),
             "sample_descriptions": sample_descs,
+            "fuzzy_merged":        was_merged,
+            "merged_cores":        cores_in_cluster if was_merged else [],
         })
 
     return sorted(suggestions, key=lambda x: x["count"], reverse=True)[:max_suggestions]
+
+
+def auto_normalize_unmatched(conn) -> int:
+    """
+    For every transactions_norm row where merchant IS NULL,
+    set merchant = titlecased stripped description.
+
+    Returns count of rows updated.
+    """
+    rows = conn.execute(
+        "SELECT transaction_fingerprint, description FROM transactions_norm "
+        "WHERE merchant IS NULL AND description IS NOT NULL"
+    ).fetchall()
+
+    count = 0
+    for fp, desc in rows:
+        core = _strip_description(desc)
+        if not core or len(core) < 2:
+            continue
+        merchant = _merchant_name_from_core(core)
+        conn.execute(
+            "UPDATE transactions_norm SET merchant = ? "
+            "WHERE transaction_fingerprint = ?",
+            [merchant, fp],
+        )
+        count += 1
+    return count
 
 
 # ---------------------------------------------------------------------------

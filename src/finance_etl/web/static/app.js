@@ -3797,14 +3797,21 @@ async function assignCategory(merchant) {
 let _ruleSuggestions = [];   // {pattern, match_type, merchant, count, num_variants, sample_descriptions}
 let _catSuggestions  = [];   // {merchant, suggested_category, confidence}
 
+let _lowFreqSuggestions = [];   // low-frequency rule suggestions
+
 function _clearSuggestions() {
   _ruleSuggestions = [];
+  _lowFreqSuggestions = [];
   const rl = document.getElementById('rule-suggestions-list');
   if (rl) rl.innerHTML = '';
   const raBtn = document.getElementById('rule-suggest-accept-all');
   if (raBtn) raBtn.style.display = 'none';
   const rs = document.getElementById('rule-suggest-status');
   if (rs) rs.textContent = '';
+  const lf = document.getElementById('low-freq-list');
+  if (lf) lf.innerHTML = '';
+  const lfs = document.getElementById('low-freq-section');
+  if (lfs) lfs.style.display = 'none';
 }
 
 async function loadRuleSuggestions() {
@@ -3815,29 +3822,59 @@ async function loadRuleSuggestions() {
 
   statusEl.textContent = 'Analyzing…';
   listEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">
-    Scanning transaction descriptions — this may take a moment…
+    Scanning transaction descriptions with fuzzy matching — this may take a moment…
   </div>`;
   acceptAllBtn.style.display = 'none';
 
   try {
-    const data = await api('GET', '/merchant-rules/suggestions');
+    const data = await api('GET', '/merchant-rules/suggestions?include_low_frequency=true');
     _ruleSuggestions = data.suggestions || [];
+    _lowFreqSuggestions = data.low_frequency || [];
 
-    if (!_ruleSuggestions.length) {
+    if (!_ruleSuggestions.length && !_lowFreqSuggestions.length) {
       statusEl.textContent = 'No new suggestions found.';
       listEl.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">
-        All common patterns are already covered by your existing rules, or you don't have enough transaction data yet (minimum 3 transactions per pattern).
+        All common patterns are already covered by your existing rules, or you don't have enough transaction data yet.
       </span>`;
       return;
     }
 
-    statusEl.textContent = `${_ruleSuggestions.length} suggestion${_ruleSuggestions.length > 1 ? 's' : ''} found`;
-    acceptAllBtn.style.display = '';
+    const parts = [];
+    if (_ruleSuggestions.length) parts.push(`${_ruleSuggestions.length} suggestion${_ruleSuggestions.length > 1 ? 's' : ''}`);
+    if (_lowFreqSuggestions.length) parts.push(`${_lowFreqSuggestions.length} low-frequency`);
+    statusEl.textContent = parts.join(' + ') + ' found';
+    if (_ruleSuggestions.length) acceptAllBtn.style.display = '';
     _renderRuleSuggestions();
+    _renderLowFreqSuggestions();
   } catch (err) {
     statusEl.textContent = `Error: ${err.message}`;
     listEl.innerHTML = '';
   }
+}
+
+async function autoNormalizeUnmatched() {
+  const btn = document.getElementById('auto-fill-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = 'Working…';
+  try {
+    const r = await api('POST', '/normalize/auto-fill');
+    toast(`Auto-filled ${r.rows_updated} transaction${r.rows_updated !== 1 ? 's' : ''}`, 'success');
+    loadMerchantAnalytics();
+    loadUncategorized();
+  } catch (e) {
+    toast('Auto-fill failed: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
+function toggleLowFreqSection() {
+  const cb = document.getElementById('show-low-freq');
+  const list = document.getElementById('low-freq-list');
+  if (list) list.style.display = cb && cb.checked ? '' : 'none';
 }
 
 function _renderRuleSuggestions() {
@@ -3852,28 +3889,56 @@ function _renderRuleSuggestions() {
   }
   listEl.innerHTML = visible.map((s, visIdx) => {
     const realIdx = _ruleSuggestions.indexOf(s);
-    const samples = (s.sample_descriptions || []).slice(0, 3).map(d => `<span class="mono" style="font-size:11px;">${esc(d)}</span>`).join('<br>');
-    const matchBadgeColor = s.match_type === 'startswith' ? '#3b82f6' : '#8b5cf6';
-    const variantNote = s.num_variants > 1 ? ` · ${s.num_variants} variants` : '';
-    return `
-      <div style="display:flex; gap:12px; align-items:flex-start; padding:10px 12px; background:var(--bg-alt,#f8faff); border-radius:8px; border:1px solid var(--border);">
-        <div style="flex:1; min-width:0;">
-          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
-            <span style="font-size:11px; font-weight:600; background:${matchBadgeColor}22; color:${matchBadgeColor}; border-radius:4px; padding:2px 6px;">${esc(s.match_type)}</span>
-            <span class="mono" style="font-size:13px; font-weight:600;">${esc(s.pattern)}</span>
-            <span style="color:var(--text-muted); font-size:12px;">→</span>
-            <span style="font-size:13px; font-weight:500;">${esc(s.merchant)}</span>
-            <span style="font-size:11px; color:var(--text-muted); background:#e2e8f0; border-radius:10px; padding:1px 8px;">${s.count} tx${variantNote}</span>
-          </div>
-          <div style="color:var(--text-muted); font-size:11px; line-height:1.6;">${samples}</div>
-        </div>
-        <div style="display:flex; gap:6px; flex-shrink:0;">
-          <button class="btn btn-primary btn-sm" onclick="acceptRuleSuggestion(${realIdx})" title="Create this rule">✓ Accept</button>
-          <button class="btn btn-secondary btn-sm" onclick="editRuleSuggestion(${realIdx})" title="Edit before saving">Edit</button>
-          <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissRuleSuggestion(${realIdx})" title="Dismiss">✗</button>
-        </div>
-      </div>`;
+    return _renderSuggestionRow(s, realIdx, 'std');
   }).join('');
+}
+
+function _renderLowFreqSuggestions() {
+  const section = document.getElementById('low-freq-section');
+  const listEl = document.getElementById('low-freq-list');
+  if (!section || !listEl) return;
+  if (!_lowFreqSuggestions.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  _updateBadge('low-freq-count', _lowFreqSuggestions.length);
+  const cb = document.getElementById('show-low-freq');
+  listEl.style.display = cb && cb.checked ? '' : 'none';
+  const visible = _lowFreqSuggestions.filter(s => !s._dismissed);
+  listEl.innerHTML = visible.map((s, visIdx) => {
+    const realIdx = _lowFreqSuggestions.indexOf(s);
+    return _renderSuggestionRow(s, realIdx, 'lf');
+  }).join('');
+}
+
+function _renderSuggestionRow(s, idx, pool) {
+  const samples = (s.sample_descriptions || []).slice(0, 3).map(d => `<span class="mono" style="font-size:11px;">${esc(d)}</span>`).join('<br>');
+  const matchBadgeColor = s.match_type === 'startswith' ? '#3b82f6' : '#8b5cf6';
+  const variantNote = s.num_variants > 1 ? ` · ${s.num_variants} variants` : '';
+  const fuzzyBadge = s.fuzzy_merged ? '<span style="font-size:10px; font-weight:600; background:#f59e0b22; color:#d97706; border-radius:4px; padding:1px 5px; margin-left:2px;">fuzzy</span>' : '';
+  const mergedInfo = s.fuzzy_merged && s.merged_cores && s.merged_cores.length > 1
+    ? `<div style="color:#d97706; font-size:10px; margin-top:2px;">Merged cores: ${s.merged_cores.map(c => esc(c)).join(', ')}</div>` : '';
+  const acceptFn = pool === 'lf' ? 'acceptLowFreqSuggestion' : 'acceptRuleSuggestion';
+  const editFn   = pool === 'lf' ? 'editLowFreqSuggestion'   : 'editRuleSuggestion';
+  const dismissFn= pool === 'lf' ? 'dismissLowFreqSuggestion': 'dismissRuleSuggestion';
+  return `
+    <div style="display:flex; gap:12px; align-items:flex-start; padding:10px 12px; background:var(--bg-alt,#f8faff); border-radius:8px; border:1px solid var(--border);">
+      <div style="flex:1; min-width:0;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;">
+          <span style="font-size:11px; font-weight:600; background:${matchBadgeColor}22; color:${matchBadgeColor}; border-radius:4px; padding:2px 6px;">${esc(s.match_type)}</span>
+          <span class="mono" style="font-size:13px; font-weight:600;">${esc(s.pattern)}</span>
+          ${fuzzyBadge}
+          <span style="color:var(--text-muted); font-size:12px;">→</span>
+          <span style="font-size:13px; font-weight:500;">${esc(s.merchant)}</span>
+          <span style="font-size:11px; color:var(--text-muted); background:#e2e8f0; border-radius:10px; padding:1px 8px;">${s.count} tx${variantNote}</span>
+        </div>
+        <div style="color:var(--text-muted); font-size:11px; line-height:1.6;">${samples}</div>
+        ${mergedInfo}
+      </div>
+      <div style="display:flex; gap:6px; flex-shrink:0;">
+        <button class="btn btn-primary btn-sm" onclick="${acceptFn}(${idx})" title="Create this rule">✓ Accept</button>
+        <button class="btn btn-secondary btn-sm" onclick="${editFn}(${idx})" title="Edit before saving">Edit</button>
+        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="${dismissFn}(${idx})" title="Dismiss">✗</button>
+      </div>
+    </div>`;
 }
 
 async function acceptRuleSuggestion(idx) {
@@ -3931,6 +3996,41 @@ async function acceptAllRuleSuggestions() {
   loadMerchantRules();
 }
 
+// ── Low-Frequency Suggestion Handlers ──────────────────────────
+
+async function acceptLowFreqSuggestion(idx) {
+  const s = _lowFreqSuggestions[idx];
+  if (!s) return;
+  try {
+    await api('POST', '/merchant-rules', {
+      pattern: s.pattern, match_type: s.match_type,
+      merchant: s.merchant, priority: 0,
+    });
+    s._dismissed = true;
+    toast(`Rule created: "${s.pattern}" → ${s.merchant}`, 'success');
+    _renderLowFreqSuggestions();
+    loadMerchantRules();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function editLowFreqSuggestion(idx) {
+  const s = _lowFreqSuggestions[idx];
+  if (!s) return;
+  openRuleForm(null);
+  document.getElementById('rf-priority').value = '0';
+  document.getElementById('rf-merchant').value = s.merchant;
+  _setRuleConditions([{pattern: s.pattern, match_type: s.match_type, negate: false}], 'AND');
+  document.getElementById('rule-form-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  s._dismissed = true;
+  _renderLowFreqSuggestions();
+}
+
+function dismissLowFreqSuggestion(idx) {
+  if (_lowFreqSuggestions[idx]) _lowFreqSuggestions[idx]._dismissed = true;
+  _renderLowFreqSuggestions();
+}
 
 // ── Category Suggestions ──────────────────────────────────────
 

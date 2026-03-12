@@ -304,7 +304,10 @@ TransactionAnalysis/
   - KPI row: total merchants, accelerating count, shown count
 - Recommended Normalization Rules panel: `loadRuleSuggestions()` → `GET /merchant-rules/suggestions`
   - Analyzes raw descriptions; suggests pattern → merchant rules
+  - **Fuzzy matching**: similar description cores merged via `rapidfuzz.token_sort_ratio()` (threshold 0.75) — e.g. "BEST WESTERN INN S" + "BEST WESTERN SEVEN S" grouped as one suggestion with `[fuzzy]` badge
+  - **Low-frequency patterns**: checkbox toggle shows merchants with 1–2 transactions (below the default min_transactions=3 threshold); useful for catching long-tail merchants
   - Accept, Edit, Dismiss per suggestion; Accept All
+  - **Auto-Fill Unmatched** button: `POST /normalize/auto-fill` — bulk-sets `merchant = cleaned(description)` for all transactions where merchant is NULL, making them visible in uncategorized panel and analytics
 - Merchant Normalization Rules CRUD table: `loadMerchantRules()` → `GET /merchant-rules`
   - **Inline search bar**: real-time filter across pattern, merchant, match_type columns; "X of N rules" count; Escape to clear
   - Add/Edit rules with compound AND/OR conditions, match types (contains/startswith/regex), priority, negation
@@ -316,7 +319,7 @@ TransactionAnalysis/
   - Backfills category onto all transactions for that merchant
   - **"Show categorized merchants too" toggle**: fetches `GET /merchant-categories` and displays categorized merchants below the uncategorized list with inline category edit via `openCategoryPicker`
 - **Collapsible panels**: Recommended Rules, Merchant Rules, Uncategorized panels all collapse/expand with item count badges; scroll-capped containers; collapse state persisted in localStorage
-- API: Full CRUD on `/merchant-rules`, `/merchant-categories`, `/normalize/apply`, `/normalize/{job_id}`, `GET /merchant-analytics`
+- API: Full CRUD on `/merchant-rules`, `/merchant-categories`, `/normalize/apply`, `/normalize/auto-fill`, `/normalize/{job_id}`, `GET /merchant-analytics`
 
 **Categories (`#page-category-rules`)**
 - Suggested Category Mappings panel: `loadCatSuggestions()` → `GET /category-rules/suggestions`
@@ -1205,6 +1208,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.29.0 | 2026-03-12 | feat: smarter merchant normalization — fuzzy grouping via `rapidfuzz.token_sort_ratio()` merges similar description cores (e.g. Best Western variants); low-frequency pattern section shows 1–2 transaction merchants; Auto-Fill Unmatched button bulk-sets merchant from description for NULL-merchant rows; `fuzzy_threshold` and `include_low_frequency` params on `GET /merchant-rules/suggestions`; new `POST /normalize/auto-fill` endpoint; 7 new tests |
 | v2.28.0 | 2026-03-12 | feat: annual membership fee detection — keyword-based suggestions on Recurring page; 20+ keywords for card fees (RENEWAL MEMBERSHIP FEE, ANNUAL FEE) and subscriptions (Amazon Prime, Costco, Microsoft 365, etc.); card-specific fees auto-labeled with account name; accept/edit/dismiss flow; `recurring_dismissals` table; `recurring_overrides` extended with label/amount/frequency; new `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss` endpoints; 7 new tests; 338 total tests |
 | v2.27.1 | 2026-03-12 | feat: backup restore progress bar — simulated progress bar during restore with percentage, green/red fill on success/failure, "safe to navigate away" message, auto-hide after 8s |
 | v2.27.0 | 2026-03-12 | feat: Merchant Intelligence date pickers — All Time / This Month / Last Month / YTD / Year presets scope all stats and trend to selected period; `date_from` + `date_to` query params on `GET /merchant-analytics`; trend window shifts relative to date range end; year dropdown populated from transaction data; active preset styling |
