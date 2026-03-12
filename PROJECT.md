@@ -377,6 +377,7 @@ TransactionAnalysis/
   - File picker with preview modal — `previewBackup()` → client-side JSON parse
     - Shows backup version, creation date, row counts per table before confirming
     - `confirmRestore()` → `POST /backup/restore`; auto-snapshot saved before overwriting
+    - **Restore progress bar**: simulated progress (fast to 30%, medium to 60%, stalls at 85%); fills to 100% green on success or red on failure; "safe to navigate away" message; auto-hides after 8s
     - Supports v1 (legacy) and v2 backup files; v1 auto-migrated to v2 on restore
   - Auto-backup on every successful import commit (max 5 rotated in `data/auto_backups/`)
 - ~~**⚠️ Settings were in-memory only** — fixed in v2.1.3 (BUG-3); now persisted to `data/ui_settings.json`~~
@@ -1195,6 +1196,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.27.1 | 2026-03-12 | feat: backup restore progress bar — simulated progress bar during restore with percentage, green/red fill on success/failure, "safe to navigate away" message, auto-hide after 8s |
 | v2.27.0 | 2026-03-12 | feat: Merchant Intelligence date pickers — All Time / This Month / Last Month / YTD / Year presets scope all stats and trend to selected period; `date_from` + `date_to` query params on `GET /merchant-analytics`; trend window shifts relative to date range end; year dropdown populated from transaction data; active preset styling |
 | v2.26.4 | 2026-03-12 | fix: orphan categories Fix Now — `batch_renormalize()` now writes `category_normalized` + `category_parent` (was writing `category` column, a no-op); `_fixOrphanedCategories()` now polls job status instead of 2s timeout; button disabled during run (BUG-29); 1 new test; 331 total tests |
 | v2.26.3 | 2026-03-12 | fix: amount variance UX in duplicate review — side-by-side comparison table with amber-highlighted diffs, context-aware resolution labels, reason-specific import banners (BUG-22); version bump |

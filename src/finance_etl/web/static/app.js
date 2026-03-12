@@ -1205,13 +1205,40 @@ async function confirmRestore() {
   const statusEl = document.getElementById('backup-restore-status');
   if (!_pendingRestoreFile) return;
 
-  if (statusEl) statusEl.textContent = 'Restoring…';
+  // Show progress bar
+  const container = document.getElementById('restore-progress-container');
+  const fill = document.getElementById('restore-progress-fill');
+  const pctEl = document.getElementById('restore-progress-pct');
+  const labelEl = document.getElementById('restore-progress-label');
+  if (container) container.style.display = 'block';
+  if (fill) { fill.className = 'progress-bar-fill'; fill.style.width = '0%'; }
+  if (pctEl) pctEl.textContent = '0%';
+  if (labelEl) labelEl.textContent = 'Restoring…';
+  if (statusEl) statusEl.textContent = '';
+
+  // Simulated progress: fast to 30%, medium to 60%, slow to 85%, then stall
+  let pct = 0;
+  const progressInterval = setInterval(() => {
+    if (pct < 30) pct += 3;
+    else if (pct < 60) pct += 1.5;
+    else if (pct < 85) pct += 0.5;
+    if (fill) fill.style.width = `${Math.round(pct)}%`;
+    if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+  }, 200);
+
   const formData = new FormData();
   formData.append('file', _pendingRestoreFile);
   try {
     const resp = await fetch('/backup/restore', { method: 'POST', body: formData });
+    clearInterval(progressInterval);
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || resp.statusText);
+
+    // Success — fill to 100% green
+    if (fill) { fill.style.width = '100%'; fill.classList.add('success'); }
+    if (pctEl) pctEl.textContent = '100%';
+    if (labelEl) labelEl.textContent = 'Restore complete';
+
     const parts = [];
     if (data.merchant_rules_restored) parts.push(`${data.merchant_rules_restored} merchant rules`);
     if (data.category_rules_restored) parts.push(`${data.category_rules_restored} category rules`);
@@ -1222,17 +1249,21 @@ async function confirmRestore() {
     if (data.nw_snapshots_restored) parts.push(`${data.nw_snapshots_restored} net worth snapshots`);
     if (data.annual_reports_restored) parts.push(`${data.annual_reports_restored} annual reports`);
     if (data.wizard_profiles_restored) parts.push(`${data.wizard_profiles_restored} wizard profiles`);
-    const msg = `Restored: ${parts.join(', ')}.`;
-    if (statusEl) statusEl.textContent = msg;
+    if (statusEl) statusEl.textContent = `Restored: ${parts.join(', ')}.`;
     toast('Backup restored successfully.', 'success', 6000);
-    // Refresh backup status display
     loadBackupStatus();
   } catch (err) {
+    clearInterval(progressInterval);
+    if (fill) { fill.style.width = '100%'; fill.classList.add('error'); }
+    if (pctEl) pctEl.textContent = 'Failed';
+    if (labelEl) labelEl.textContent = 'Restore failed';
     if (statusEl) statusEl.textContent = `Error: ${err.message}`;
     toast(`Restore failed: ${err.message}`, 'error');
   } finally {
     document.getElementById('restore-file-input').value = '';
     _pendingRestoreFile = null;
+    // Hide progress bar after 8 seconds
+    setTimeout(() => { if (container) container.style.display = 'none'; }, 8000);
   }
 }
 

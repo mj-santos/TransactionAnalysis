@@ -962,6 +962,19 @@
           <input type="file" id="restore-file-input" accept=".json" style="font-size:13px;" onchange="previewBackup(this)" />
           <span id="backup-restore-status" style="font-size:12px; color:var(--text-muted);"></span>
         </div>
+        <!-- Restore progress bar (hidden by default) -->
+        <div id="restore-progress-container" style="display:none; margin-top:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <span id="restore-progress-label" style="font-size:12px; font-weight:600;">Restoring…</span>
+            <span id="restore-progress-pct" style="font-size:12px; color:var(--text-muted);">0%</span>
+          </div>
+          <div class="progress-bar-track">
+            <div id="restore-progress-fill" class="progress-bar-fill" style="width:0%;"></div>
+          </div>
+          <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">
+            Safe to navigate away — restore runs on the server and will complete in the background.
+          </p>
+        </div>
       </div>
 
       <!-- DB table counts -->

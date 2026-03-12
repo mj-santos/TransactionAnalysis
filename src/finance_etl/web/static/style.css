@@ -1108,6 +1108,23 @@ tr.unreviewed-row {
   font-size: 13px;
 }
 
+/* Progress bar (backup restore) */
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.progress-bar-fill.success { background: var(--success); }
+.progress-bar-fill.error { background: var(--danger); }
+
 .ms-narrative {
   font-size: 14px;
   line-height: 1.6;
