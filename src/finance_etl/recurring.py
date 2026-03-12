@@ -51,6 +51,7 @@ class RecurringPattern:
     next_estimated: str | None  # ISO date estimate, or None if unpredictable
     is_auto: bool             # True = auto-detected; False = user override
     confidence: float         # 0.0–1.0
+    paused: bool = False      # True = user paused this charge
 
 
 def _median(values: list[float]) -> float:
@@ -179,17 +180,20 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
 
     # ── 3.  Merge user overrides ─────────────────────────────────────────
     overrides: dict[str, bool] = {}
-    override_details: dict[str, dict] = {}  # merchant_key -> {label, amount, frequency}
+    override_details: dict[str, dict] = {}  # merchant_key -> {label, amount, frequency, paused, last_date}
     if include_overrides:
         try:
             ov_rows = conn.execute(
-                "SELECT merchant_key, is_recurring, label, amount, frequency "
+                "SELECT merchant_key, is_recurring, label, amount, frequency, "
+                "       paused, last_date "
                 "FROM recurring_overrides"
             ).fetchall()
             for r in ov_rows:
                 overrides[r[0]] = r[1]
                 override_details[r[0]] = {
                     "label": r[2], "amount": r[3], "frequency": r[4],
+                    "paused": bool(r[5]) if r[5] is not None else False,
+                    "last_date": r[6],
                 }
         except Exception:
             pass
@@ -202,6 +206,9 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
     for merchant, pat in auto_results.items():
         if overrides.get(merchant) is False:
             continue
+        # Check if this auto-detected pattern has a pause override
+        details = override_details.get(merchant, {})
+        pat.paused = details.get("paused", False)
         results.append(_pattern_to_dict(pat))
 
     # User-marked entries not in auto-detection
@@ -214,6 +221,7 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
         # Build a minimal pattern from the transaction data
         txns = groups.get(merchant, [])
         details = override_details.get(merchant, {})
+        is_paused = details.get("paused", False)
 
         if txns:
             dates = sorted(set(t[0] for t in txns))
@@ -241,15 +249,18 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 next_estimated=next_est,
                 is_auto=False,
                 confidence=1.0,
+                paused=is_paused,
             )))
         else:
             # No matching transactions — use stored override data
             # (e.g. accepted annual fee suggestion where merchant_key = label)
             stored_freq = details.get("frequency") or "annual"
             stored_amount = details.get("amount")
+            stored_last_date = details.get("last_date") or ""
             freq_days = {"annual": 365, "quarterly": 90, "monthly": 30,
                          "biweekly": 14, "weekly": 7}
             avg_interval = float(freq_days.get(stored_freq, 365))
+            next_est = _estimate_next(stored_last_date, avg_interval) if stored_last_date else None
 
             results.append(_pattern_to_dict(RecurringPattern(
                 merchant=merchant,
@@ -257,15 +268,20 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 frequency=stored_freq,
                 avg_interval_days=avg_interval,
                 occurrences=0,
-                last_date="",
-                next_estimated=None,
+                last_date=stored_last_date,
+                next_estimated=next_est,
                 is_auto=False,
                 confidence=1.0,
+                paused=is_paused,
             )))
 
     # Sort by median amount descending (biggest subscriptions first)
     results.sort(key=lambda r: r["median_amount"], reverse=True)
-    return results
+
+    # Partition into active and paused
+    active = [r for r in results if not r.get("paused")]
+    paused = [r for r in results if r.get("paused")]
+    return active, paused
 
 
 def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:
@@ -279,6 +295,7 @@ def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:
         "next_estimated": p.next_estimated,
         "is_auto": p.is_auto,
         "confidence": p.confidence,
+        "paused": p.paused,
     }
 
 

@@ -345,7 +345,11 @@ TransactionAnalysis/
 - Monthly Recurring Cost KPI card — total estimated monthly cost across all detected recurring charges
 - Recurring charges table: merchant, amount, frequency badge, last charged, next estimated date, hit count
 - Auto/manual badge per row distinguishing auto-detected vs user-overridden entries
-- Unmark button per row to exclude a merchant from the recurring list
+- **Per-row action menu** (⋯ three-dot dropdown): Edit, Pause, Delete
+  - **Edit**: inline form to change label, amount, and frequency; saves via `POST /recurring/override`
+  - **Pause**: moves charge to "Paused Recurring Charges" section; paused charges excluded from monthly cost KPI
+  - **Delete**: auto-detected charges get `is_recurring=false` override; manual overrides are deleted via `DELETE /recurring/override/{merchant}`
+- **Paused Recurring Charges** section: card below detected charges showing paused items with Resume and Delete buttons
 - Manual mark form: text input + button to force-mark any merchant as recurring
 - **Suggested Annual Charges** panel: keyword-based detection for annual fees and memberships
   - Scans transaction descriptions for 20+ keywords (renewal membership fee, annual fee, Amazon Prime, Costco, Microsoft 365, etc.)
@@ -356,7 +360,8 @@ TransactionAnalysis/
   - Dismissed suggestions stored in `recurring_dismissals` table
   - Excludes suggestions already in overrides or auto-detected as annual by interval engine
   - `detect_annual_fee_suggestions()` in `recurring.py`
-- User overrides stored in `recurring_overrides` DB table (extended with `label`, `amount`, `frequency` columns); take precedence over auto-detection; overrides with no matching transactions (e.g. accepted annual fee labels) are included as synthetic patterns using stored amount/frequency
+- User overrides stored in `recurring_overrides` DB table (columns: `label`, `amount`, `frequency`, `paused`, `last_date`); take precedence over auto-detection; overrides with no matching transactions (e.g. accepted annual fee labels) are included as synthetic patterns using stored amount/frequency/last_date
+- Accepted suggestions carry `last_date` through to the override, enabling Last Charged and Next Estimated display for keyword-matched annual fees
 - Included in v2 backup/restore system
 - Detection engine: `src/finance_etl/recurring.py`
 - API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`, `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss`
@@ -633,13 +638,18 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 
 ---
 
-### `recurring_overrides` — user manual recurring mark/unmark
+### `recurring_overrides` — user manual recurring mark/unmark/pause
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | BIGINT PK | Auto-seq |
-| `merchant_key` | TEXT NOT NULL UNIQUE | Normalized merchant name |
+| `merchant_key` | TEXT NOT NULL UNIQUE | Normalized merchant name (or label for accepted suggestions) |
 | `is_recurring` | BOOLEAN NOT NULL | `TRUE` = force-mark, `FALSE` = force-unmark |
+| `label` | TEXT | Display label (for annual fee suggestions) |
+| `amount` | DECIMAL(18,2) | Override amount |
+| `frequency` | TEXT | Override frequency (weekly/monthly/quarterly/annual) |
+| `paused` | BOOLEAN DEFAULT FALSE | `TRUE` = charge is paused (excluded from active list and monthly cost) |
+| `last_date` | TEXT | ISO date of last charge (carried from suggestion; used for next_estimated) |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
 
@@ -988,7 +998,7 @@ Single-row table seeded with `1` on first migration run.
 - ~~`app.js:6930-6995` — `_buildCategoryPickerHTML()` + 5 helpers: consolidated into `openCategoryPicker()` with `allowCustom` in v2.26.1~~
 - `api.py:1173` — `POST /wizard/validate`: never called from frontend (validates locally instead)
 - `api.py:1304` — `GET /wizard/profiles`: never called from frontend
-- `api.py:5320` — `DELETE /recurring/override/{merchant}`: only mentioned in a JS comment, never invoked
+- ~~`api.py:5320` — `DELETE /recurring/override/{merchant}`: only mentioned in a JS comment, never invoked~~ Now used by recurring charge Delete action (v2.30.0)
 - ~~`api.py:2035` — `DELETE /transactions/{fingerprint}/split`: wired via per-row "Unsplit" button in v2.26.0~~
 - `hashing.py:18` — `sha256_str()`: defined but never imported/called
 - `wizard_mapping.py:296` — `get_canonical_fields_for_type()`: defined but never called
@@ -1061,7 +1071,7 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 - `POST /wizard/validate` — frontend validates locally
 - `GET /wizard/profiles` — never referenced
 - `GET /logs/download` — no fetch call found
-- `DELETE /recurring/override/{merchant}` — only in a JS comment
+- ~~`DELETE /recurring/override/{merchant}` — only in a JS comment~~ Now wired to Delete action (v2.30.0)
 - `GET /net-worth/summary` — no fetch call found
 
 #### CRITICAL FINDINGS (ranked by risk)
@@ -1210,6 +1220,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.30.0 | 2026-03-12 | feat: recurring charges dropdown actions + paused section + suggestion dates — replaced Unmark button with ⋯ dropdown menu (Edit/Pause/Delete); inline edit form for label/amount/frequency; Pause moves charges to new "Paused Recurring Charges" section with Resume button; Delete suppresses auto-detected or removes manual overrides; accepted annual fee suggestions now carry `last_date` through to override for Last Charged/Next Estimated display; new `paused` and `last_date` columns on `recurring_overrides`; `detect_recurring()` returns (active, paused) tuple; `GET /recurring` response includes `paused` array; `POST /recurring/override` accepts label/amount/frequency/paused/last_date; 5 new tests; 351 total tests |
 | v2.29.1 | 2026-03-12 | fix: annual fee suggestion accept/edit bugs — (BUG-30) edit/save and accept now immediately remove suggestion row from DOM via `_removeAnnualSuggestionRow()` helper; (BUG-31) `detect_recurring()` now reads full override row (label, amount, frequency) and builds synthetic pattern for overrides with no matching transactions so accepted annual fees always appear in Detected Recurring Charges; 2 new tests |
 | v2.29.0 | 2026-03-12 | feat: smarter merchant normalization — fuzzy grouping via `rapidfuzz.token_sort_ratio()` merges similar description cores (e.g. Best Western variants); low-frequency pattern section shows 1–2 transaction merchants; Auto-Fill Unmatched button bulk-sets merchant from description for NULL-merchant rows; `fuzzy_threshold` and `include_low_frequency` params on `GET /merchant-rules/suggestions`; new `POST /normalize/auto-fill` endpoint; 7 new tests |
 | v2.28.0 | 2026-03-12 | feat: annual membership fee detection — keyword-based suggestions on Recurring page; 20+ keywords for card fees (RENEWAL MEMBERSHIP FEE, ANNUAL FEE) and subscriptions (Amazon Prime, Costco, Microsoft 365, etc.); card-specific fees auto-labeled with account name; accept/edit/dismiss flow; `recurring_dismissals` table; `recurring_overrides` extended with label/amount/frequency; new `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss` endpoints; 7 new tests; 338 total tests |
@@ -1322,7 +1333,7 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/cashflow/summary` | cashflow | Income vs spending vs net, monthly breakdown, category breakdown, MoM delta | 🟢 Called |
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
 | `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) | 🟢 Called |
-| `DELETE` | `/recurring/override/{merchant}` | recurring | Remove a recurring override | 🟡 Exists but unused by frontend (only in JS comment) |
+| `DELETE` | `/recurring/override/{merchant}` | recurring | Remove a recurring override (used by Delete action on manual overrides) | 🟢 Called |
 | `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 9 tables + wizard profiles) | 🟢 Called |
 | `POST` | `/backup/restore` | backup | Restore from v1 or v2 JSON backup (auto-migrates, auto-snapshots) | 🟢 Called |
 | `GET` | `/backup/status` | backup | Backup system status: last export, auto-backups list, table counts | 🟢 Called |

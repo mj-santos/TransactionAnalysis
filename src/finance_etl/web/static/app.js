@@ -1049,6 +1049,19 @@ async function loadRecurringTransactions() {
       _renderRecurringList(data.patterns, listEl);
     }
 
+    // Paused section
+    const pausedCard = document.getElementById('paused-recurring-card');
+    const pausedList = document.getElementById('paused-recurring-list');
+    if (pausedCard && pausedList) {
+      if (data.paused && data.paused.length) {
+        pausedCard.style.display = 'block';
+        _renderPausedList(data.paused, pausedList);
+      } else {
+        pausedCard.style.display = 'none';
+        pausedList.innerHTML = '';
+      }
+    }
+
     // Also load annual fee suggestions
     loadAnnualSuggestions();
   } catch (err) {
@@ -1057,12 +1070,12 @@ async function loadRecurringTransactions() {
   }
 }
 
-function _renderRecurringList(patterns, container) {
-  const freqColors = {
-    weekly: '#3b82f6', biweekly: '#6366f1', monthly: '#8b5cf6',
-    quarterly: '#f59e0b', annual: '#22c55e', irregular: '#94a3b8',
-  };
+const _freqColors = {
+  weekly: '#3b82f6', biweekly: '#6366f1', monthly: '#8b5cf6',
+  quarterly: '#f59e0b', annual: '#22c55e', irregular: '#94a3b8',
+};
 
+function _renderRecurringList(patterns, container) {
   let html = '<table style="width:100%; border-collapse:collapse;">';
   html += `<thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
     <th style="padding:8px 10px;">Merchant</th>
@@ -1074,24 +1087,65 @@ function _renderRecurringList(patterns, container) {
     <th style="padding:8px 10px;"></th>
   </tr></thead><tbody>`;
 
-  for (const p of patterns) {
-    const color = freqColors[p.frequency] || '#94a3b8';
+  for (let i = 0; i < patterns.length; i++) {
+    const p = patterns[i];
+    const color = _freqColors[p.frequency] || '#94a3b8';
     const badge = p.is_auto
       ? '<span style="font-size:10px; background:#e2e8f0; color:#64748b; padding:1px 6px; border-radius:3px; margin-left:6px;">auto</span>'
       : '<span style="font-size:10px; background:#dbeafe; color:#3b82f6; padding:1px 6px; border-radius:3px; margin-left:6px;">manual</span>';
 
-    html += `<tr style="border-bottom:1px solid var(--border);">
+    const menuId = `rec-menu-${i}`;
+    const editId = `rec-edit-${i}`;
+    const mEsc = esc(p.merchant).replace(/'/g, "\\'");
+
+    html += `<tr id="rec-row-${i}" style="border-bottom:1px solid var(--border);">
       <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}${badge}</td>
       <td style="padding:8px 10px; font-weight:600;">$${Number(p.median_amount).toFixed(2)}</td>
       <td style="padding:8px 10px;">
         <span style="background:${color}; color:#fff; font-size:11px; padding:2px 8px; border-radius:4px;">${esc(p.frequency)}</span>
       </td>
-      <td style="padding:8px 10px;">${esc(p.last_date)}</td>
+      <td style="padding:8px 10px;">${p.last_date ? esc(p.last_date) : '—'}</td>
       <td style="padding:8px 10px;">${p.next_estimated ? esc(p.next_estimated) : '—'}</td>
       <td style="padding:8px 10px; text-align:center;">${p.occurrences}</td>
-      <td style="padding:8px 10px;">
-        <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 8px;"
-          onclick="toggleRecurring('${esc(p.merchant)}', false)">Unmark</button>
+      <td style="padding:8px 10px; position:relative;">
+        <button class="btn btn-secondary btn-sm" style="font-size:14px; padding:2px 10px; line-height:1;"
+          onclick="event.stopPropagation(); _toggleRecMenu('${menuId}')">&#x22EF;</button>
+        <div id="${menuId}" style="display:none; position:absolute; right:10px; top:calc(100% - 4px); z-index:50;
+          background:var(--bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12);
+          min-width:120px; overflow:hidden;">
+          <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
+            background:none; cursor:pointer; color:var(--text,#1e293b);"
+            onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
+            onclick="_toggleRecMenu('${menuId}'); _showRecEditForm(${i}, '${mEsc}', ${p.median_amount}, '${esc(p.frequency)}')">Edit</button>
+          <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
+            background:none; cursor:pointer; color:var(--text,#1e293b);"
+            onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
+            onclick="_toggleRecMenu('${menuId}'); pauseRecurringCharge('${mEsc}')">Pause</button>
+          <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
+            background:none; cursor:pointer; color:var(--danger);"
+            onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
+            onclick="_toggleRecMenu('${menuId}'); deleteRecurringCharge('${mEsc}', ${p.is_auto})">Delete</button>
+        </div>
+      </td>
+    </tr>
+    <tr id="${editId}" style="display:none;">
+      <td colspan="7" style="padding:10px 12px; background:var(--bg-alt,#f8faff);">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <label style="font-size:11px; color:var(--text-muted);">Label</label>
+          <input type="text" id="${editId}-label" value="${mEsc}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:180px;" />
+          <label style="font-size:11px; color:var(--text-muted);">Amount</label>
+          <input type="number" id="${editId}-amount" value="${p.median_amount}" step="0.01" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:100px;" />
+          <label style="font-size:11px; color:var(--text-muted);">Frequency</label>
+          <select id="${editId}-freq" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
+            <option value="weekly"${p.frequency === 'weekly' ? ' selected' : ''}>Weekly</option>
+            <option value="biweekly"${p.frequency === 'biweekly' ? ' selected' : ''}>Biweekly</option>
+            <option value="monthly"${p.frequency === 'monthly' ? ' selected' : ''}>Monthly</option>
+            <option value="quarterly"${p.frequency === 'quarterly' ? ' selected' : ''}>Quarterly</option>
+            <option value="annual"${p.frequency === 'annual' ? ' selected' : ''}>Annual</option>
+          </select>
+          <button class="btn btn-primary btn-sm" style="font-size:11px;" onclick="saveRecurringEdit(${i}, '${mEsc}')">Save</button>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="document.getElementById('${editId}').style.display='none'">Cancel</button>
+        </div>
       </td>
     </tr>`;
   }
@@ -1099,17 +1153,112 @@ function _renderRecurringList(patterns, container) {
   container.innerHTML = html;
 }
 
-/** Mark a merchant as recurring (or not) via the override API.
- *  Setting is_recurring=false creates a "force-unmark" override that
- *  suppresses auto-detection for that merchant; it does NOT delete the
- *  override row (use DELETE /recurring/override/{merchant} for that). */
-async function toggleRecurring(merchant, isRecurring) {
+function _renderPausedList(patterns, container) {
+  let html = '<table style="width:100%; border-collapse:collapse;">';
+  html += `<thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
+    <th style="padding:8px 10px;">Merchant</th>
+    <th style="padding:8px 10px;">Amount</th>
+    <th style="padding:8px 10px;">Frequency</th>
+    <th style="padding:8px 10px;"></th>
+  </tr></thead><tbody>`;
+
+  for (const p of patterns) {
+    const color = _freqColors[p.frequency] || '#94a3b8';
+    const mEsc = esc(p.merchant).replace(/'/g, "\\'");
+    html += `<tr style="border-bottom:1px solid var(--border); opacity:0.7;">
+      <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}</td>
+      <td style="padding:8px 10px; font-weight:600;">$${Number(p.median_amount).toFixed(2)}</td>
+      <td style="padding:8px 10px;">
+        <span style="background:${color}; color:#fff; font-size:11px; padding:2px 8px; border-radius:4px;">${esc(p.frequency)}</span>
+      </td>
+      <td style="padding:8px 10px;">
+        <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 8px;"
+          onclick="resumeRecurringCharge('${mEsc}')">Resume</button>
+        <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 8px; color:var(--danger); margin-left:4px;"
+          onclick="deleteRecurringCharge('${mEsc}', false)">Delete</button>
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+// ── Recurring Action Menu ──────────────────────────────────────
+
+function _toggleRecMenu(menuId) {
+  // Close all other menus first
+  document.querySelectorAll('[id^="rec-menu-"]').forEach(el => {
+    if (el.id !== menuId) el.style.display = 'none';
+  });
+  const menu = document.getElementById(menuId);
+  if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+// Close menus on outside click
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('[id^="rec-menu-"]') && !e.target.closest('button')) {
+    document.querySelectorAll('[id^="rec-menu-"]').forEach(el => el.style.display = 'none');
+  }
+});
+
+function _showRecEditForm(idx, merchant, amount, freq) {
+  const editRow = document.getElementById(`rec-edit-${idx}`);
+  if (editRow) editRow.style.display = '';
+}
+
+async function saveRecurringEdit(idx, originalMerchant) {
+  const editId = `rec-edit-${idx}`;
+  const label = document.getElementById(`${editId}-label`)?.value?.trim();
+  const amount = parseFloat(document.getElementById(`${editId}-amount`)?.value);
+  const frequency = document.getElementById(`${editId}-freq`)?.value || 'monthly';
+
+  if (!label) { toast('Label is required', 'error', 2000); return; }
+
   try {
-    await api('POST', '/recurring/override', { merchant, is_recurring: isRecurring });
-    toast(isRecurring ? `Marked "${merchant}" as recurring` : `Unmarked "${merchant}"`, 'success', 2500);
+    await api('POST', '/recurring/override', {
+      merchant: originalMerchant, is_recurring: true,
+      label, amount: isNaN(amount) ? null : amount, frequency,
+    });
+    toast(`Updated "${label}"`, 'success', 2500);
     loadRecurringTransactions();
   } catch (err) {
-    toast(`Override failed: ${err.message}`, 'error');
+    toast(`Edit failed: ${err.message}`, 'error');
+  }
+}
+
+async function pauseRecurringCharge(merchant) {
+  try {
+    await api('POST', '/recurring/override', { merchant, is_recurring: true, paused: true });
+    toast(`Paused "${merchant}"`, 'info', 2500);
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Pause failed: ${err.message}`, 'error');
+  }
+}
+
+async function resumeRecurringCharge(merchant) {
+  try {
+    await api('POST', '/recurring/override', { merchant, is_recurring: true, paused: false });
+    toast(`Resumed "${merchant}"`, 'success', 2500);
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Resume failed: ${err.message}`, 'error');
+  }
+}
+
+async function deleteRecurringCharge(merchant, isAuto) {
+  try {
+    if (isAuto) {
+      // Suppress auto-detected: create is_recurring=false override
+      await api('POST', '/recurring/override', { merchant, is_recurring: false });
+    } else {
+      // Remove manual override entirely
+      await api('DELETE', `/recurring/override/${encodeURIComponent(merchant)}`);
+    }
+    toast(`Removed "${merchant}" from recurring`, 'success', 2500);
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Delete failed: ${err.message}`, 'error');
   }
 }
 
@@ -1118,8 +1267,14 @@ async function manualMarkRecurring() {
   const input = document.getElementById('recurring-manual-merchant');
   const merchant = (input.value || '').trim();
   if (!merchant) { toast('Enter a merchant name', 'error', 2000); return; }
-  await toggleRecurring(merchant, true);
-  input.value = '';
+  try {
+    await api('POST', '/recurring/override', { merchant, is_recurring: true });
+    toast(`Marked "${merchant}" as recurring`, 'success', 2500);
+    loadRecurringTransactions();
+    input.value = '';
+  } catch (err) {
+    toast(`Override failed: ${err.message}`, 'error');
+  }
 }
 
 // ── Annual Fee Suggestions ────────────────────────────────────
@@ -1191,6 +1346,7 @@ async function acceptAnnualSuggestion(sid) {
       label: s.label,
       amount: s.amount,
       frequency: s.frequency,
+      last_date: s.last_date,
     });
     _removeAnnualSuggestionRow(sid);
     toast(`Added "${s.label}" to recurring charges`, 'success', 3000);
@@ -1222,8 +1378,10 @@ async function submitEditSuggestion(sid) {
   if (!label) { toast('Label is required', 'error', 2000); return; }
 
   try {
+    const origSuggestion = _annualSuggestions.find(x => x.suggestion_id === sid);
     await api('POST', `/recurring/suggestions/${encodeURIComponent(sid)}/accept`, {
       label, amount: isNaN(amount) ? null : amount, frequency,
+      last_date: origSuggestion?.last_date,
     });
     _removeAnnualSuggestionRow(sid);
     toast(`Added "${label}" to recurring charges`, 'success', 3000);

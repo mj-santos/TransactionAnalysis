@@ -379,6 +379,10 @@ CREATE TABLE IF NOT EXISTS annual_reports (
     "ALTER TABLE recurring_overrides ADD COLUMN amount DECIMAL(18,2)",
     "ALTER TABLE recurring_overrides ADD COLUMN frequency TEXT",
 
+    # ── Recurring overrides: pause & date tracking ─────────────────────────
+    "ALTER TABLE recurring_overrides ADD COLUMN paused BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE recurring_overrides ADD COLUMN last_date TEXT",
+
     # ── Recurring suggestion dismissals ──────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS recurring_dismissals (
         suggestion_id TEXT PRIMARY KEY,
