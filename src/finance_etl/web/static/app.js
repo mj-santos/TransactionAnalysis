@@ -1045,10 +1045,12 @@ async function loadRecurringTransactions() {
 
     if (!data.patterns || data.patterns.length === 0) {
       listEl.innerHTML = '<p style="color:var(--text-muted);">No recurring transactions detected. Import more data or manually mark merchants below.</p>';
-      return;
+    } else {
+      _renderRecurringList(data.patterns, listEl);
     }
 
-    _renderRecurringList(data.patterns, listEl);
+    // Also load annual fee suggestions
+    loadAnnualSuggestions();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Error: ${err.message}`;
     listEl.innerHTML = `<p style="color:var(--danger);">Failed to load: ${esc(err.message)}</p>`;
@@ -1118,6 +1120,134 @@ async function manualMarkRecurring() {
   if (!merchant) { toast('Enter a merchant name', 'error', 2000); return; }
   await toggleRecurring(merchant, true);
   input.value = '';
+}
+
+// ── Annual Fee Suggestions ────────────────────────────────────
+
+// Cache suggestions for edit form
+let _annualSuggestions = [];
+
+async function loadAnnualSuggestions() {
+  const card = document.getElementById('annual-suggestions-card');
+  const listEl = document.getElementById('annual-suggestions-list');
+  const countEl = document.getElementById('annual-suggestions-count');
+  if (!card || !listEl) return;
+
+  try {
+    const data = await api('GET', '/recurring/suggestions');
+    _annualSuggestions = data.suggestions || [];
+
+    if (!_annualSuggestions.length) {
+      card.style.display = 'none';
+      return;
+    }
+
+    card.style.display = 'block';
+    if (countEl) countEl.textContent = _annualSuggestions.length;
+
+    listEl.innerHTML = _annualSuggestions.map(s => {
+      const cardFeeIcon = s.is_card_fee ? '<span style="margin-right:4px;">&#x1F4B3;</span>' : '';
+      return `<div class="annual-suggestion-row" data-sid="${esc(s.suggestion_id)}" style="border:1px solid var(--border); border-radius:8px; padding:12px 16px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:6px;">
+          <div>
+            <div style="font-weight:600; font-size:14px;">${cardFeeIcon}${esc(s.label)}</div>
+            <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">
+              "${esc(s.description)}" &middot; ${esc(s.bank_name || '')} ${esc(s.account_name)} &middot; ${esc(s.last_date)}
+            </div>
+            ${s.next_estimated ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Next estimated: ${esc(s.next_estimated)}</div>` : ''}
+          </div>
+          <div style="font-size:18px; font-weight:700; white-space:nowrap;">$${Number(s.amount).toFixed(2)}</div>
+        </div>
+        <div id="edit-form-${esc(s.suggestion_id)}" style="display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="text" id="edit-label-${esc(s.suggestion_id)}" value="${esc(s.label)}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:200px;" placeholder="Label" />
+            <input type="number" id="edit-amount-${esc(s.suggestion_id)}" value="${s.amount}" step="0.01" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:100px;" placeholder="Amount" />
+            <select id="edit-freq-${esc(s.suggestion_id)}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
+              <option value="annual" selected>Annual</option>
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly</option>
+            </select>
+            <button class="btn btn-primary btn-sm" style="font-size:11px;" onclick="submitEditSuggestion('${esc(s.suggestion_id)}')">Save</button>
+            <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="cancelEditSuggestion('${esc(s.suggestion_id)}')">Cancel</button>
+          </div>
+        </div>
+        <div id="action-bar-${esc(s.suggestion_id)}" style="display:flex; gap:6px; margin-top:10px; justify-content:flex-end;">
+          <button class="btn btn-primary btn-sm" style="font-size:11px;" onclick="acceptAnnualSuggestion('${esc(s.suggestion_id)}')">Accept</button>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="editAnnualSuggestion('${esc(s.suggestion_id)}')">Edit</button>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px; color:var(--text-muted);" onclick="dismissAnnualSuggestion('${esc(s.suggestion_id)}')">Dismiss</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    card.style.display = 'none';
+  }
+}
+
+async function acceptAnnualSuggestion(sid) {
+  const s = _annualSuggestions.find(x => x.suggestion_id === sid);
+  if (!s) return;
+  try {
+    await api('POST', `/recurring/suggestions/${encodeURIComponent(sid)}/accept`, {
+      label: s.label,
+      amount: s.amount,
+      frequency: s.frequency,
+    });
+    toast(`Added "${s.label}" to recurring charges`, 'success', 3000);
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Accept failed: ${err.message}`, 'error');
+  }
+}
+
+function editAnnualSuggestion(sid) {
+  const form = document.getElementById(`edit-form-${sid}`);
+  const actions = document.getElementById(`action-bar-${sid}`);
+  if (form) form.style.display = 'block';
+  if (actions) actions.style.display = 'none';
+}
+
+function cancelEditSuggestion(sid) {
+  const form = document.getElementById(`edit-form-${sid}`);
+  const actions = document.getElementById(`action-bar-${sid}`);
+  if (form) form.style.display = 'none';
+  if (actions) actions.style.display = 'flex';
+}
+
+async function submitEditSuggestion(sid) {
+  const label = document.getElementById(`edit-label-${sid}`)?.value?.trim();
+  const amount = parseFloat(document.getElementById(`edit-amount-${sid}`)?.value);
+  const frequency = document.getElementById(`edit-freq-${sid}`)?.value || 'annual';
+
+  if (!label) { toast('Label is required', 'error', 2000); return; }
+
+  try {
+    await api('POST', `/recurring/suggestions/${encodeURIComponent(sid)}/accept`, {
+      label, amount: isNaN(amount) ? null : amount, frequency,
+    });
+    toast(`Added "${label}" to recurring charges`, 'success', 3000);
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Save failed: ${err.message}`, 'error');
+  }
+}
+
+async function dismissAnnualSuggestion(sid) {
+  try {
+    await api('POST', `/recurring/suggestions/${encodeURIComponent(sid)}/dismiss`);
+    // Remove from UI immediately
+    const row = document.querySelector(`.annual-suggestion-row[data-sid="${sid}"]`);
+    if (row) row.remove();
+    _annualSuggestions = _annualSuggestions.filter(s => s.suggestion_id !== sid);
+    const countEl = document.getElementById('annual-suggestions-count');
+    if (countEl) countEl.textContent = _annualSuggestions.length;
+    if (!_annualSuggestions.length) {
+      const card = document.getElementById('annual-suggestions-card');
+      if (card) card.style.display = 'none';
+    }
+    toast('Suggestion dismissed', 'info', 2000);
+  } catch (err) {
+    toast(`Dismiss failed: ${err.message}`, 'error');
+  }
 }
 
 // ── Backup & Restore (v2) ─────────────────────────────────────

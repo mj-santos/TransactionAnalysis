@@ -5409,6 +5409,126 @@ No cloud services, no external dependencies — all data stays on your machine.
 
         return {"status": "ok", "merchant": merchant}
 
+    @app.get("/recurring/suggestions", tags=["recurring"],
+             summary="Suggest annual fees and memberships from transaction keywords")
+    def get_recurring_suggestions():
+        """
+        Scan transaction descriptions for annual fee / membership keywords.
+        Returns suggestions the user can accept, edit, or dismiss.
+        Excludes already-accepted overrides and dismissed suggestions.
+        """
+        from finance_etl.recurring import detect_annual_fee_suggestions, detect_recurring
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path, read_only=True)
+
+            # Gather exclusion sets
+            dismissed_rows = conn.execute(
+                "SELECT suggestion_id FROM recurring_dismissals"
+            ).fetchall()
+            dismissed_ids = {r[0] for r in dismissed_rows}
+
+            override_rows = conn.execute(
+                "SELECT merchant_key FROM recurring_overrides"
+            ).fetchall()
+            override_keys = {r[0] for r in override_rows}
+
+            # Auto-detected annual merchants (so we don't double-suggest)
+            auto_patterns = detect_recurring(conn, include_overrides=False)
+            auto_annual = {
+                p["merchant"] for p in auto_patterns
+                if p.get("frequency") == "annual"
+            }
+
+            suggestions = detect_annual_fee_suggestions(
+                conn,
+                dismissed_ids=dismissed_ids,
+                existing_override_keys=override_keys,
+                auto_annual_merchants=auto_annual,
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Suggestions failed: {exc}") from exc
+
+        return {"suggestions": suggestions, "count": len(suggestions)}
+
+    @app.post("/recurring/suggestions/{suggestion_id}/accept", tags=["recurring"],
+              summary="Accept an annual fee suggestion (creates a recurring override)")
+    def accept_recurring_suggestion(suggestion_id: str, body: dict = None):
+        """
+        Accept an annual fee suggestion. Optionally pass label, amount,
+        and frequency overrides in the body.
+        Creates a recurring_overrides entry so the charge appears in the
+        recurring list.
+        """
+        import datetime as _dt
+        from finance_etl.db import get_connection as _gc
+
+        body = body or {}
+        label = body.get("label", "").strip()
+        amount = body.get("amount")
+        frequency = body.get("frequency", "annual")
+
+        if not label:
+            raise HTTPException(status_code=400, detail="label is required.")
+
+        now = _dt.datetime.utcnow().isoformat()
+        try:
+            conn = _gc(db_path)
+            # Use label as merchant_key for the override
+            conn.execute(
+                "DELETE FROM recurring_overrides WHERE merchant_key = ?",
+                [label],
+            )
+            conn.execute(
+                """INSERT INTO recurring_overrides
+                   (merchant_key, is_recurring, label, amount, frequency,
+                    created_at, updated_at)
+                   VALUES (?, TRUE, ?, ?, ?, ?, ?)""",
+                [label, label,
+                 float(amount) if amount is not None else None,
+                 frequency, now, now],
+            )
+            # Remove from dismissals if it was previously dismissed
+            conn.execute(
+                "DELETE FROM recurring_dismissals WHERE suggestion_id = ?",
+                [suggestion_id],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Accept failed: {exc}") from exc
+
+        return {"status": "accepted", "label": label}
+
+    @app.post("/recurring/suggestions/{suggestion_id}/dismiss", tags=["recurring"],
+              summary="Dismiss an annual fee suggestion")
+    def dismiss_recurring_suggestion(suggestion_id: str):
+        """Dismiss a suggestion so it no longer appears."""
+        import datetime as _dt
+        from finance_etl.db import get_connection as _gc
+
+        now = _dt.datetime.utcnow().isoformat()
+        try:
+            conn = _gc(db_path)
+            conn.execute(
+                "DELETE FROM recurring_dismissals WHERE suggestion_id = ?",
+                [suggestion_id],
+            )
+            conn.execute(
+                "INSERT INTO recurring_dismissals (suggestion_id, dismissed_at) "
+                "VALUES (?, ?)",
+                [suggestion_id, now],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Dismiss failed: {exc}") from exc
+
+        return {"status": "dismissed", "suggestion_id": suggestion_id}
+
     # -----------------------------------------------------------------------
     # Backup & Restore  (v2 — comprehensive full-state backup)
     # -----------------------------------------------------------------------
