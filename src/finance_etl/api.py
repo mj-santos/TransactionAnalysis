@@ -3073,27 +3073,47 @@ No cloud services, no external dependencies — all data stays on your machine.
         ),
         search: Optional[str] = Query(None, description="Filter merchants by name (case-insensitive)"),
         limit: int = Query(100, description="Max results"),
+        date_from: Optional[str] = Query(None, description="Start date (ISO format, inclusive)"),
+        date_to: Optional[str] = Query(None, description="End date (ISO format, inclusive)"),
     ):
         """
         Return per-merchant analytics: total spend, monthly average, frequency,
         last transaction, 3-month trend, and acceleration flag.
+        Optionally scoped to a date range via date_from / date_to.
         """
         import datetime as _dt
 
         today = _dt.date.today()
-        # Last 3 full calendar months for trend calculation
-        m3_end = today.replace(day=1) - _dt.timedelta(days=1)  # last day of prior month
-        m3_start = (m3_end.replace(day=1) - _dt.timedelta(days=60)).replace(day=1)  # ~3 months back
+
+        # Parse optional date range
+        df = _dt.date.fromisoformat(date_from) if date_from else None
+        dt = _dt.date.fromisoformat(date_to) if date_to else None
+
+        # Trend window: 3 full calendar months ending at date_to (or last full month)
+        base_end = dt if dt else today
+        m3_end = base_end.replace(day=1) - _dt.timedelta(days=1)  # last day of prior month
+        m3_start = (m3_end.replace(day=1) - _dt.timedelta(days=60)).replace(day=1)
+        # Clamp trend start to date_from if provided
+        if df and df > m3_start:
+            m3_start = df
 
         search_clause = ""
+        date_clause = ""
         params: list = []
+        date_params: list = []
         if search:
             search_clause = " AND LOWER(merchant) LIKE ?"
             params.append(f"%{search.lower()}%")
+        if df:
+            date_clause += " AND transaction_date >= ?"
+            date_params.append(df.isoformat())
+        if dt:
+            date_clause += " AND transaction_date <= ?"
+            date_params.append(dt.isoformat())
 
         conn = get_connection(db_path, read_only=True)
         try:
-            # All-time per-merchant stats
+            # Per-merchant stats (scoped to date range when provided)
             alltime_rows = conn.execute(
                 f"""SELECT merchant,
                        SUM(resolved_amount) AS total_spend,
@@ -3104,11 +3124,12 @@ No cloud services, no external dependencies — all data stays on your machine.
                     WHERE transaction_subtype = 'spending'
                       AND merchant IS NOT NULL
                       {search_clause}
+                      {date_clause}
                     GROUP BY merchant""",
-                params,
+                params + date_params,
             ).fetchall()
 
-            # Monthly totals for the last 3 months (for trend)
+            # Monthly totals for trend (3 months ending at date_to)
             trend_rows = conn.execute(
                 f"""SELECT merchant,
                        YEAR(transaction_date) AS y,
@@ -3118,10 +3139,11 @@ No cloud services, no external dependencies — all data stays on your machine.
                     WHERE transaction_subtype = 'spending'
                       AND merchant IS NOT NULL
                       AND transaction_date >= ?
+                      AND transaction_date <= ?
                       {search_clause}
                     GROUP BY merchant, y, m
                     ORDER BY merchant, y, m""",
-                [m3_start.isoformat()] + params,
+                [m3_start.isoformat(), (m3_end if not dt else dt).isoformat()] + params,
             ).fetchall()
 
             conn.close()
