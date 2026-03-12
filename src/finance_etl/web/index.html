@@ -1050,6 +1050,18 @@
           <button class="btn btn-secondary btn-sm" onclick="loadMerchantAnalytics()">↻</button>
         </div>
       </div>
+      <!-- Date range presets -->
+      <div id="mi-date-bar" style="display:flex; gap:6px; align-items:center; margin:8px 0 10px; flex-wrap:wrap;">
+        <span style="font-size:12px; color:var(--text-muted);">Period:</span>
+        <button class="btn btn-secondary btn-sm mi-preset active" data-preset="all" onclick="setMiDatePreset('all')">All Time</button>
+        <button class="btn btn-secondary btn-sm mi-preset" data-preset="this_month" onclick="setMiDatePreset('this_month')">This Month</button>
+        <button class="btn btn-secondary btn-sm mi-preset" data-preset="last_month" onclick="setMiDatePreset('last_month')">Last Month</button>
+        <button class="btn btn-secondary btn-sm mi-preset" data-preset="ytd" onclick="setMiDatePreset('ytd')">YTD</button>
+        <select id="mi-year" style="padding:5px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;"
+          onchange="setMiDatePreset('year')">
+          <option value="">Year…</option>
+        </select>
+      </div>
       <!-- Summary KPIs -->
       <div id="mi-kpis" style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:14px;">
         <div class="mi-kpi"><div class="mi-kpi-label">Merchants</div><div id="mi-total" class="mi-kpi-value">—</div></div>

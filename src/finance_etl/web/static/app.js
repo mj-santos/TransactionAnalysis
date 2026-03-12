@@ -2873,12 +2873,65 @@ async function unsplitTransaction(parentFp) {
 // ── Merchant Intelligence ─────────────────────────────────────
 
 let _miSearchTimer = null;
+let _miDateFrom = null;
+let _miDateTo = null;
+let _miYearsPopulated = false;
+
 function _debouncedMerchantSearch() {
   clearTimeout(_miSearchTimer);
   _miSearchTimer = setTimeout(loadMerchantAnalytics, 300);
 }
 
+function setMiDatePreset(preset) {
+  if (preset === 'all') {
+    _miDateFrom = null;
+    _miDateTo = null;
+  } else if (preset === 'year') {
+    const yr = parseInt(document.getElementById('mi-year')?.value);
+    if (!yr) return;
+    const { from, to } = _presetDates('all', yr);
+    _miDateFrom = from;
+    _miDateTo = to;
+  } else {
+    const { from, to } = _presetDates(preset);
+    _miDateFrom = from;
+    _miDateTo = to;
+  }
+  // Update active state on preset buttons
+  document.querySelectorAll('.mi-preset').forEach(b => b.classList.remove('active'));
+  if (preset !== 'year') {
+    const active = document.querySelector(`.mi-preset[data-preset="${preset}"]`);
+    if (active) active.classList.add('active');
+    const yearSel = document.getElementById('mi-year');
+    if (yearSel) yearSel.value = '';
+  } else {
+    // Year dropdown selected — no preset button active
+  }
+  loadMerchantAnalytics();
+}
+
+async function _populateMiYears() {
+  if (_miYearsPopulated) return;
+  const sel = document.getElementById('mi-year');
+  if (!sel) return;
+  try {
+    const [cc, bank] = await Promise.all([
+      api('GET', '/transactions/years?type=credit_card').catch(() => ({ years: [] })),
+      api('GET', '/transactions/years?type=bank').catch(() => ({ years: [] })),
+    ]);
+    const years = [...new Set([...(cc.years || []), ...(bank.years || [])])].sort((a, b) => b - a);
+    years.forEach(y => {
+      const opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = y;
+      sel.appendChild(opt);
+    });
+    _miYearsPopulated = true;
+  } catch (_) {}
+}
+
 async function loadMerchantAnalytics() {
+  _populateMiYears();
   const listEl = document.getElementById('mi-list');
   const sortBy = document.getElementById('mi-sort')?.value || 'total_spend';
   const search = document.getElementById('mi-search')?.value?.trim() || '';
@@ -2887,6 +2940,8 @@ async function loadMerchantAnalytics() {
 
   let url = `/merchant-analytics?sort_by=${sortBy}&limit=100`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
+  if (_miDateFrom) url += `&date_from=${encodeURIComponent(_miDateFrom)}`;
+  if (_miDateTo) url += `&date_to=${encodeURIComponent(_miDateTo)}`;
 
   try {
     const data = await api('GET', url);
@@ -7026,19 +7081,48 @@ async function loadUtilHealth() {
   }
 }
 
+let _orphanJobId = null;
+let _orphanPollInterval = null;
+
 async function _fixOrphanedCategories() {
-  toast('Running full re-normalization...', 'info', 3000);
+  const btn = document.querySelector('#util-health .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+
+  toast('Running full re-normalization…', 'info', 3000);
   try {
     const data = await api('POST', '/normalize/apply', {});
     if (data.job_id) {
-      toast('Re-normalization job started — refresh Data Health when done', 'info', 4000);
+      _orphanJobId = data.job_id;
+      _pollOrphanFix(btn);
     } else {
       toast('Re-normalization complete', 'success');
+      loadUtilHealth();
     }
-    setTimeout(() => loadUtilHealth(), 2000);
   } catch (err) {
     toast('Failed: ' + err.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Fix Now'; }
   }
+}
+
+function _pollOrphanFix(btn) {
+  if (_orphanPollInterval) clearInterval(_orphanPollInterval);
+  _orphanPollInterval = setInterval(async () => {
+    if (!_orphanJobId) { clearInterval(_orphanPollInterval); return; }
+    try {
+      const data = await api('GET', `/normalize/${_orphanJobId}`);
+      if (data.status === 'success') {
+        clearInterval(_orphanPollInterval);
+        _orphanJobId = null;
+        toast(`Re-normalization complete — ${data.rows_done} rows updated.`, 'success');
+        loadUtilHealth();
+      } else if (data.status === 'failed') {
+        clearInterval(_orphanPollInterval);
+        _orphanJobId = null;
+        toast('Re-normalization failed: ' + (data.error || 'unknown'), 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Fix Now'; }
+      }
+    } catch (_) {}
+  }, 1500);
 }
 
 // ── Category Picker (shared) ──────────────────────────────────

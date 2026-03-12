@@ -294,8 +294,9 @@ TransactionAnalysis/
 
 **Merchants (`#page-merchant-rules`)**
 - **Merchant Intelligence** panel: `loadMerchantAnalytics()` → `GET /merchant-analytics`
-  - Per-merchant: total spend all-time, monthly average, transaction frequency, months active, last transaction date
-  - 3-month trend indicator (increasing/decreasing/flat) with MoM percentage
+  - Per-merchant: total spend, monthly average, transaction frequency, months active, last transaction date
+  - **Date range presets**: All Time (default), This Month, Last Month, YTD, per-year dropdown; scopes all stats and trend to selected period; `date_from` / `date_to` query params on `GET /merchant-analytics`
+  - 3-month trend indicator (increasing/decreasing/flat) with MoM percentage; trend window shifts relative to selected date range end
   - Accelerating spend flag (red badge) for >20% MoM increase
   - Mini sparkline bars showing last 3 months of spend per merchant
   - Sort by: total spend, frequency, recent activity, trend
@@ -355,7 +356,7 @@ TransactionAnalysis/
   - **Merchant List**: One row per normalized merchant with transaction count, total spend, assigned category (from `merchant_category_map` JOIN), last seen date; sortable (count/name/last seen); inline merchant-level category edit via `openCategoryPicker` — writes `merchant_category_map` and re-normalizes all transactions for that merchant (respects `category_override`); search filter; bulk select checkboxes with bulk action bar (Assign Category, Remove Category, Clear Selection) — operations run sequentially per merchant (DuckDB single-writer)
   - **Rule Tester**: Paste transaction description → shows full classification trace: raw → merchant rule match → normalized merchant → category → parent
   - **Duplicate Review**: Lists pending `duplicate_candidates` with side-by-side transaction details; action buttons: Keep Both / Remove Newer / Not a Duplicate; empty state message when clean
-  - **Data Health**: Read-only dashboard with 6 metrics (uncategorized txns, unreviewed txns, merchants without category, no merchant match, pending duplicates, orphaned categories); each metric links to relevant page; orphaned categories metric shows "Fix Now" button that runs full `POST /normalize/apply`
+  - **Data Health**: Read-only dashboard with 6 metrics (uncategorized txns, unreviewed txns, merchants without category, no merchant match, pending duplicates, orphaned categories); each metric links to relevant page; orphaned categories metric shows "Fix Now" button that runs full `POST /normalize/apply` with proper job polling (button disables during run, re-enables on completion/failure) ~~(BUG-29: previously used a 2s timeout instead of polling, and `batch_renormalize` wrote to wrong column)~~
 - **Near-Duplicate Detection**: Runs automatically after every import commit as part of `_commit_bg`; flags transactions with same merchant, amount within 1%, date within 3 days; results stored in `duplicate_candidates` table; non-blocking banner shown on import page linking to Duplicate Review
 - **Structured Category Picker**: Uncategorized Merchants input replaced with type-ahead dropdown populated from category taxonomy; "Parent > Subcategory" format; [ Custom ] option for free-text entry
 - API: `GET /duplicates`, `POST /duplicates/{id}/resolve`, `GET /utilities/categories`, `GET /utilities/merchants`, `POST /utilities/test-rule`, `GET /utilities/health`
@@ -934,6 +935,7 @@ Single-row table seeded with `1` on first migration run.
 
 **LOW — minor UX friction:**
 8. **BUG-28: `duplicate_candidates` detection only runs after commit, not during preview.** Users cannot see potential near-duplicates before committing data. The detection would be more useful as a preview-time warning.
+9. ~~**BUG-29 (FIXED): Data Health "Fix Now" button was a no-op.**~~ Fixed in v2.26.4. Two bugs: (a) `batch_renormalize()._flush_batch()` wrote to `category` column instead of `category_normalized` + `category_parent`, so orphaned categories count never changed; (b) `_fixOrphanedCategories()` used a 2s `setTimeout` instead of polling the job, so it re-fetched health data before the job finished. Fix: updated `_flush_batch()` to write correct columns with parent resolution via `normalize_category()` + built-in taxonomy lookup; replaced timeout with proper `_pollOrphanFix()` interval; button disabled during job run.
 
 #### RECOMMENDED FIXES (do not implement — list only)
 
@@ -1193,6 +1195,8 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.27.0 | 2026-03-12 | feat: Merchant Intelligence date pickers — All Time / This Month / Last Month / YTD / Year presets scope all stats and trend to selected period; `date_from` + `date_to` query params on `GET /merchant-analytics`; trend window shifts relative to date range end; year dropdown populated from transaction data; active preset styling |
+| v2.26.4 | 2026-03-12 | fix: orphan categories Fix Now — `batch_renormalize()` now writes `category_normalized` + `category_parent` (was writing `category` column, a no-op); `_fixOrphanedCategories()` now polls job status instead of 2s timeout; button disabled during run (BUG-29); 1 new test; 331 total tests |
 | v2.26.3 | 2026-03-12 | fix: amount variance UX in duplicate review — side-by-side comparison table with amber-highlighted diffs, context-aware resolution labels, reason-specific import banners (BUG-22); version bump |
 | v2.26.2 | 2026-03-12 | fix: fuzzy duplicate detection for description drift — post-import fuzzy pass via `fuzzy_duplicate_detection()` in `utils/fuzzy_dedup.py`; rapidfuzz token sort ratio for description similarity; pre-filter by date/amount window; reason + similarity_score in duplicate_candidates; `delete_a` resolve action; UI reason labels + percentage display; 11 new tests; 341 total tests (BUG-21) |
 | v2.26.1 | 2026-03-11 | fix: consolidate duplicate category pickers into unified openCategoryPicker with allowCustom option (BUG-18) |
