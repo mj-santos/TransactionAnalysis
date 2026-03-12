@@ -2893,9 +2893,15 @@ No cloud services, no external dependencies — all data stays on your machine.
                 fuzzy_threshold=fuzzy_threshold,
                 include_low_frequency=include_low_frequency,
             )
+            # Filter out dismissed rule suggestions
+            dismissed_rows = conn.execute(
+                "SELECT suggestion_key FROM rule_dismissals"
+            ).fetchall()
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}") from exc
+        dismissed_keys = {r[0] for r in dismissed_rows}
+        suggestions = [s for s in suggestions if s.get("pattern", "") not in dismissed_keys]
         standard = [s for s in suggestions if s["count"] >= min_transactions]
         low_freq = [s for s in suggestions if s["count"] < min_transactions]
         return {
@@ -2904,6 +2910,45 @@ No cloud services, no external dependencies — all data stays on your machine.
             "low_frequency": low_freq,
             "low_frequency_count": len(low_freq),
         }
+
+    @app.post("/merchant-rules/suggestions/{pattern:path}/dismiss", tags=["merchant"],
+              summary="Dismiss a rule suggestion")
+    def dismiss_rule_suggestion(pattern: str):
+        """Dismiss a normalization rule suggestion so it no longer appears."""
+        import datetime as _dt
+        now = _dt.datetime.utcnow().isoformat()
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                "DELETE FROM rule_dismissals WHERE suggestion_key = ?",
+                [pattern],
+            )
+            conn.execute(
+                "INSERT INTO rule_dismissals (suggestion_key, dismissed_at) "
+                "VALUES (?, ?)",
+                [pattern, now],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Dismiss failed: {exc}") from exc
+        return {"status": "dismissed", "pattern": pattern}
+
+    @app.delete("/merchant-rules/suggestions/{pattern:path}/dismiss", tags=["merchant"],
+                summary="Undo dismissal of a rule suggestion")
+    def undo_dismiss_rule_suggestion(pattern: str):
+        """Remove a rule suggestion dismissal so it reappears."""
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                "DELETE FROM rule_dismissals WHERE suggestion_key = ?",
+                [pattern],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Undo failed: {exc}") from exc
+        return {"status": "restored", "pattern": pattern}
 
     @app.get("/merchant-categories/suggestions", tags=["merchant"],
              summary="Suggest categories for uncategorized merchants")
@@ -2933,12 +2978,57 @@ No cloud services, no external dependencies — all data stays on your machine.
                 LIMIT 500
                 """
             ).fetchall()
+            # Filter out dismissed merchants
+            dismissed_rows = conn.execute(
+                "SELECT suggestion_key FROM category_dismissals"
+            ).fetchall()
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Query failed: {exc}") from exc
+        dismissed_keys = {r[0] for r in dismissed_rows}
         merchants = [r[0] for r in rows if r[0]]
-        suggestions = suggest_categories_for_merchants(merchants)
+        all_suggestions = suggest_categories_for_merchants(merchants)
+        suggestions = [s for s in all_suggestions if s["merchant"] not in dismissed_keys]
         return {"suggestions": suggestions, "count": len(suggestions)}
+
+    @app.post("/merchant-categories/suggestions/{merchant}/dismiss", tags=["merchant"],
+              summary="Dismiss a category suggestion")
+    def dismiss_category_suggestion(merchant: str):
+        """Dismiss a merchant category suggestion so it no longer appears."""
+        import datetime as _dt
+        now = _dt.datetime.utcnow().isoformat()
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                "DELETE FROM category_dismissals WHERE suggestion_key = ?",
+                [merchant],
+            )
+            conn.execute(
+                "INSERT INTO category_dismissals (suggestion_key, dismissed_at) "
+                "VALUES (?, ?)",
+                [merchant, now],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Dismiss failed: {exc}") from exc
+        return {"status": "dismissed", "merchant": merchant}
+
+    @app.delete("/merchant-categories/suggestions/{merchant}/dismiss", tags=["merchant"],
+                summary="Undo dismissal of a category suggestion")
+    def undo_dismiss_category_suggestion(merchant: str):
+        """Remove a category suggestion dismissal so it reappears."""
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                "DELETE FROM category_dismissals WHERE suggestion_key = ?",
+                [merchant],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Undo failed: {exc}") from exc
+        return {"status": "restored", "merchant": merchant}
 
     # -----------------------------------------------------------------------
     # Merchant category map
@@ -5573,6 +5663,102 @@ No cloud services, no external dependencies — all data stays on your machine.
                                 detail=f"Dismiss failed: {exc}") from exc
 
         return {"status": "dismissed", "suggestion_id": suggestion_id}
+
+    @app.get("/recurring/suggestions/dismissed", tags=["recurring"],
+             summary="List dismissed annual fee suggestions")
+    def list_dismissed_suggestions():
+        """Return all dismissed annual fee suggestions with their details."""
+        from finance_etl.recurring import detect_annual_fee_suggestions
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path, read_only=True)
+            dismissed_rows = conn.execute(
+                "SELECT suggestion_id, dismissed_at FROM recurring_dismissals"
+            ).fetchall()
+            if not dismissed_rows:
+                conn.close()
+                return {"items": [], "count": 0}
+
+            dismissed_map = {r[0]: r[1] for r in dismissed_rows}
+            dismissed_ids = set(dismissed_map.keys())
+
+            # Get ALL suggestions (pass empty exclusion sets)
+            all_suggestions = detect_annual_fee_suggestions(
+                conn,
+                dismissed_ids=set(),
+                existing_override_keys=set(),
+                auto_annual_merchants=set(),
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Query failed: {exc}") from exc
+
+        # Filter to only dismissed ones and add dismissed_at
+        items = []
+        for s in all_suggestions:
+            if s["suggestion_id"] in dismissed_ids:
+                s["dismissed_at"] = dismissed_map[s["suggestion_id"]]
+                items.append(s)
+        return {"items": items, "count": len(items)}
+
+    @app.post("/recurring/suggestions/dismissed/{suggestion_id}/undo", tags=["recurring"],
+              summary="Undo dismissal of an annual fee suggestion")
+    def undo_dismiss_suggestion(suggestion_id: str):
+        """Remove a dismissal so the suggestion reappears."""
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path)
+            conn.execute(
+                "DELETE FROM recurring_dismissals WHERE suggestion_id = ?",
+                [suggestion_id],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Undo failed: {exc}") from exc
+        return {"status": "restored", "suggestion_id": suggestion_id}
+
+    @app.get("/recurring/deleted", tags=["recurring"],
+             summary="List deleted (suppressed) recurring charges")
+    def list_deleted_recurring():
+        """Return auto-detected recurring charges that were suppressed by the user."""
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT merchant_key, created_at FROM recurring_overrides "
+                "WHERE is_recurring = false"
+            ).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Query failed: {exc}") from exc
+
+        items = [{"merchant": r[0], "deleted_at": r[1]} for r in rows]
+        return {"items": items, "count": len(items)}
+
+    @app.post("/recurring/deleted/{merchant}/restore", tags=["recurring"],
+              summary="Restore a deleted recurring charge")
+    def restore_deleted_recurring(merchant: str):
+        """Remove the is_recurring=false override so the charge reappears."""
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path)
+            conn.execute(
+                "DELETE FROM recurring_overrides "
+                "WHERE merchant_key = ? AND is_recurring = false",
+                [merchant],
+            )
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Restore failed: {exc}") from exc
+        return {"status": "restored", "merchant": merchant}
 
     # -----------------------------------------------------------------------
     # Backup & Restore  (v2 — comprehensive full-state backup)
