@@ -99,13 +99,16 @@ class _FakeConn:
     """Minimal mock of a DuckDB connection returning canned data."""
     def __init__(self, txn_rows, override_rows=None):
         self._txn_rows = txn_rows
-        # Normalize override rows to 5-column tuples:
-        # (merchant_key, is_recurring, label, amount, frequency)
+        # Normalize override rows to 7-column tuples:
+        # (merchant_key, is_recurring, label, amount, frequency, paused, last_date)
         normalized = []
         for row in (override_rows or []):
             if len(row) == 2:
-                # Legacy 2-col: (merchant_key, is_recurring) → pad with defaults
-                normalized.append((row[0], row[1], row[0], None, None))
+                # Legacy 2-col: (merchant_key, is_recurring)
+                normalized.append((row[0], row[1], row[0], None, None, False, None))
+            elif len(row) == 5:
+                # 5-col: (merchant_key, is_recurring, label, amount, frequency)
+                normalized.append((*row, False, None))
             else:
                 normalized.append(row)
         self._override_rows = normalized
@@ -133,7 +136,7 @@ class TestDetectRecurring:
         """A merchant with 5 monthly charges at the same amount is detected."""
         txns = _make_monthly_txns("Netflix", 15.99, "2024-01-15", 5)
         conn = _FakeConn(txns)
-        results = detect_recurring(conn)
+        results, _ = detect_recurring(conn)
 
         assert len(results) == 1
         r = results[0]
@@ -148,7 +151,7 @@ class TestDetectRecurring:
         """Fewer than MIN_OCCURRENCES should not be flagged."""
         txns = _make_monthly_txns("OneOff", 50.0, "2024-01-01", MIN_OCCURRENCES - 1)
         conn = _FakeConn(txns)
-        results = detect_recurring(conn)
+        results, _ = detect_recurring(conn)
         assert len(results) == 0
 
     def test_ignores_irregular_intervals(self):
@@ -161,7 +164,7 @@ class TestDetectRecurring:
             ("Random Co", datetime.date(2024, 12, 1), 20.0),
         ]
         conn = _FakeConn(txns)
-        results = detect_recurring(conn)
+        results, _ = detect_recurring(conn)
         assert len(results) == 0
 
     def test_user_override_unmark(self):
@@ -169,7 +172,7 @@ class TestDetectRecurring:
         txns = _make_monthly_txns("Spotify", 9.99, "2024-01-01", 6)
         overrides = [("Spotify", False)]
         conn = _FakeConn(txns, overrides)
-        results = detect_recurring(conn, include_overrides=True)
+        results, _ = detect_recurring(conn, include_overrides=True)
         assert len(results) == 0
 
     def test_user_override_mark(self):
@@ -180,7 +183,7 @@ class TestDetectRecurring:
         ]
         overrides = [("NewSub", True)]
         conn = _FakeConn(txns, overrides)
-        results = detect_recurring(conn, include_overrides=True)
+        results, _ = detect_recurring(conn, include_overrides=True)
         assert len(results) == 1
         assert results[0]["merchant"] == "NewSub"
         assert results[0]["is_auto"] is False
@@ -194,7 +197,7 @@ class TestDetectRecurring:
             ("Grocery", datetime.date(2024, 4, 1), 200.0),
         ]
         conn = _FakeConn(txns)
-        results = detect_recurring(conn)
+        results, _ = detect_recurring(conn)
         assert len(results) == 0
 
     def test_multiple_merchants(self):
@@ -205,7 +208,7 @@ class TestDetectRecurring:
             [("OneOff", datetime.date(2024, 3, 1), 100.0)]  # too few
         )
         conn = _FakeConn(txns)
-        results = detect_recurring(conn)
+        results, _ = detect_recurring(conn)
         merchants = {r["merchant"] for r in results}
         assert "Netflix" in merchants
         assert "Spotify" in merchants
@@ -320,7 +323,7 @@ class TestOverrideWithNoTransactions:
         # Override for "Amazon Prime Annual" — no transactions with that merchant
         overrides = [("Amazon Prime Annual", True, "Amazon Prime Annual", 139.0, "annual")]
         conn = _FakeConn(txns, overrides)
-        results = detect_recurring(conn, include_overrides=True)
+        results, _ = detect_recurring(conn, include_overrides=True)
 
         merchants = {r["merchant"] for r in results}
         assert "Amazon Prime Annual" in merchants, (
@@ -337,7 +340,7 @@ class TestOverrideWithNoTransactions:
         txns = _make_monthly_txns("Spotify", 9.99, "2024-01-01", 5)
         overrides = [("Spotify", True, "Spotify", 9.99, "monthly")]
         conn = _FakeConn(txns, overrides)
-        results = detect_recurring(conn, include_overrides=True)
+        results, _ = detect_recurring(conn, include_overrides=True)
 
         # Spotify already auto-detected — override should not create duplicate
         spotify_results = [r for r in results if r["merchant"] == "Spotify"]
@@ -356,3 +359,81 @@ class TestMicrosoft365Detection:
         results = detect_annual_fee_suggestions(conn)
         assert len(results) == 1
         assert results[0]["label"] == "Microsoft 365"
+
+
+# ---------------------------------------------------------------------------
+# Pause / Resume overrides
+# ---------------------------------------------------------------------------
+
+class TestPausedOverrides:
+    """Paused recurring charges should appear in the paused list, not active."""
+
+    def test_paused_override_excluded_from_active(self):
+        """A paused override appears in paused list, not active."""
+        txns = _make_monthly_txns("Netflix", 15.99, "2024-01-15", 5)
+        # 7-col: (merchant_key, is_recurring, label, amount, frequency, paused, last_date)
+        overrides = [("Netflix", True, "Netflix", 15.99, "monthly", True, None)]
+        conn = _FakeConn(txns, overrides)
+        active, paused = detect_recurring(conn, include_overrides=True)
+
+        active_merchants = {r["merchant"] for r in active}
+        paused_merchants = {r["merchant"] for r in paused}
+        assert "Netflix" not in active_merchants, "Paused merchant should not be in active"
+        assert "Netflix" in paused_merchants, "Paused merchant should be in paused list"
+        assert paused[0]["paused"] is True
+
+    def test_resumed_override_in_active(self):
+        """An override with paused=False appears in active list."""
+        txns = _make_monthly_txns("Spotify", 9.99, "2024-01-01", 5)
+        overrides = [("Spotify", True, "Spotify", 9.99, "monthly", False, None)]
+        conn = _FakeConn(txns, overrides)
+        active, paused = detect_recurring(conn, include_overrides=True)
+
+        active_merchants = {r["merchant"] for r in active}
+        assert "Spotify" in active_merchants
+        assert len(paused) == 0
+
+    def test_auto_detected_with_pause_override(self):
+        """Auto-detected pattern paused via override moves to paused list."""
+        txns = _make_monthly_txns("Hulu", 14.99, "2024-01-01", 5)
+        overrides = [("Hulu", True, None, None, None, True, None)]
+        conn = _FakeConn(txns, overrides)
+        active, paused = detect_recurring(conn, include_overrides=True)
+
+        active_merchants = {r["merchant"] for r in active}
+        paused_merchants = {r["merchant"] for r in paused}
+        assert "Hulu" not in active_merchants
+        assert "Hulu" in paused_merchants
+
+
+# ---------------------------------------------------------------------------
+# last_date for synthetic patterns
+# ---------------------------------------------------------------------------
+
+class TestOverrideLastDate:
+    """Stored last_date should be used for next_estimated computation."""
+
+    def test_override_with_last_date_computes_next_estimated(self):
+        """Stored last_date produces valid next_estimated."""
+        # Override with no matching transactions but has last_date
+        overrides = [("Amazon Prime", True, "Amazon Prime", 139.0, "annual",
+                       False, "2024-06-15")]
+        conn = _FakeConn([], overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        assert len(active) == 1
+        prime = active[0]
+        assert prime["merchant"] == "Amazon Prime"
+        assert prime["last_date"] == "2024-06-15"
+        assert prime["next_estimated"] == "2025-06-15"  # +365 days
+        assert prime["median_amount"] == 139.0
+
+    def test_override_without_last_date_backward_compat(self):
+        """Override with no last_date still works (empty/None output)."""
+        overrides = [("Old Sub", True, "Old Sub", 50.0, "monthly", False, None)]
+        conn = _FakeConn([], overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        assert len(active) == 1
+        assert active[0]["last_date"] == ""
+        assert active[0]["next_estimated"] is None

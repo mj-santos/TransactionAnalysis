@@ -4991,8 +4991,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         recurring_total = 0.0
         try:
             from finance_etl.recurring import detect_recurring, compute_monthly_recurring_total
-            patterns = detect_recurring(conn)
-            recurring_total = compute_monthly_recurring_total(patterns)
+            active_patterns, _ = detect_recurring(conn)
+            recurring_total = compute_monthly_recurring_total(active_patterns)
         except Exception:
             pass
         annual_recurring = round(recurring_total * 12, 2)
@@ -5368,17 +5368,18 @@ No cloud services, no external dependencies — all data stays on your machine.
 
         try:
             conn = _gc(db_path, read_only=True)
-            patterns = detect_recurring(conn)
-            monthly_total = compute_monthly_recurring_total(patterns)
+            active, paused = detect_recurring(conn)
+            monthly_total = compute_monthly_recurring_total(active)
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500,
                                 detail=f"Recurring detection failed: {exc}") from exc
 
         return {
-            "patterns": patterns,
+            "patterns": active,
+            "paused": paused,
             "monthly_total": monthly_total,
-            "count": len(patterns),
+            "count": len(active),
         }
 
     @app.post("/recurring/override", tags=["recurring"],
@@ -5402,6 +5403,12 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=400,
                                 detail="merchant and is_recurring are required.")
 
+        label = body.get("label")
+        amount = body.get("amount")
+        frequency = body.get("frequency")
+        paused = body.get("paused", False)
+        last_date = body.get("last_date")
+
         now = _dt.datetime.utcnow().isoformat()
         try:
             conn = _gc(db_path)
@@ -5413,9 +5420,12 @@ No cloud services, no external dependencies — all data stays on your machine.
             )
             conn.execute(
                 """INSERT INTO recurring_overrides
-                   (merchant_key, is_recurring, created_at, updated_at)
-                   VALUES (?, ?, ?, ?)""",
-                [merchant, bool(is_recurring), now, now],
+                   (merchant_key, is_recurring, label, amount, frequency,
+                    paused, last_date, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [merchant, bool(is_recurring), label,
+                 float(amount) if amount is not None else None,
+                 frequency, bool(paused), last_date, now, now],
             )
             conn.close()
         except Exception as exc:
@@ -5469,7 +5479,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             override_keys = {r[0] for r in override_rows}
 
             # Auto-detected annual merchants (so we don't double-suggest)
-            auto_patterns = detect_recurring(conn, include_overrides=False)
+            auto_patterns, _ = detect_recurring(conn, include_overrides=False)
             auto_annual = {
                 p["merchant"] for p in auto_patterns
                 if p.get("frequency") == "annual"
@@ -5504,6 +5514,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         label = body.get("label", "").strip()
         amount = body.get("amount")
         frequency = body.get("frequency", "annual")
+        last_date = body.get("last_date")
 
         if not label:
             raise HTTPException(status_code=400, detail="label is required.")
@@ -5519,11 +5530,11 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn.execute(
                 """INSERT INTO recurring_overrides
                    (merchant_key, is_recurring, label, amount, frequency,
-                    created_at, updated_at)
-                   VALUES (?, TRUE, ?, ?, ?, ?, ?)""",
+                    last_date, created_at, updated_at)
+                   VALUES (?, TRUE, ?, ?, ?, ?, ?, ?)""",
                 [label, label,
                  float(amount) if amount is not None else None,
-                 frequency, now, now],
+                 frequency, last_date, now, now],
             )
             # Remove from dismissals if it was previously dismissed
             conn.execute(
