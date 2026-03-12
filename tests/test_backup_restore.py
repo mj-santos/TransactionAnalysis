@@ -339,3 +339,141 @@ def test_category_override_survives_backup_restore(tmp_path: Path):
     assert row[0] == "ManualCat"
     assert row[1] == "Food & Dining"
     assert row[2] == True
+
+
+# ---------------------------------------------------------------------------
+# 10. recurring_overrides full columns survive backup/restore
+# ---------------------------------------------------------------------------
+
+def test_recurring_overrides_full_columns_roundtrip(tmp_path: Path):
+    """All recurring_overrides columns (label, amount, frequency, paused, last_date)
+    survive backup export and restore."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    conn.execute(
+        """INSERT INTO recurring_overrides
+           (merchant_key, is_recurring, label, amount, frequency,
+            paused, last_date, created_at, updated_at)
+           VALUES ('Netflix', TRUE, 'Netflix Streaming', 15.99, 'monthly',
+                   FALSE, '2025-12-15', '2025-01-01', '2025-01-01')"""
+    )
+    conn.execute(
+        """INSERT INTO recurring_overrides
+           (merchant_key, is_recurring, label, amount, frequency,
+            paused, last_date, created_at, updated_at)
+           VALUES ('Amazon Prime', TRUE, 'Prime Annual', 139.00, 'annual',
+                   TRUE, '2025-06-01', '2025-01-01', '2025-01-01')"""
+    )
+    conn.close()
+
+    # Export
+    resp = client.get("/backup/export")
+    assert resp.status_code == 200
+    payload = json.loads(resp.content)
+    overrides = payload["data"]["recurring_overrides"]
+    assert len(overrides) == 2
+
+    # Verify exported data includes all columns
+    netflix = next(o for o in overrides if o["merchant_key"] == "Netflix")
+    assert netflix["label"] == "Netflix Streaming"
+    assert float(netflix["amount"]) == 15.99
+    assert netflix["frequency"] == "monthly"
+
+    prime = next(o for o in overrides if o["merchant_key"] == "Amazon Prime")
+    assert prime["label"] == "Prime Annual"
+    assert float(prime["amount"]) == 139.00
+    assert prime["frequency"] == "annual"
+    assert prime["paused"] == True
+    assert prime["last_date"] == "2025-06-01"
+
+    # Restore
+    resp2 = client.post(
+        "/backup/restore",
+        files={"file": ("backup.json", io.BytesIO(resp.content), "application/json")},
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["recurring_overrides_restored"] == 2
+
+    # Verify data survived
+    conn2 = get_connection(db_path, read_only=True)
+    rows = conn2.execute(
+        "SELECT merchant_key, label, amount, frequency, paused, last_date "
+        "FROM recurring_overrides ORDER BY merchant_key"
+    ).fetchall()
+    conn2.close()
+    assert len(rows) == 2
+    # Amazon Prime
+    assert rows[0][1] == "Prime Annual"
+    assert float(rows[0][2]) == 139.00
+    assert rows[0][3] == "annual"
+    assert rows[0][4] == True
+    assert rows[0][5] == "2025-06-01"
+    # Netflix
+    assert rows[1][1] == "Netflix Streaming"
+    assert float(rows[1][2]) == 15.99
+    assert rows[1][3] == "monthly"
+
+
+# ---------------------------------------------------------------------------
+# 11. Dismissal tables survive backup/restore
+# ---------------------------------------------------------------------------
+
+def test_dismissal_tables_roundtrip(tmp_path: Path):
+    """recurring_dismissals, category_dismissals, and rule_dismissals
+    survive backup export and restore."""
+    from fastapi.testclient import TestClient
+    from finance_etl.api import create_app
+
+    db_path = tmp_path / "test.duckdb"
+    app = create_app(db_path=str(db_path))
+    client = TestClient(app)
+
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT INTO recurring_dismissals (suggestion_id, dismissed_at) "
+        "VALUES ('annual_fee_1', '2025-03-01T10:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO category_dismissals (suggestion_key, dismissed_at) "
+        "VALUES ('cat_sugg_1', '2025-03-01T11:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO rule_dismissals (suggestion_key, dismissed_at) "
+        "VALUES ('rule_sugg_1', '2025-03-01T12:00:00')"
+    )
+    conn.close()
+
+    # Export
+    resp = client.get("/backup/export")
+    assert resp.status_code == 200
+    payload = json.loads(resp.content)
+    assert len(payload["data"]["recurring_dismissals"]) == 1
+    assert len(payload["data"]["category_dismissals"]) == 1
+    assert len(payload["data"]["rule_dismissals"]) == 1
+
+    # Restore
+    resp2 = client.post(
+        "/backup/restore",
+        files={"file": ("backup.json", io.BytesIO(resp.content), "application/json")},
+    )
+    assert resp2.status_code == 200
+    body = resp2.json()
+    assert body["recurring_dismissals_restored"] == 1
+    assert body["category_dismissals_restored"] == 1
+    assert body["rule_dismissals_restored"] == 1
+
+    # Verify data survived
+    conn2 = get_connection(db_path, read_only=True)
+    rd = conn2.execute("SELECT suggestion_id FROM recurring_dismissals").fetchall()
+    cd = conn2.execute("SELECT suggestion_key FROM category_dismissals").fetchall()
+    rld = conn2.execute("SELECT suggestion_key FROM rule_dismissals").fetchall()
+    conn2.close()
+    assert len(rd) == 1 and rd[0][0] == "annual_fee_1"
+    assert len(cd) == 1 and cd[0][0] == "cat_sugg_1"
+    assert len(rld) == 1 and rld[0][0] == "rule_sugg_1"

@@ -2435,14 +2435,38 @@ No cloud services, no external dependencies — all data stays on your machine.
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS no_merchant
                 FROM transactions_norm
             """).fetchone()
-            # Merchants without a category
+            # Merchants without a category — aligned with uncategorized
+            # merchants page logic (NOT IN merchant_category_map)
             merchants_no_cat = conn.execute("""
-                SELECT COUNT(DISTINCT COALESCE(merchant, description))
-                FROM transactions_norm
-                WHERE COALESCE(is_split, FALSE) = FALSE
-                  AND merchant IS NOT NULL AND merchant != ''
-                  AND (category_normalized IS NULL OR category_normalized = '')
+                SELECT COUNT(DISTINCT tn.merchant)
+                FROM transactions_norm tn
+                WHERE COALESCE(tn.is_split, FALSE) = FALSE
+                  AND tn.merchant IS NOT NULL AND tn.merchant != ''
+                  AND LOWER(tn.merchant) NOT IN (
+                    SELECT LOWER(merchant) FROM merchant_category_map
+                  )
             """).fetchone()
+            # Per-statement_type breakdown for navigation
+            per_type_rows = conn.execute("""
+                SELECT
+                  statement_type,
+                  COUNT(CASE WHEN (category_normalized IS NULL OR category_normalized = '')
+                              AND COALESCE(is_split, FALSE) = FALSE THEN 1 END),
+                  COUNT(CASE WHEN COALESCE(unreviewed, TRUE) = TRUE
+                              AND COALESCE(is_split, FALSE) = FALSE THEN 1 END),
+                  COUNT(CASE WHEN (merchant IS NULL OR merchant = '')
+                              AND COALESCE(is_split, FALSE) = FALSE THEN 1 END)
+                FROM transactions_norm
+                GROUP BY statement_type
+            """).fetchall()
+            per_type = {
+                row[0]: {
+                    "uncategorized": row[1] or 0,
+                    "unreviewed": row[2] or 0,
+                    "no_merchant": row[3] or 0,
+                }
+                for row in per_type_rows if row[0]
+            }
             # Pending duplicates
             pending_dups = conn.execute(
                 "SELECT COUNT(*) FROM duplicate_candidates WHERE status = 'pending'"
@@ -2475,6 +2499,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "no_merchant_match": r[2] or 0,
             "pending_duplicates": pending_dups[0] if pending_dups else 0,
             "orphaned_categories": orphaned[0] if orphaned else 0,
+            "per_type": per_type,
         }
 
     # -----------------------------------------------------------------------
@@ -5773,6 +5798,9 @@ No cloud services, no external dependencies — all data stays on your machine.
         "category_rules",
         "budget_goals",
         "recurring_overrides",
+        "recurring_dismissals",
+        "category_dismissals",
+        "rule_dismissals",
         "normalization_jobs",
         "transactions_stage",
         "transactions_norm",
@@ -6030,10 +6058,41 @@ No cloud services, no external dependencies — all data stays on your machine.
             for r in data.get("recurring_overrides", []):
                 conn.execute(
                     """INSERT INTO recurring_overrides
-                       (merchant_key, is_recurring, created_at, updated_at)
-                       VALUES (?,?,?,?)""",
+                       (merchant_key, is_recurring, label, amount, frequency,
+                        paused, last_date, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
                     [r["merchant_key"], r.get("is_recurring", True),
+                     r.get("label"), r.get("amount"),
+                     r.get("frequency"), r.get("paused", False),
+                     r.get("last_date"),
                      r.get("created_at", now), r.get("updated_at", now)],
+                )
+
+            # 6b. recurring_dismissals
+            conn.execute("DELETE FROM recurring_dismissals")
+            for r in data.get("recurring_dismissals", []):
+                conn.execute(
+                    """INSERT INTO recurring_dismissals
+                       (suggestion_id, dismissed_at) VALUES (?,?)""",
+                    [r["suggestion_id"], r["dismissed_at"]],
+                )
+
+            # 6c. category_dismissals
+            conn.execute("DELETE FROM category_dismissals")
+            for r in data.get("category_dismissals", []):
+                conn.execute(
+                    """INSERT INTO category_dismissals
+                       (suggestion_key, dismissed_at) VALUES (?,?)""",
+                    [r["suggestion_key"], r["dismissed_at"]],
+                )
+
+            # 6d. rule_dismissals
+            conn.execute("DELETE FROM rule_dismissals")
+            for r in data.get("rule_dismissals", []):
+                conn.execute(
+                    """INSERT INTO rule_dismissals
+                       (suggestion_key, dismissed_at) VALUES (?,?)""",
+                    [r["suggestion_key"], r["dismissed_at"]],
                 )
 
             # 7. normalization_jobs
@@ -6249,6 +6308,9 @@ No cloud services, no external dependencies — all data stays on your machine.
             "category_rules_restored": len(data.get("category_rules", [])),
             "budget_goals_restored": len(data.get("budget_goals", [])),
             "recurring_overrides_restored": len(data.get("recurring_overrides", [])),
+            "recurring_dismissals_restored": len(data.get("recurring_dismissals", [])),
+            "category_dismissals_restored": len(data.get("category_dismissals", [])),
+            "rule_dismissals_restored": len(data.get("rule_dismissals", [])),
             "normalization_jobs_restored": len(data.get("normalization_jobs", [])),
             "transactions_stage_restored": len(data.get("transactions_stage", [])),
             "transactions_norm_restored": tx_count,
