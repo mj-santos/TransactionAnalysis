@@ -7,10 +7,15 @@ it has appeared 3+ times.
 
 User overrides (manual mark/unmark) are stored in the ``recurring_overrides``
 DB table and take precedence over auto-detection.
+
+Annual fee keyword detection (``detect_annual_fee_suggestions``) supplements
+the interval-based algorithm by scanning descriptions for membership/renewal
+keywords and correlating card-specific fees with the importing account.
 """
 from __future__ import annotations
 
 import datetime
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -269,3 +274,177 @@ def compute_monthly_recurring_total(patterns: list[dict[str, Any]]) -> float:
         mult = multipliers.get(p.get("frequency", "monthly"), 1.0)
         total += p.get("median_amount", 0) * mult
     return round(total, 2)
+
+
+# ---------------------------------------------------------------------------
+# Annual fee / membership keyword detection
+# ---------------------------------------------------------------------------
+
+# (keyword_pattern, label_template)
+# Card-specific fees use {account} placeholder filled from account_name.
+_ANNUAL_FEE_KEYWORDS: list[tuple[str, str]] = [
+    # Card-specific fees
+    ("renewal membership fee", "{account} Annual Fee"),
+    ("annual membership fee", "{account} Annual Fee"),
+    ("annual card fee", "{account} Annual Fee"),
+    ("annual fee", "{account} Annual Fee"),
+    ("membership fee", "{account} Membership Fee"),
+    # Known annual subscriptions
+    ("amazon prime", "Amazon Prime"),
+    ("prime membership", "Amazon Prime"),
+    ("costco membership", "Costco Membership"),
+    ("costco annual", "Costco Membership"),
+    ("sam's club membership", "Sam's Club Membership"),
+    ("walmart+ annual", "Walmart+ Annual"),
+    ("aaa membership", "AAA Membership"),
+    ("netflix annual", "Netflix Annual"),
+    ("youtube premium annual", "YouTube Premium Annual"),
+    ("spotify annual", "Spotify Annual"),
+    ("apple one annual", "Apple One Annual"),
+    ("icloud annual", "iCloud Annual"),
+    ("microsoft 365", "Microsoft 365"),
+    ("office 365", "Microsoft 365"),
+    ("adobe annual", "Adobe Annual"),
+    ("creative cloud annual", "Adobe Creative Cloud"),
+]
+
+# Keywords that represent card-specific fees (use {account} placeholder)
+_CARD_FEE_KEYWORDS = frozenset({
+    "renewal membership fee", "annual membership fee", "annual fee",
+    "annual card fee", "membership fee",
+})
+
+
+def _suggestion_id(keyword: str, account_name: str) -> str:
+    """Deterministic ID for a suggestion based on keyword + account."""
+    raw = f"{keyword.lower().strip()}|{account_name.lower().strip()}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def detect_annual_fee_suggestions(
+    conn,
+    dismissed_ids: set[str] | None = None,
+    existing_override_keys: set[str] | None = None,
+    auto_annual_merchants: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Scan transactions for annual fee / membership keywords.
+
+    Returns suggested annual charges that the user can accept, edit, or dismiss.
+    Excludes suggestions already dismissed, already in overrides, or already
+    auto-detected as annual by the interval engine.
+
+    Parameters
+    ----------
+    conn : duckdb connection
+    dismissed_ids : set of suggestion IDs the user has dismissed
+    existing_override_keys : set of merchant_key values in recurring_overrides
+    auto_annual_merchants : set of merchant names auto-detected as annual
+    """
+    dismissed = dismissed_ids or set()
+    override_keys = existing_override_keys or set()
+    auto_annual = auto_annual_merchants or set()
+
+    # Build OR condition for all keywords
+    like_clauses = []
+    params = []
+    for kw, _label in _ANNUAL_FEE_KEYWORDS:
+        like_clauses.append("LOWER(description) LIKE ?")
+        params.append(f"%{kw}%")
+
+    if not like_clauses:
+        return []
+
+    where = " OR ".join(like_clauses)
+    rows = conn.execute(
+        f"""SELECT transaction_fingerprint, description, ABS(amount) AS abs_amount,
+                   transaction_date, bank_name, account_name, merchant
+            FROM transactions_norm
+            WHERE ({where})
+              AND COALESCE(excluded, FALSE) = FALSE
+            ORDER BY transaction_date DESC""",
+        params,
+    ).fetchall()
+
+    # Group matches by (matched_keyword, account_name)
+    # Each group produces one suggestion
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for fp, desc, amt, txn_date, bank, account, merchant in rows:
+        desc_lower = desc.lower() if desc else ""
+        # Find the first matching keyword
+        matched_kw = None
+        matched_label = None
+        for kw, label_tpl in _ANNUAL_FEE_KEYWORDS:
+            if kw in desc_lower:
+                matched_kw = kw
+                matched_label = label_tpl
+                break
+        if not matched_kw:
+            continue
+
+        acct = account or bank or "Unknown"
+        key = (matched_kw, acct)
+        groups.setdefault(key, []).append({
+            "fingerprint": fp,
+            "description": desc,
+            "amount": float(amt),
+            "date": str(txn_date),
+            "bank_name": bank or "",
+            "account_name": acct,
+            "merchant": merchant or "",
+            "keyword": matched_kw,
+            "label_template": matched_label,
+        })
+
+    # Build suggestion list
+    suggestions = []
+    for (keyword, account), txns in groups.items():
+        sid = _suggestion_id(keyword, account)
+
+        # Skip if dismissed
+        if sid in dismissed:
+            continue
+
+        # Build label
+        is_card_fee = keyword in _CARD_FEE_KEYWORDS
+        label_tpl = txns[0]["label_template"]
+        label = label_tpl.replace("{account}", account) if is_card_fee else label_tpl
+
+        # Skip if label already in overrides or auto-detected as annual
+        label_lower = label.lower()
+        if any(label_lower == k.lower() for k in override_keys):
+            continue
+        # Also check if the merchant is in overrides
+        merchant = txns[0]["merchant"]
+        if merchant and any(merchant.lower() == k.lower() for k in override_keys):
+            continue
+        if merchant and merchant in auto_annual:
+            continue
+
+        # Most recent transaction is the reference
+        latest = txns[0]  # already sorted DESC
+        next_est = None
+        try:
+            last_dt = datetime.date.fromisoformat(latest["date"][:10])
+            next_dt = last_dt + datetime.timedelta(days=365)
+            next_est = next_dt.isoformat()
+        except (ValueError, TypeError):
+            pass
+
+        suggestions.append({
+            "suggestion_id": sid,
+            "label": label,
+            "description": latest["description"],
+            "amount": latest["amount"],
+            "account_name": account,
+            "bank_name": latest["bank_name"],
+            "merchant": merchant,
+            "last_date": latest["date"][:10] if latest["date"] else "",
+            "next_estimated": next_est,
+            "frequency": "annual",
+            "match_count": len(txns),
+            "is_card_fee": is_card_fee,
+        })
+
+    # Sort by amount descending (biggest fees first)
+    suggestions.sort(key=lambda s: s["amount"], reverse=True)
+    return suggestions

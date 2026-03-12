@@ -344,10 +344,19 @@ TransactionAnalysis/
 - Auto/manual badge per row distinguishing auto-detected vs user-overridden entries
 - Unmark button per row to exclude a merchant from the recurring list
 - Manual mark form: text input + button to force-mark any merchant as recurring
-- User overrides stored in `recurring_overrides` DB table; take precedence over auto-detection
+- **Suggested Annual Charges** panel: keyword-based detection for annual fees and memberships
+  - Scans transaction descriptions for 20+ keywords (renewal membership fee, annual fee, Amazon Prime, Costco, Microsoft 365, etc.)
+  - Card-specific fees (e.g., "RENEWAL MEMBERSHIP FEE") auto-labeled with the account name (e.g., "Gold Card Annual Fee")
+  - Known subscriptions (Amazon Prime, Costco, etc.) use fixed labels
+  - Groups by (keyword, account_name) so same fee on different cards produces separate suggestions
+  - Accept creates a `recurring_overrides` entry; Edit allows changing label/amount/frequency before accepting; Dismiss hides the suggestion permanently
+  - Dismissed suggestions stored in `recurring_dismissals` table
+  - Excludes suggestions already in overrides or auto-detected as annual by interval engine
+  - `detect_annual_fee_suggestions()` in `recurring.py`
+- User overrides stored in `recurring_overrides` DB table (extended with `label`, `amount`, `frequency` columns); take precedence over auto-detection
 - Included in v2 backup/restore system
 - Detection engine: `src/finance_etl/recurring.py`
-- API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`
+- API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`, `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss`
 
 **Utilities (`#page-utilities`)**
 - Sidebar nav item with pending-duplicates badge (between Categories and Settings)
@@ -1196,6 +1205,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.28.0 | 2026-03-12 | feat: annual membership fee detection — keyword-based suggestions on Recurring page; 20+ keywords for card fees (RENEWAL MEMBERSHIP FEE, ANNUAL FEE) and subscriptions (Amazon Prime, Costco, Microsoft 365, etc.); card-specific fees auto-labeled with account name; accept/edit/dismiss flow; `recurring_dismissals` table; `recurring_overrides` extended with label/amount/frequency; new `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss` endpoints; 7 new tests; 338 total tests |
 | v2.27.1 | 2026-03-12 | feat: backup restore progress bar — simulated progress bar during restore with percentage, green/red fill on success/failure, "safe to navigate away" message, auto-hide after 8s |
 | v2.27.0 | 2026-03-12 | feat: Merchant Intelligence date pickers — All Time / This Month / Last Month / YTD / Year presets scope all stats and trend to selected period; `date_from` + `date_to` query params on `GET /merchant-analytics`; trend window shifts relative to date range end; year dropdown populated from transaction data; active preset styling |
 | v2.26.4 | 2026-03-12 | fix: orphan categories Fix Now — `batch_renormalize()` now writes `category_normalized` + `category_parent` (was writing `category` column, a no-op); `_fixOrphanedCategories()` now polls job status instead of 2s timeout; button disabled during run (BUG-29); 1 new test; 331 total tests |

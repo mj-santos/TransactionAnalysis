@@ -1426,6 +1426,19 @@
       </div>
     </div>
 
+    <!-- Suggested Annual Charges -->
+    <div class="card" id="annual-suggestions-card" style="margin-top:16px; display:none;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Suggested Annual Charges</span>
+        <span id="annual-suggestions-count" class="badge badge-staged" style="font-size:11px;">0</span>
+      </div>
+      <p style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+        These transactions look like annual memberships or card fees based on their description.
+        Accept to add to your recurring charges, or dismiss if not applicable.
+      </p>
+      <div id="annual-suggestions-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+
     <!-- Manual add -->
     <div class="card" style="margin-top:16px;">
       <div class="card-title">Mark Merchant as Recurring</div>

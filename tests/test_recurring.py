@@ -10,6 +10,8 @@ from finance_etl.recurring import (
     _median,
     compute_monthly_recurring_total,
     detect_recurring,
+    detect_annual_fee_suggestions,
+    _suggestion_id,
 )
 
 
@@ -199,3 +201,106 @@ class TestDetectRecurring:
         assert "Netflix" in merchants
         assert "Spotify" in merchants
         assert "OneOff" not in merchants
+
+
+# ---------------------------------------------------------------------------
+# Annual fee / membership keyword detection
+# ---------------------------------------------------------------------------
+
+class _FakeAnnualConn:
+    """Mock connection for detect_annual_fee_suggestions."""
+    def __init__(self, txn_rows):
+        self._txn_rows = txn_rows
+
+    def execute(self, sql, params=None):
+        return _FakeResult(self._txn_rows)
+
+
+class TestAnnualFeeSuggestions:
+    def test_card_annual_fee_detected(self):
+        """RENEWAL MEMBERSHIP FEE on 'Gold Card' produces a suggestion."""
+        rows = [
+            ("fp1", "RENEWAL MEMBERSHIP FEE", 250.0,
+             datetime.date(2024, 6, 15), "American Express", "Gold Card", None),
+        ]
+        conn = _FakeAnnualConn(rows)
+        results = detect_annual_fee_suggestions(conn)
+        assert len(results) == 1
+        s = results[0]
+        assert s["label"] == "Gold Card Annual Fee"
+        assert s["amount"] == 250.0
+        assert s["frequency"] == "annual"
+        assert s["is_card_fee"] is True
+        assert s["account_name"] == "Gold Card"
+        assert s["next_estimated"] == "2025-06-15"
+
+    def test_amazon_prime_detected(self):
+        """AMAZON PRIME MEMBERSHIP charge produces an Amazon Prime suggestion."""
+        rows = [
+            ("fp2", "AMAZON PRIME MEMBERSHIP", 139.0,
+             datetime.date(2024, 3, 1), "Chase", "Sapphire", "Amazon"),
+        ]
+        conn = _FakeAnnualConn(rows)
+        results = detect_annual_fee_suggestions(conn)
+        assert len(results) == 1
+        assert results[0]["label"] == "Amazon Prime"
+        assert results[0]["is_card_fee"] is False
+
+    def test_dismissed_suggestion_excluded(self):
+        """Dismissed suggestion should not appear."""
+        rows = [
+            ("fp1", "RENEWAL MEMBERSHIP FEE", 250.0,
+             datetime.date(2024, 6, 15), "Amex", "Gold", None),
+        ]
+        conn = _FakeAnnualConn(rows)
+        sid = _suggestion_id("renewal membership fee", "Gold")
+        results = detect_annual_fee_suggestions(conn, dismissed_ids={sid})
+        assert len(results) == 0
+
+    def test_existing_override_excluded(self):
+        """Suggestion whose label matches an existing override is excluded."""
+        rows = [
+            ("fp1", "RENEWAL MEMBERSHIP FEE", 250.0,
+             datetime.date(2024, 6, 15), "Amex", "Gold", None),
+        ]
+        conn = _FakeAnnualConn(rows)
+        results = detect_annual_fee_suggestions(
+            conn, existing_override_keys={"Gold Annual Fee"}
+        )
+        assert len(results) == 0
+
+    def test_different_accounts_separate_suggestions(self):
+        """Same keyword on different accounts produces separate suggestions."""
+        rows = [
+            ("fp1", "ANNUAL FEE", 250.0,
+             datetime.date(2024, 6, 1), "Amex", "Gold Card", None),
+            ("fp2", "ANNUAL FEE", 95.0,
+             datetime.date(2024, 7, 1), "Chase", "Sapphire Preferred", None),
+        ]
+        conn = _FakeAnnualConn(rows)
+        results = detect_annual_fee_suggestions(conn)
+        assert len(results) == 2
+        labels = {s["label"] for s in results}
+        assert "Gold Card Annual Fee" in labels
+        assert "Sapphire Preferred Annual Fee" in labels
+
+    def test_no_match_returns_empty(self):
+        """Transactions with no matching keywords produce no suggestions."""
+        rows = [
+            ("fp1", "STARBUCKS COFFEE #1234", 5.50,
+             datetime.date(2024, 1, 1), "Chase", "Checking", "Starbucks"),
+        ]
+        conn = _FakeAnnualConn(rows)
+        results = detect_annual_fee_suggestions(conn)
+        assert len(results) == 0
+
+    def test_microsoft_365_detected(self):
+        """Microsoft 365 keyword match."""
+        rows = [
+            ("fp1", "MICROSOFT 365 PERSONAL", 99.99,
+             datetime.date(2024, 9, 1), "BofA", "Checking", "Microsoft"),
+        ]
+        conn = _FakeAnnualConn(rows)
+        results = detect_annual_fee_suggestions(conn)
+        assert len(results) == 1
+        assert results[0]["label"] == "Microsoft 365"

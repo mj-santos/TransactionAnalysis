@@ -373,6 +373,17 @@ CREATE TABLE IF NOT EXISTS annual_reports (
 
     # ── Excluded flag (hide transaction from totals/queries) ──────────────────
     "ALTER TABLE transactions_norm ADD COLUMN excluded BOOLEAN DEFAULT FALSE",
+
+    # ── Recurring overrides: extended fields for annual fee suggestions ──────
+    "ALTER TABLE recurring_overrides ADD COLUMN label TEXT",
+    "ALTER TABLE recurring_overrides ADD COLUMN amount DECIMAL(18,2)",
+    "ALTER TABLE recurring_overrides ADD COLUMN frequency TEXT",
+
+    # ── Recurring suggestion dismissals ──────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS recurring_dismissals (
+        suggestion_id TEXT PRIMARY KEY,
+        dismissed_at  TEXT NOT NULL
+    )""",
 ]
 # ---------------------------------------------------------------------------
 
