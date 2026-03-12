@@ -33,6 +33,7 @@
 | CLI framework | Click | ≥8.1 — `finance_etl` command group |
 | File encoding detection | Chardet | ≥5.0 — auto-detect CSV encoding |
 | File upload | python-multipart | ≥0.0.9 — required by FastAPI for `UploadFile` |
+| Fuzzy matching | rapidfuzz | ≥3.0 — token sort ratio for description drift duplicate detection |
 | ML (optional) | scikit-learn | ≥1.3 — install with `pip install -e ".[wizard]"` for K-Means category clustering in `wizard/category_suggestion.py`. Falls back to word-frequency without it. |
 | UI stack | Vanilla HTML/CSS/JS | No framework. Single HTML file + 2 JS files + 1 CSS file. |
 | Containerization | Docker + docker-compose | Python 3.12-slim base; data volume at `/app/data` |
@@ -125,6 +126,7 @@ TransactionAnalysis/
 │   │   ├── hashing.py          ← File content SHA-256 hashing
 │   │   ├── log.py              ← Logger factory (per-run file handlers)
 │   │   ├── money.py            ← Amount string parsing → Decimal (signed, debit/credit, in/out, flag)
+│   │   ├── fuzzy_dedup.py      ← Post-import fuzzy duplicate detection (rapidfuzz token sort ratio)
 │   │   ├── query_helpers.py    ← INCOME_FILTER constant — canonical income SQL condition
 │   │   └── text.py             ← Text normalization utilities
 │   │
@@ -174,6 +176,7 @@ TransactionAnalysis/
     ├── test_normalization.py      ← batch_renormalize override skip, NULL override, all-paths tests (BUG-16)
     ├── test_split_transactions.py ← split/unsplit endpoint tests, backup roundtrip, child re-split guard
     ├── test_transactions.py       ← excluded column tests (BUG-17)
+    ├── test_fuzzy_dedup.py        ← fuzzy duplicate detection + amount variance UX tests (BUG-21/22)
     └── test_wizard_mapping.py
 ```
 
@@ -917,8 +920,8 @@ Single-row table seeded with `1` on first migration run.
 #### GAPS FOUND (ranked by user impact)
 
 **CRITICAL — can cause silent data corruption:**
-1. **BUG-21: Monthly overlap can create duplicate transactions when bank changes description text between exports.** Fingerprint-based dedup depends on exact description match after normalization. Banks commonly alter descriptions between monthly exports (pending markers, reference number changes, truncation). Duplicated transactions double amounts in all totals, budgets, and reports with no user-visible warning. `duplicate_candidates` may catch some after the fact, but is not guaranteed.
-2. **BUG-22: Bank re-export with settled amount change creates parallel transaction records.** If a pending transaction settles at a different amount, both the pending and settled versions coexist in the DB. No mechanism to update or replace the original. `duplicate_candidates` only flags if amounts are within 1%.
+1. ~~**BUG-21 (FIXED): Monthly overlap can create duplicate transactions when bank changes description text between exports.**~~ Fixed in v2.26.2. Added `fuzzy_duplicate_detection()` in `utils/fuzzy_dedup.py` that runs after every import commit alongside existing exact detection. Uses rapidfuzz token sort ratio for description similarity (≥0.75), date window (±3 days), and amount tolerance (±$0.50). Pre-filters candidates by date/amount window before fuzzy comparison for performance. Results inserted into `duplicate_candidates` with reason (`fuzzy_description_match`, `amount_variance`, or `fuzzy_description_and_amount_variance`) and similarity score. UI updated with reason labels and percentage display. Added `delete_a` (Remove Older) resolution action. 8 new tests.
+2. ~~**BUG-22 (FIXED): Bank re-export with settled amount change creates parallel transaction records.**~~ Fixed in v2.26.3. BUG-21's fuzzy detection catches amount variance cases. Enhanced Duplicate Review UI: side-by-side comparison table with amber highlighting on differing fields, amount variance callout banner explaining pending→settled scenario, context-aware resolution labels ("Keep original amount" / "Use corrected amount"), reason-specific import banner text. 3 new tests.
 
 **HIGH — causes wrong data with user visible symptoms:**
 3. **BUG-23: `dupes_skipped` count is computed but never shown to user.** `load_normalized()` returns `{"rows_loaded": N, "dupes_skipped": M}` but `pipeline.py` only reads `rows_loaded`. The API response and UI status card never show how many rows were skipped as duplicates. Users importing overlapping files see `rows_loaded` < `rows_in` with no explanation. Could be mistaken for data loss.
@@ -938,7 +941,7 @@ Single-row table seeded with `1` on first migration run.
 - Add import-time duplicate preview: during the staged/preview phase, compare fingerprints against existing `transactions_norm` and flag matches in the preview table (solves BUG-25)
 - Surface `dupes_skipped` count in the API response and UI status card (solves BUG-23)
 - Add date range overlap warning: compare incoming transaction date range against existing data per account and warn if overlap detected (solves BUG-24)
-- Consider fuzzy fingerprint matching as a pre-commit check for the monthly overlap scenario (partially solves BUG-21)
+- ~~Consider fuzzy fingerprint matching as a pre-commit check for the monthly overlap scenario (partially solves BUG-21)~~ — DONE: post-commit fuzzy detection implemented in v2.26.2
 
 **Priority 2 — UX gaps:**
 - Show "N rows skipped (duplicate)" in the post-import status card alongside rows_loaded
@@ -1104,7 +1107,8 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 - **Import dedup strategy — two layers, one gap**:
   - **Layer 1 — File hash** (`raw_files.file_hash`): SHA-256 of raw file bytes. Checked in `ingest.py:register_files()`. If hash exists, the INSERT into `raw_files` is skipped BUT the pipeline continues — staging, normalization, and load all proceed. This is an **audit log only**, not a gate. The same file reimported will not be blocked.
   - **Layer 2 — Transaction fingerprint** (`transactions_norm.transaction_fingerprint`): UNIQUE index. In `load.py:load_normalized()`, each row is checked with `SELECT 1 WHERE transaction_fingerprint = ?` before INSERT. Duplicates are silently skipped (counter incremented, logged). This is the **primary dedup mechanism**.
-  - **Layer 3 — Near-duplicate detection** (`duplicate_candidates`): Post-commit fuzzy matching via `_detect_duplicates()` in `api.py`. Compares new transactions against existing by: same LOWER(merchant or description), amount within 1%, date within 3 days. Flags candidates for user review. Does NOT prevent insertion — only flags after the fact.
+  - **Layer 3 — Near-duplicate detection** (`duplicate_candidates`): Post-commit matching via `_detect_duplicates()` in `api.py`. Compares new transactions against existing by: same LOWER(merchant or description), amount within 1%, date within 3 days. Flags candidates for user review. Does NOT prevent insertion — only flags after the fact.
+  - **Layer 4 — Fuzzy duplicate detection** (`duplicate_candidates`): Post-commit fuzzy pass via `fuzzy_duplicate_detection()` in `utils/fuzzy_dedup.py`. Runs after Layer 3. For each newly imported transaction, searches for probable duplicates using: same account_id, date within ±3 days, amount within ±$0.50, description similarity ≥0.75 (rapidfuzz token sort ratio), different fingerprint, neither is a split child. Pre-filters by date/amount window before fuzzy comparison. Populates `duplicate_candidates` with reason (`fuzzy_description_match`, `amount_variance`, `fuzzy_description_and_amount_variance`) and similarity score. Never auto-deletes — always routes to duplicate_candidates for user review.
   - **Gap**: `dupes_skipped` count from `load_normalized()` is returned but never propagated to the API response or shown in the UI. Users see `rows_loaded` (which excludes dupes) but have no indication that rows were skipped or why.
   - **Pipeline flow**: upload → file_hash check (log only) → stage → normalize → fingerprint → load (dedup here) → duplicate detection (fuzzy, post-commit)
 - **Backup explicit column list policy**: `_TABLE_COLUMNS` in `api.py` maps table names to explicit SELECT column lists for backup export. Only `transactions_norm` currently needs this (27 columns, 12 from migrations). Other tables without migration-added columns continue using `SELECT *`. When adding migration columns to `transactions_norm`, update both `_TABLE_COLUMNS` and the restore INSERT statement.
@@ -1127,6 +1131,7 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 | `fastapi` | ≥0.115 | Web framework — API endpoints + static file serving | ✅ Used |
 | `uvicorn` | ≥0.30 | ASGI server that runs FastAPI | ✅ Used |
 | `python-multipart` | ≥0.0.9 | Required by FastAPI for `UploadFile` (CSV uploads) | ✅ Used |
+| `rapidfuzz` | ≥3.0 | Token sort ratio for fuzzy duplicate detection (description drift) | ✅ Used |
 | `scikit-learn` | ≥1.3 (optional) | K-Means + TF-IDF for category clustering in CLI wizard | ⚠️ CLI-only |
 
 **Note:** `pydantic` is not listed in `pyproject.toml` but is used extensively in `api.py` for request/response models. It is a transitive dependency of FastAPI and is always available when FastAPI is installed. The code gracefully degrades (`_PYDANTIC_OK = False`) if it's somehow missing.
@@ -1141,7 +1146,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.26.1
+**Current Version:** v2.26.3
 **App Name:** Spendly
 **Project Codename:** Ledger
 
@@ -1188,6 +1193,8 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.26.3 | 2026-03-12 | fix: amount variance UX in duplicate review — side-by-side comparison table with amber-highlighted diffs, context-aware resolution labels, reason-specific import banners (BUG-22); version bump |
+| v2.26.2 | 2026-03-12 | fix: fuzzy duplicate detection for description drift — post-import fuzzy pass via `fuzzy_duplicate_detection()` in `utils/fuzzy_dedup.py`; rapidfuzz token sort ratio for description similarity; pre-filter by date/amount window; reason + similarity_score in duplicate_candidates; `delete_a` resolve action; UI reason labels + percentage display; 11 new tests; 341 total tests (BUG-21) |
 | v2.26.1 | 2026-03-11 | fix: consolidate duplicate category pickers into unified openCategoryPicker with allowCustom option (BUG-18) |
 | v2.26.0 | 2026-03-11 | feat: wire split transaction UI entry point — openSplitModal and unsplitTransaction now reachable from transaction rows (audit finding) |
 | v2.25.3 | 2026-03-11 | fix: add excluded column to transactions_norm — PATCH /transactions/{fp} no longer throws on excluded field (BUG-17) |
