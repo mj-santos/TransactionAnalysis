@@ -99,7 +99,16 @@ class _FakeConn:
     """Minimal mock of a DuckDB connection returning canned data."""
     def __init__(self, txn_rows, override_rows=None):
         self._txn_rows = txn_rows
-        self._override_rows = override_rows or []
+        # Normalize override rows to 5-column tuples:
+        # (merchant_key, is_recurring, label, amount, frequency)
+        normalized = []
+        for row in (override_rows or []):
+            if len(row) == 2:
+                # Legacy 2-col: (merchant_key, is_recurring) → pad with defaults
+                normalized.append((row[0], row[1], row[0], None, None))
+            else:
+                normalized.append(row)
+        self._override_rows = normalized
         self._call_count = 0
 
     def execute(self, sql, params=None):
@@ -294,6 +303,49 @@ class TestAnnualFeeSuggestions:
         results = detect_annual_fee_suggestions(conn)
         assert len(results) == 0
 
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: override with no matching transactions (BUG-30/31)
+# ---------------------------------------------------------------------------
+
+class TestOverrideWithNoTransactions:
+    """BUG-30: Accepted annual fee suggestions should appear in recurring list
+    even when merchant_key (the label) has no matching transactions."""
+
+    def test_override_with_no_matching_transactions_appears(self):
+        """An override whose merchant_key matches no transaction merchant
+        should still show in results using stored amount/frequency."""
+        txns = _make_monthly_txns("Netflix", 15.99, "2024-01-01", 5)
+        # Override for "Amazon Prime Annual" — no transactions with that merchant
+        overrides = [("Amazon Prime Annual", True, "Amazon Prime Annual", 139.0, "annual")]
+        conn = _FakeConn(txns, overrides)
+        results = detect_recurring(conn, include_overrides=True)
+
+        merchants = {r["merchant"] for r in results}
+        assert "Amazon Prime Annual" in merchants, (
+            "Override with no matching transactions should still appear"
+        )
+        prime = [r for r in results if r["merchant"] == "Amazon Prime Annual"][0]
+        assert prime["median_amount"] == 139.0
+        assert prime["frequency"] == "annual"
+        assert prime["is_auto"] is False
+        assert prime["occurrences"] == 0
+
+    def test_override_with_matching_transactions_uses_tx_data(self):
+        """When the override merchant_key matches real transactions, use tx data."""
+        txns = _make_monthly_txns("Spotify", 9.99, "2024-01-01", 5)
+        overrides = [("Spotify", True, "Spotify", 9.99, "monthly")]
+        conn = _FakeConn(txns, overrides)
+        results = detect_recurring(conn, include_overrides=True)
+
+        # Spotify already auto-detected — override should not create duplicate
+        spotify_results = [r for r in results if r["merchant"] == "Spotify"]
+        assert len(spotify_results) == 1
+        assert spotify_results[0]["occurrences"] == 5  # from real transactions
+
+
+class TestMicrosoft365Detection:
     def test_microsoft_365_detected(self):
         """Microsoft 365 keyword match."""
         rows = [

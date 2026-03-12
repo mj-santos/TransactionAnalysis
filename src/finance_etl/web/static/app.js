@@ -1192,6 +1192,7 @@ async function acceptAnnualSuggestion(sid) {
       amount: s.amount,
       frequency: s.frequency,
     });
+    _removeAnnualSuggestionRow(sid);
     toast(`Added "${s.label}" to recurring charges`, 'success', 3000);
     loadRecurringTransactions();
   } catch (err) {
@@ -1224,6 +1225,7 @@ async function submitEditSuggestion(sid) {
     await api('POST', `/recurring/suggestions/${encodeURIComponent(sid)}/accept`, {
       label, amount: isNaN(amount) ? null : amount, frequency,
     });
+    _removeAnnualSuggestionRow(sid);
     toast(`Added "${label}" to recurring charges`, 'success', 3000);
     loadRecurringTransactions();
   } catch (err) {
@@ -1231,19 +1233,23 @@ async function submitEditSuggestion(sid) {
   }
 }
 
+/** Remove an annual suggestion row from DOM and update badge/card visibility. */
+function _removeAnnualSuggestionRow(sid) {
+  const row = document.querySelector(`.annual-suggestion-row[data-sid="${sid}"]`);
+  if (row) row.remove();
+  _annualSuggestions = _annualSuggestions.filter(s => s.suggestion_id !== sid);
+  const countEl = document.getElementById('annual-suggestions-count');
+  if (countEl) countEl.textContent = _annualSuggestions.length;
+  if (!_annualSuggestions.length) {
+    const card = document.getElementById('annual-suggestions-card');
+    if (card) card.style.display = 'none';
+  }
+}
+
 async function dismissAnnualSuggestion(sid) {
   try {
     await api('POST', `/recurring/suggestions/${encodeURIComponent(sid)}/dismiss`);
-    // Remove from UI immediately
-    const row = document.querySelector(`.annual-suggestion-row[data-sid="${sid}"]`);
-    if (row) row.remove();
-    _annualSuggestions = _annualSuggestions.filter(s => s.suggestion_id !== sid);
-    const countEl = document.getElementById('annual-suggestions-count');
-    if (countEl) countEl.textContent = _annualSuggestions.length;
-    if (!_annualSuggestions.length) {
-      const card = document.getElementById('annual-suggestions-card');
-      if (card) card.style.display = 'none';
-    }
+    _removeAnnualSuggestionRow(sid);
     toast('Suggestion dismissed', 'info', 2000);
   } catch (err) {
     toast(`Dismiss failed: ${err.message}`, 'error');

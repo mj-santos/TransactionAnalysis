@@ -179,12 +179,18 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
 
     # ── 3.  Merge user overrides ─────────────────────────────────────────
     overrides: dict[str, bool] = {}
+    override_details: dict[str, dict] = {}  # merchant_key -> {label, amount, frequency}
     if include_overrides:
         try:
             ov_rows = conn.execute(
-                "SELECT merchant_key, is_recurring FROM recurring_overrides"
+                "SELECT merchant_key, is_recurring, label, amount, frequency "
+                "FROM recurring_overrides"
             ).fetchall()
-            overrides = {r[0]: r[1] for r in ov_rows}
+            for r in ov_rows:
+                overrides[r[0]] = r[1]
+                override_details[r[0]] = {
+                    "label": r[2], "amount": r[3], "frequency": r[4],
+                }
         except Exception:
             pass
 
@@ -207,34 +213,55 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
 
         # Build a minimal pattern from the transaction data
         txns = groups.get(merchant, [])
-        if not txns:
-            continue
-        dates = sorted(set(t[0] for t in txns))
-        amounts = [t[1] for t in txns]
-        med_amount = _median(amounts)
+        details = override_details.get(merchant, {})
 
-        if len(dates) >= 2:
-            date_objs = [datetime.date.fromisoformat(d) for d in dates]
-            intervals = [(date_objs[i + 1] - date_objs[i]).days for i in range(len(date_objs) - 1)]
-            avg_interval = sum(intervals) / len(intervals) if intervals else 30
-            freq = _classify_frequency(avg_interval)
-            next_est = _estimate_next(dates[-1], avg_interval)
+        if txns:
+            dates = sorted(set(t[0] for t in txns))
+            amounts = [t[1] for t in txns]
+            med_amount = _median(amounts)
+
+            if len(dates) >= 2:
+                date_objs = [datetime.date.fromisoformat(d) for d in dates]
+                intervals = [(date_objs[i + 1] - date_objs[i]).days for i in range(len(date_objs) - 1)]
+                avg_interval = sum(intervals) / len(intervals) if intervals else 30
+                freq = _classify_frequency(avg_interval)
+                next_est = _estimate_next(dates[-1], avg_interval)
+            else:
+                avg_interval = 30
+                freq = details.get("frequency") or "monthly"
+                next_est = _estimate_next(dates[-1], 30) if dates else None
+
+            results.append(_pattern_to_dict(RecurringPattern(
+                merchant=merchant,
+                median_amount=round(med_amount, 2),
+                frequency=freq,
+                avg_interval_days=round(avg_interval, 1),
+                occurrences=len(dates),
+                last_date=dates[-1] if dates else "",
+                next_estimated=next_est,
+                is_auto=False,
+                confidence=1.0,
+            )))
         else:
-            avg_interval = 30
-            freq = "monthly"
-            next_est = _estimate_next(dates[-1], 30) if dates else None
+            # No matching transactions — use stored override data
+            # (e.g. accepted annual fee suggestion where merchant_key = label)
+            stored_freq = details.get("frequency") or "annual"
+            stored_amount = details.get("amount")
+            freq_days = {"annual": 365, "quarterly": 90, "monthly": 30,
+                         "biweekly": 14, "weekly": 7}
+            avg_interval = float(freq_days.get(stored_freq, 365))
 
-        results.append(_pattern_to_dict(RecurringPattern(
-            merchant=merchant,
-            median_amount=round(med_amount, 2),
-            frequency=freq,
-            avg_interval_days=round(avg_interval, 1),
-            occurrences=len(dates),
-            last_date=dates[-1] if dates else "",
-            next_estimated=next_est,
-            is_auto=False,
-            confidence=1.0,
-        )))
+            results.append(_pattern_to_dict(RecurringPattern(
+                merchant=merchant,
+                median_amount=round(float(stored_amount), 2) if stored_amount else 0.0,
+                frequency=stored_freq,
+                avg_interval_days=avg_interval,
+                occurrences=0,
+                last_date="",
+                next_estimated=None,
+                is_auto=False,
+                confidence=1.0,
+            )))
 
     # Sort by median amount descending (biggest subscriptions first)
     results.sort(key=lambda r: r["median_amount"], reverse=True)
