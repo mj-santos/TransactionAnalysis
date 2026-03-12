@@ -344,7 +344,17 @@ def batch_renormalize(db_path: str, job_id: str, batch_size: int = 500) -> None:
         rules = load_rules(conn)
         cat_map = load_category_map(conn)
 
-        # Fetch fingerprint + description + existing merchant + existing category
+        # Load category normalization rules for resolving category_parent
+        from finance_etl.category_rules import (
+            load_category_rules,
+            load_grouped_category_rules,
+            normalize_category,
+            BUILT_IN_CATEGORY_MAP,
+        )
+        user_cat_rules = load_category_rules(conn)
+        grouped_cat_rules = load_grouped_category_rules(conn)
+
+        # Fetch fingerprint + description + existing merchant + existing raw category
         # Skip rows where user has manually overridden the category or excluded the transaction
         all_rows = conn.execute(
             "SELECT transaction_fingerprint, description, merchant, category "
@@ -368,14 +378,31 @@ def batch_renormalize(db_path: str, job_id: str, batch_size: int = 500) -> None:
             # If no rule matched, keep existing merchant (may be None)
             merchant = new_merchant if new_merchant is not None else existing_merchant
 
-            # Resolve category: prefer user-assigned, then learned, then existing
-            if merchant:
-                cat = cat_map.get(merchant.lower())
+            # Resolve category_normalized + category_parent
+            cat_from_map = cat_map.get(merchant.lower()) if merchant else None
+            if cat_from_map:
+                cat_normalized = cat_from_map
+                # Look up parent: category_rules table first, then built-in map
+                parent_row = conn.execute(
+                    "SELECT parent FROM category_rules WHERE category = ? LIMIT 1",
+                    [cat_normalized],
+                ).fetchone()
+                if parent_row:
+                    cat_parent = parent_row[0]
+                else:
+                    cat_parent = None
+                    for _raw, (norm, par) in BUILT_IN_CATEGORY_MAP.items():
+                        if norm == cat_normalized:
+                            cat_parent = par
+                            break
+                    if cat_parent is None:
+                        cat_parent = "Other"
             else:
-                cat = None
-            category = cat if cat is not None else existing_category
+                cat_normalized, cat_parent = normalize_category(
+                    existing_category, user_cat_rules, grouped_cat_rules
+                )
 
-            batch_updates.append((merchant, category, fp))
+            batch_updates.append((merchant, cat_normalized, cat_parent, fp))
             done += 1
 
             if len(batch_updates) >= batch_size:
@@ -411,11 +438,11 @@ def batch_renormalize(db_path: str, job_id: str, batch_size: int = 500) -> None:
 
 def _flush_batch(conn, updates: list[tuple], job_id: str, done: int) -> None:
     """Execute a batch UPDATE and commit progress."""
-    for merchant, category, fp in updates:
+    for merchant, cat_normalized, cat_parent, fp in updates:
         conn.execute(
-            "UPDATE transactions_norm SET merchant=?, category=? "
+            "UPDATE transactions_norm SET merchant=?, category_normalized=?, category_parent=? "
             "WHERE transaction_fingerprint=?",
-            [merchant, category, fp],
+            [merchant, cat_normalized, cat_parent, fp],
         )
     conn.execute(
         "UPDATE normalization_jobs SET rows_done=? WHERE job_id=?",

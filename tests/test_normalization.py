@@ -187,3 +187,45 @@ def test_all_normalization_paths_skip_overrides(tmp_path: Path):
     resp = client.post("/normalize/apply", json={"merchant_filter": "Wendy's"})
     assert resp.status_code in (200, 202)
     _assert_custom()
+
+
+# ---------------------------------------------------------------------------
+# 4. batch_renormalize updates category_normalized + category_parent (BUG-29)
+# ---------------------------------------------------------------------------
+
+def test_batch_renormalize_updates_category_normalized_and_parent(tmp_path: Path):
+    """batch_renormalize must write to category_normalized and category_parent,
+    not the raw category column. This was the root cause of the orphan categories
+    Fix Now button being a no-op (BUG-29)."""
+    from finance_etl.merchant_rules import batch_renormalize, create_normalization_job
+
+    _client, db_path = _make_client(tmp_path)
+
+    # Seed a transaction with wrong/NULL category_normalized but matching merchant
+    _seed_transactions(db_path, [
+        ("fp_orphan1", "Wendy's", "Fast Food", None, -10.00, False),
+        ("fp_orphan2", "Wendy's", "Fast Food", "Wrong Category", -15.00, False),
+    ])
+
+    _seed_merchant_rule(db_path, "WENDYS", "Wendy's")
+    _seed_merchant_category(db_path, "Wendy's", "Fast Food")
+
+    conn = get_connection(db_path)
+    job_id = create_normalization_job(conn)
+    conn.close()
+
+    batch_renormalize(str(db_path), job_id)
+
+    conn = get_connection(db_path, read_only=True)
+    for fp in ("fp_orphan1", "fp_orphan2"):
+        row = conn.execute(
+            "SELECT category_normalized, category_parent FROM transactions_norm "
+            "WHERE transaction_fingerprint = ?", [fp]
+        ).fetchone()
+        assert row[0] == "Fast Food", (
+            f"{fp}: category_normalized should be 'Fast Food', got {row[0]!r}"
+        )
+        assert row[1] is not None, (
+            f"{fp}: category_parent should not be None"
+        )
+    conn.close()
