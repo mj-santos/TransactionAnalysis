@@ -1292,13 +1292,14 @@ async function loadAnnualSuggestions() {
     const data = await api('GET', '/recurring/suggestions');
     _annualSuggestions = data.suggestions || [];
 
-    if (!_annualSuggestions.length) {
-      card.style.display = 'none';
-      return;
-    }
-
+    // Always show card so Re-analyze / View Dismissed / View Deleted are accessible
     card.style.display = 'block';
     if (countEl) countEl.textContent = _annualSuggestions.length;
+
+    if (!_annualSuggestions.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">No new suggestions found.</div>';
+      return;
+    }
 
     listEl.innerHTML = _annualSuggestions.map(s => {
       const cardFeeIcon = s.is_card_fee ? '<span style="margin-right:4px;">&#x1F4B3;</span>' : '';
@@ -1411,6 +1412,93 @@ async function dismissAnnualSuggestion(sid) {
     toast('Suggestion dismissed', 'info', 2000);
   } catch (err) {
     toast(`Dismiss failed: ${err.message}`, 'error');
+  }
+}
+
+async function reanalyzeAnnualSuggestions() {
+  toast('Re-analyzing annual charges...', 'info', 2000);
+  // Hide dismissed/deleted sections when re-analyzing
+  const dismissedSection = document.getElementById('dismissed-suggestions-section');
+  const deletedSection = document.getElementById('deleted-charges-section');
+  if (dismissedSection) dismissedSection.style.display = 'none';
+  if (deletedSection) deletedSection.style.display = 'none';
+  await loadAnnualSuggestions();
+}
+
+async function viewDismissedSuggestions() {
+  const section = document.getElementById('dismissed-suggestions-section');
+  if (!section) return;
+  if (section.style.display !== 'none') { section.style.display = 'none'; return; }
+  try {
+    const data = await api('GET', '/recurring/suggestions/dismissed');
+    const items = data.items || [];
+    const listEl = document.getElementById('dismissed-suggestions-list');
+    if (!items.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">No dismissed suggestions.</div>';
+    } else {
+      listEl.innerHTML = items.map(s => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:var(--bg-alt,#f8faff); border-radius:6px; border:1px solid var(--border);">
+          <div>
+            <span style="font-weight:600; font-size:13px;">${esc(s.label)}</span>
+            <span style="font-size:12px; color:var(--text-muted); margin-left:8px;">$${Number(s.amount).toFixed(2)} / ${esc(s.frequency || 'annual')}</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="undoDismissSuggestion('${esc(s.suggestion_id)}')">Undo</button>
+        </div>`).join('');
+    }
+    section.style.display = 'block';
+  } catch (err) {
+    toast(`Failed to load dismissed: ${err.message}`, 'error');
+  }
+}
+
+async function undoDismissSuggestion(sid) {
+  try {
+    await api('POST', `/recurring/suggestions/dismissed/${encodeURIComponent(sid)}/undo`);
+    toast('Suggestion restored', 'success', 2000);
+    viewDismissedSuggestions();
+    loadAnnualSuggestions();
+  } catch (err) {
+    toast(`Undo failed: ${err.message}`, 'error');
+  }
+}
+
+async function viewDeletedCharges() {
+  const section = document.getElementById('deleted-charges-section');
+  if (!section) return;
+  if (section.style.display !== 'none') { section.style.display = 'none'; return; }
+  try {
+    const data = await api('GET', '/recurring/deleted');
+    const items = data.items || [];
+    const listEl = document.getElementById('deleted-charges-list');
+    if (!items.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">No deleted charges.</div>';
+    } else {
+      listEl.innerHTML = items.map(d => `
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:var(--bg-alt,#f8faff); border-radius:6px; border:1px solid var(--border);">
+          <div>
+            <span style="font-weight:600; font-size:13px;">${esc(d.merchant)}</span>
+            <span style="font-size:11px; color:var(--text-muted); margin-left:8px;">deleted ${esc(d.deleted_at || '')}</span>
+          </div>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="restoreDeletedCharge('${esc(d.merchant)}')">Restore</button>
+        </div>`).join('');
+    }
+    section.style.display = 'block';
+  } catch (err) {
+    toast(`Failed to load deleted: ${err.message}`, 'error');
+  }
+}
+
+async function restoreDeletedCharge(merchant) {
+  try {
+    await api('POST', `/recurring/deleted/${encodeURIComponent(merchant)}/restore`);
+    toast(`Restored "${merchant}"`, 'success', 2000);
+    // Re-toggle the deleted section to refresh
+    const section = document.getElementById('deleted-charges-section');
+    if (section) section.style.display = 'none';
+    viewDeletedCharges();
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Restore failed: ${err.message}`, 'error');
   }
 }
 
@@ -4100,7 +4188,7 @@ function _renderSuggestionRow(s, idx, pool) {
       <div style="display:flex; gap:6px; flex-shrink:0;">
         <button class="btn btn-primary btn-sm" onclick="${acceptFn}(${idx})" title="Create this rule">✓ Accept</button>
         <button class="btn btn-secondary btn-sm" onclick="${editFn}(${idx})" title="Edit before saving">Edit</button>
-        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="${dismissFn}(${idx})" title="Dismiss">✗</button>
+        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted); font-size:11px;" onclick="${dismissFn}(${idx})" title="Dismiss">Dismiss</button>
       </div>
     </div>`;
 }
@@ -4136,9 +4224,16 @@ function editRuleSuggestion(idx) {
   _renderRuleSuggestions();
 }
 
-function dismissRuleSuggestion(idx) {
-  if (_ruleSuggestions[idx]) _ruleSuggestions[idx]._dismissed = true;
-  _renderRuleSuggestions();
+async function dismissRuleSuggestion(idx) {
+  const s = _ruleSuggestions[idx];
+  if (!s) return;
+  try {
+    await api('POST', `/merchant-rules/suggestions/${encodeURIComponent(s.pattern)}/dismiss`);
+    s._dismissed = true;
+    _renderRuleSuggestions();
+  } catch (err) {
+    toast(`Dismiss failed: ${err.message}`, 'error');
+  }
 }
 
 async function acceptAllRuleSuggestions() {
@@ -4191,9 +4286,16 @@ function editLowFreqSuggestion(idx) {
   _renderLowFreqSuggestions();
 }
 
-function dismissLowFreqSuggestion(idx) {
-  if (_lowFreqSuggestions[idx]) _lowFreqSuggestions[idx]._dismissed = true;
-  _renderLowFreqSuggestions();
+async function dismissLowFreqSuggestion(idx) {
+  const s = _lowFreqSuggestions[idx];
+  if (!s) return;
+  try {
+    await api('POST', `/merchant-rules/suggestions/${encodeURIComponent(s.pattern)}/dismiss`);
+    s._dismissed = true;
+    _renderLowFreqSuggestions();
+  } catch (err) {
+    toast(`Dismiss failed: ${err.message}`, 'error');
+  }
 }
 
 // ── Category Suggestions ──────────────────────────────────────
@@ -4257,7 +4359,7 @@ function _renderCategorySuggestions() {
         <input type="hidden" id="csug-pick-${realIdx}" value="${esc(s.suggested_category)}" />
         <span style="font-size:11px; font-weight:600; color:${confColor}; background:${confColor}18; border-radius:4px; padding:2px 6px;">${s.confidence}</span>
         <button class="btn btn-primary btn-sm" onclick="acceptMerchantCatSuggestion(${realIdx})" title="Assign this category">✓</button>
-        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissMerchantCatSuggestion(${realIdx})" title="Dismiss">✗</button>
+        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted); font-size:11px;" onclick="dismissMerchantCatSuggestion(${realIdx})" title="Dismiss">Dismiss</button>
       </div>`;
   }).join('');
 }
@@ -4293,10 +4395,17 @@ async function acceptMerchantCatSuggestion(idx) {
   }
 }
 
-/** Dismiss a merchant→category suggestion. Operates on _catSuggestions data. */
-function dismissMerchantCatSuggestion(idx) {
-  if (_catSuggestions[idx]) _catSuggestions[idx]._dismissed = true;
-  _renderCategorySuggestions();
+/** Dismiss a merchant→category suggestion. Persists to DB. */
+async function dismissMerchantCatSuggestion(idx) {
+  const s = _catSuggestions[idx];
+  if (!s) return;
+  try {
+    await api('POST', `/merchant-categories/suggestions/${encodeURIComponent(s.merchant)}/dismiss`);
+    s._dismissed = true;
+    _renderCategorySuggestions();
+  } catch (err) {
+    toast(`Dismiss failed: ${err.message}`, 'error');
+  }
 }
 
 async function acceptAllCategorySuggestions() {
@@ -5665,7 +5774,7 @@ function _renderCatSuggestions() {
       <div style="display:flex; gap:6px; flex-shrink:0;">
         <button class="btn btn-primary btn-sm" onclick="acceptCatSuggestion(${realIdx})">✓ Accept</button>
         <button class="btn btn-secondary btn-sm" onclick="editCatSuggestion(${realIdx})">Edit</button>
-        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted);" onclick="dismissCatSuggestion(${realIdx})">✗</button>
+        <button class="btn btn-secondary btn-sm" style="color:var(--text-muted); font-size:11px;" onclick="dismissCatSuggestion(${realIdx})">Dismiss</button>
       </div>
     </div>`;
   }).join('');
@@ -5695,10 +5804,17 @@ function editCatSuggestion(idx) {
   document.getElementById('cat-rule-form-card').scrollIntoView({ behavior:'smooth', block:'nearest' });
 }
 
-/** Dismiss a raw-category→normalized mapping suggestion. Operates on _catSuggestionsData. */
-function dismissCatSuggestion(idx) {
-  if (_catSuggestionsData[idx]) _catSuggestionsData[idx]._dismissed = true;
-  _renderCatSuggestions();
+/** Dismiss a raw-category→normalized mapping suggestion. Persists to DB. */
+async function dismissCatSuggestion(idx) {
+  const s = _catSuggestionsData[idx];
+  if (!s) return;
+  try {
+    await api('POST', `/merchant-categories/suggestions/${encodeURIComponent(s.raw_category || s.merchant || idx)}/dismiss`);
+    s._dismissed = true;
+    _renderCatSuggestions();
+  } catch (err) {
+    toast(`Dismiss failed: ${err.message}`, 'error');
+  }
 }
 
 async function acceptAllCatSuggestions() {

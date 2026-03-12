@@ -306,6 +306,7 @@ TransactionAnalysis/
   - Analyzes raw descriptions; suggests pattern → merchant rules
   - **Fuzzy matching**: similar description cores merged via `rapidfuzz.token_sort_ratio()` (threshold 0.75) — e.g. "BEST WESTERN INN S" + "BEST WESTERN SEVEN S" grouped as one suggestion with `[fuzzy]` badge
   - **Low-frequency patterns**: checkbox toggle shows merchants with 1–2 transactions (below the default min_transactions=3 threshold); useful for catching long-tail merchants
+  - **Persistent dismissals**: dismissed rule suggestions stored in `rule_dismissals` table; survive page refresh; "Dismiss" button (was "✗")
   - Accept, Edit, Dismiss per suggestion; Accept All
   - **Auto-Fill Unmatched** button: `POST /normalize/auto-fill` — bulk-sets `merchant = cleaned(description)` for all transactions where merchant is NULL, making them visible in uncategorized panel and analytics
 - Merchant Normalization Rules CRUD table: `loadMerchantRules()` → `GET /merchant-rules`
@@ -326,8 +327,9 @@ TransactionAnalysis/
   - Scans raw bank category strings; matches against built-in taxonomy
   - Accept (creates rule), Edit (opens form), Dismiss per suggestion; Accept All
 - Suggested Merchant Categories panel: `loadCategorySuggestions()` → `GET /merchant-categories/suggestions`
-  - Keyword-heuristic matching of merchant names to categories
+  - **Subcategory-aware matching**: keyword heuristics now match against ~25 subcategories (e.g. "Coffee Shops", "Fast Food", "Food Delivery") instead of 16 broad categories; returns `suggested_category` (subcategory) + `parent_category`; aligned with `BUILT_IN_CATEGORY_MAP` taxonomy
   - Accept assigns category to merchant via `/merchant-categories`
+  - **Persistent dismissals**: dismissed suggestions stored in `category_dismissals` table; survive page refresh; "Dismiss" button (was "✗")
 - Category Normalization Rules CRUD table: `loadCategoryRules()` → `GET /category-rules`
   - **Inline search bar**: real-time filter across raw_category, normalized category, parent group columns; "X of N rules" count; Escape to clear
   - Maps raw bank category → normalized category + parent group
@@ -359,12 +361,16 @@ TransactionAnalysis/
   - Accept creates a `recurring_overrides` entry and immediately removes the row from the suggestion panel; Edit allows changing label/amount/frequency before accepting; Dismiss hides the suggestion permanently
   - Dismissed suggestions stored in `recurring_dismissals` table
   - Excludes suggestions already in overrides or auto-detected as annual by interval engine
+  - **Re-analyze** button: re-runs detection fresh to find new suggestions
+  - **View Dismissed** button: shows previously dismissed suggestions with Undo button to restore
+  - **View Deleted** button: shows suppressed recurring charges (is_recurring=false overrides) with Restore button
+  - Card always visible (even with 0 suggestions) so action buttons remain accessible
   - `detect_annual_fee_suggestions()` in `recurring.py`
 - User overrides stored in `recurring_overrides` DB table (columns: `label`, `amount`, `frequency`, `paused`, `last_date`); take precedence over auto-detection; overrides with no matching transactions (e.g. accepted annual fee labels) are included as synthetic patterns using stored amount/frequency/last_date
 - Accepted suggestions carry `last_date` through to the override, enabling Last Charged and Next Estimated display for keyword-matched annual fees
 - Included in v2 backup/restore system
 - Detection engine: `src/finance_etl/recurring.py`
-- API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`, `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss`
+- API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`, `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss`, `GET /recurring/suggestions/dismissed`, `POST /recurring/suggestions/dismissed/{id}/undo`, `GET /recurring/deleted`, `POST /recurring/deleted/{merchant}/restore`
 
 **Utilities (`#page-utilities`)**
 - Sidebar nav item with pending-duplicates badge (between Categories and Settings)
@@ -635,6 +641,33 @@ Lookup priority: grouped condition rules (DB, `conditions` IS NOT NULL) > exact-
 | `created_at` | TEXT NOT NULL | ISO timestamp |
 
 Used by both merchant renormalization (`batch_renormalize`) and category normalization (`apply_category_rules`). Job IDs are prefixed differently: merchant jobs use `"norm_"` prefix; category jobs use `"catnorm_"` prefix. Both are polled via `GET /normalize/{job_id}`.
+
+---
+
+### `recurring_dismissals` — dismissed annual fee suggestions
+
+| Column | Type | Notes |
+|---|---|---|
+| `suggestion_id` | TEXT PK | Suggestion identifier |
+| `dismissed_at` | TEXT NOT NULL | ISO timestamp |
+
+---
+
+### `category_dismissals` — dismissed category suggestions
+
+| Column | Type | Notes |
+|---|---|---|
+| `suggestion_key` | TEXT PK | Merchant name |
+| `dismissed_at` | TEXT NOT NULL | ISO timestamp |
+
+---
+
+### `rule_dismissals` — dismissed normalization rule suggestions
+
+| Column | Type | Notes |
+|---|---|---|
+| `suggestion_key` | TEXT PK | Pattern string |
+| `dismissed_at` | TEXT NOT NULL | ISO timestamp |
 
 ---
 
@@ -1220,6 +1253,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.31.0 | 2026-03-12 | feat: suggestion panel improvements — subcategory-aware category matching (Coffee→Coffee Shops, not Restaurants); persistent dismissals for category + rule suggestions via new `category_dismissals` and `rule_dismissals` DB tables; annual suggestions Re-analyze/View Dismissed/View Deleted inline buttons with undo/restore actions; dismiss buttons changed from "✗" to "Dismiss" text across all suggestion panels; new API endpoints for dismiss/undo/list-dismissed/list-deleted/restore; 15 new tests; 366 total tests |
 | v2.30.0 | 2026-03-12 | feat: recurring charges dropdown actions + paused section + suggestion dates — replaced Unmark button with ⋯ dropdown menu (Edit/Pause/Delete); inline edit form for label/amount/frequency; Pause moves charges to new "Paused Recurring Charges" section with Resume button; Delete suppresses auto-detected or removes manual overrides; accepted annual fee suggestions now carry `last_date` through to override for Last Charged/Next Estimated display; new `paused` and `last_date` columns on `recurring_overrides`; `detect_recurring()` returns (active, paused) tuple; `GET /recurring` response includes `paused` array; `POST /recurring/override` accepts label/amount/frequency/paused/last_date; 5 new tests; 351 total tests |
 | v2.29.1 | 2026-03-12 | fix: annual fee suggestion accept/edit bugs — (BUG-30) edit/save and accept now immediately remove suggestion row from DOM via `_removeAnnualSuggestionRow()` helper; (BUG-31) `detect_recurring()` now reads full override row (label, amount, frequency) and builds synthetic pattern for overrides with no matching transactions so accepted annual fees always appear in Detected Recurring Charges; 2 new tests |
 | v2.29.0 | 2026-03-12 | feat: smarter merchant normalization — fuzzy grouping via `rapidfuzz.token_sort_ratio()` merges similar description cores (e.g. Best Western variants); low-frequency pattern section shows 1–2 transaction merchants; Auto-Fill Unmatched button bulk-sets merchant from description for NULL-merchant rows; `fuzzy_threshold` and `include_low_frequency` params on `GET /merchant-rules/suggestions`; new `POST /normalize/auto-fill` endpoint; 7 new tests |
@@ -1307,9 +1341,13 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `DELETE` | `/merchant-rules/{id}` | merchant | Delete a merchant rule | 🟢 Called |
 | `POST` | `/merchant-rules/test` | merchant | Test a rule against live descriptions | 🟢 Called |
 | `GET` | `/merchant-rules/suggestions` | merchant | Suggest rules from unmatched descriptions | 🟢 Called |
+| `POST` | `/merchant-rules/suggestions/{pattern}/dismiss` | merchant | Dismiss a rule suggestion (persists to DB) | 🟢 Called |
+| `DELETE` | `/merchant-rules/suggestions/{pattern}/dismiss` | merchant | Undo rule suggestion dismissal | 🟢 Called |
 | `GET` | `/merchant-categories` | merchant | List all merchant→category mappings | 🟢 Called (Merchants tab "Show categorized" toggle) |
 | `GET` | `/merchant-categories/uncategorized` | merchant | List merchants without a category | 🟢 Called |
-| `GET` | `/merchant-categories/suggestions` | merchant | Keyword-heuristic category suggestions for merchants | 🟢 Called |
+| `GET` | `/merchant-categories/suggestions` | merchant | Subcategory-aware category suggestions for merchants | 🟢 Called |
+| `POST` | `/merchant-categories/suggestions/{merchant}/dismiss` | merchant | Dismiss a category suggestion (persists to DB) | 🟢 Called |
+| `DELETE` | `/merchant-categories/suggestions/{merchant}/dismiss` | merchant | Undo category suggestion dismissal | 🟢 Called |
 | `POST` | `/merchant-categories` | merchant | Assign category to merchant | 🟢 Called |
 | `DELETE` | `/merchant-categories/{merchant}` | merchant | Remove merchant category mapping | 🟢 Called (Utilities bulk remove, categorized merchant edit) |
 | `POST` | `/normalize/apply` | merchant | Start batch merchant re-normalization job; optional `merchant_filter` body param for targeted single-merchant run | 🟢 Called |
@@ -1334,6 +1372,10 @@ All endpoints are defined in `src/finance_etl/api.py` inside `create_app()`. Int
 | `GET` | `/recurring` | recurring | Detect recurring transactions and return patterns + monthly total | 🟢 Called |
 | `POST` | `/recurring/override` | recurring | Mark or unmark a merchant as recurring (user override) | 🟢 Called |
 | `DELETE` | `/recurring/override/{merchant}` | recurring | Remove a recurring override (used by Delete action on manual overrides) | 🟢 Called |
+| `GET` | `/recurring/suggestions/dismissed` | recurring | List dismissed annual fee suggestions with details | 🟢 Called |
+| `POST` | `/recurring/suggestions/dismissed/{id}/undo` | recurring | Undo dismissal of an annual fee suggestion | 🟢 Called |
+| `GET` | `/recurring/deleted` | recurring | List suppressed (is_recurring=false) recurring charges | 🟢 Called |
+| `POST` | `/recurring/deleted/{merchant}/restore` | recurring | Restore a suppressed recurring charge | 🟢 Called |
 | `GET` | `/backup/export` | backup | Export full state as v2 JSON (all 9 tables + wizard profiles) | 🟢 Called |
 | `POST` | `/backup/restore` | backup | Restore from v1 or v2 JSON backup (auto-migrates, auto-snapshots) | 🟢 Called |
 | `GET` | `/backup/status` | backup | Backup system status: last export, auto-backups list, table counts | 🟢 Called |

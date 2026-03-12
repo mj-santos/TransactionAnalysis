@@ -388,6 +388,18 @@ CREATE TABLE IF NOT EXISTS annual_reports (
         suggestion_id TEXT PRIMARY KEY,
         dismissed_at  TEXT NOT NULL
     )""",
+
+    # ── Category suggestion dismissals ────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS category_dismissals (
+        suggestion_key TEXT PRIMARY KEY,
+        dismissed_at   TEXT NOT NULL
+    )""",
+
+    # ── Rule suggestion dismissals ────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS rule_dismissals (
+        suggestion_key TEXT PRIMARY KEY,
+        dismissed_at   TEXT NOT NULL
+    )""",
 ]
 # ---------------------------------------------------------------------------
 

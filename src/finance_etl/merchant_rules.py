@@ -666,81 +666,112 @@ def auto_normalize_unmatched(conn) -> int:
 # Category suggestions — keyword heuristics
 # ---------------------------------------------------------------------------
 
-# (category_name, [keywords that imply membership])
-# Category names aligned with BUILT_IN_CATEGORY_MAP subcategories in category_rules.py
-_CATEGORY_HINTS: list[tuple[str, list[str]]] = [
-    ("Restaurants", [
-        "restaurant", "cafe", "coffee", "pizza", "burger", "grill", "sushi",
-        "mcdonald", "starbucks", "chipotle", "subway", "domino", "taco bell",
-        "dunkin", "doordash", "grubhub", "uber eats", "panera", "shake shack",
-        "chick-fil", "five guys", "wendy", "kfc", "popeye", "bakery", "diner",
-        "kitchen", "bistro", "eatery", "bbq", "steakhouse", "sandwich",
-        "noodle", "ramen", "thai", "tapas", "brasserie", "cantina",
+# (subcategory, parent_category, [keywords that imply membership])
+# Subcategory names aligned with BUILT_IN_CATEGORY_MAP in category_rules.py.
+# More specific subcategories are listed first so they match before broader ones.
+_SUBCATEGORY_HINTS: list[tuple[str, str, list[str]]] = [
+    # ── Food & Dining ────────────────────────────────────────────────────
+    ("Coffee Shops", "Food & Dining", [
+        "coffee", "starbucks", "dunkin", "peet", "caribou", "tim horton",
+        "dutch bros", "philz",
     ]),
-    ("Groceries", [
+    ("Fast Food", "Food & Dining", [
+        "mcdonald", "taco bell", "burger king", "wendy", "chick-fil",
+        "five guys", "kfc", "popeye", "subway", "domino", "sonic drive",
+        "jack in the box", "arby", "panda express",
+    ]),
+    ("Food Delivery", "Food & Dining", [
+        "doordash", "grubhub", "uber eats", "postmates", "instacart",
+    ]),
+    ("Bars & Cafes", "Food & Dining", [
+        "cafe", "bar ", "pub ", "brewery", "bakery", "winery",
+    ]),
+    ("Groceries", "Food & Dining", [
         "grocery", "supermarket", "kroger", "safeway", "aldi", "whole foods",
         "trader joe", "publix", "wegmans", "costco", "food mart", "fresh market",
         "harris teeter", "meijer", "giant", "sprouts", "food lion", "h-e-b",
         "market basket", "stop & shop", "walmart supercenter",
     ]),
-    ("Gas & Fuel", [
+    ("Restaurants", "Food & Dining", [
+        "restaurant", "pizza", "burger", "grill", "sushi", "bistro",
+        "steakhouse", "eatery", "kitchen", "diner", "bbq", "ramen", "thai",
+        "tapas", "brasserie", "cantina", "panera", "shake shack", "chipotle",
+        "noodle", "sandwich",
+    ]),
+    # ── Transportation ───────────────────────────────────────────────────
+    ("Gas & Fuel", "Transportation", [
         "shell", "bp", "chevron", "exxon", "mobil", "sunoco", "marathon",
         "valero", "phillips 66", "circle k", "wawa", "speedway", "casey",
         "gas station", "fuel", "petroleum",
     ]),
-    ("Rideshare & Taxis", [
-        "uber", "lyft", "taxi", "parking", "toll", "transit", "metro", "mta",
+    ("Rideshare & Taxis", "Transportation", [
+        "uber", "lyft", "taxi",
     ]),
-    ("General Retail", [
+    ("Parking & Tolls", "Transportation", [
+        "parking", "toll", "ez pass",
+    ]),
+    ("Rail & Transit", "Transportation", [
+        "transit", "metro", "mta", "amtrak", "rail",
+    ]),
+    # ── Shopping ─────────────────────────────────────────────────────────
+    ("General Retail", "Shopping", [
         "amazon", "amzn", "ebay", "etsy", "target", "best buy", "home depot",
         "lowes", "ikea", "nordstrom", "macy", "gap", "h&m", "zara", "uniqlo",
         "tj maxx", "marshalls", "ross", "dollar tree", "dollar general",
-        "five below", "bath & body", "victoria secret", "old navy", "banana republic",
-        "autozone", "advance auto",
+        "five below", "bath & body", "victoria secret", "old navy",
+        "banana republic",
     ]),
-    ("Streaming", [
+    ("Auto Services", "Transportation", [
+        "autozone", "advance auto", "jiffy lube", "valvoline",
+    ]),
+    # ── Entertainment ────────────────────────────────────────────────────
+    ("Streaming", "Entertainment", [
         "netflix", "spotify", "hulu", "disney", "apple tv", "youtube",
         "hbo", "amazon prime", "peacock", "paramount", "crunchyroll",
     ]),
-    ("Entertainment", [
+    ("Entertainment", "Entertainment", [
         "steam", "playstation", "xbox", "nintendo", "twitch",
         "cinema", "theater", "amc", "regal", "ticketmaster", "stubhub",
     ]),
-    ("Pharmacy", [
+    # ── Health & Wellness ────────────────────────────────────────────────
+    ("Pharmacy", "Health & Wellness", [
         "pharmacy", "cvs", "walgreens", "rite aid",
     ]),
-    ("Medical", [
+    ("Medical", "Health & Wellness", [
         "hospital", "clinic", "doctor", "medical", "dental", "optometry",
         "health", "wellness", "urgent care",
     ]),
-    ("Fitness", [
+    ("Fitness", "Health & Wellness", [
         "gym", "planet fitness", "la fitness", "24 hour fitness", "equinox",
     ]),
-    ("Hotels & Lodging", [
+    # ── Travel ───────────────────────────────────────────────────────────
+    ("Hotels & Lodging", "Travel", [
         "hotel", "marriott", "hilton", "hyatt", "airbnb", "vrbo", "motel",
         "booking.com", "expedia",
     ]),
-    ("Airlines", [
+    ("Airlines", "Travel", [
         "delta", "united airlines", "american airlines",
         "southwest", "jetblue", "spirit", "frontier", "alaska air",
     ]),
-    ("Rental Cars", [
+    ("Rental Cars", "Travel", [
         "hertz", "enterprise", "avis", "budget rent",
     ]),
-    ("Internet & Cable", [
+    # ── Bills & Utilities ────────────────────────────────────────────────
+    ("Internet & Cable", "Bills & Utilities", [
         "adobe", "microsoft", "google", "dropbox", "zoom", "slack",
         "github", "notion", "figma", "canva", "cloudflare",
         "aws", "azure", "digitalocean", "openai", "anthropic",
     ]),
-    ("Utilities", [
+    ("Utilities", "Bills & Utilities", [
         "electric", "water utility", "gas utility", "internet", "cable",
         "comcast", "spectrum", "at&t", "att", "verizon", "t-mobile",
         "power company", "energy",
     ]),
-    ("Insurance", [
+    ("Insurance", "Bills & Utilities", [
         "insurance", "geico", "progressive", "state farm", "allstate",
     ]),
-    ("Other Financial", [
+    # ── Financial ────────────────────────────────────────────────────────
+    ("Other Financial", "Financial", [
         "paypal", "venmo", "cashapp", "zelle",
         "loan", "mortgage", "fidelity", "schwab", "robinhood",
         "coinbase", "crypto", "brokerage", "credit union",
@@ -752,26 +783,30 @@ def suggest_categories_for_merchants(merchants: list[str]) -> list[dict]:
     """
     Suggest categories for a list of merchant names using keyword heuristics.
 
-    Scores each merchant against the category keyword lists and returns
-    the best-matching category.  Merchants with no keyword match are omitted.
+    Scores each merchant against the subcategory keyword lists and returns
+    the best-matching subcategory plus its parent category.
+    Merchants with no keyword match are omitted.
 
-    Returns [{merchant, suggested_category, confidence}].
+    Returns [{merchant, suggested_category, parent_category, confidence}].
     Confidence is 'high' for 2+ keyword matches, 'medium' for 1.
     """
     results: list[dict] = []
     for merchant in merchants:
         m_lower = merchant.lower()
-        best_cat: str | None = None
+        best_sub: str | None = None
+        best_parent: str | None = None
         best_score = 0
-        for category, keywords in _CATEGORY_HINTS:
+        for subcategory, parent, keywords in _SUBCATEGORY_HINTS:
             score = sum(1 for kw in keywords if kw in m_lower)
             if score > best_score:
                 best_score = score
-                best_cat = category
-        if best_cat:
+                best_sub = subcategory
+                best_parent = parent
+        if best_sub:
             results.append({
                 "merchant":           merchant,
-                "suggested_category": best_cat,
+                "suggested_category": best_sub,
+                "parent_category":    best_parent,
                 "confidence":         "high" if best_score >= 2 else "medium",
             })
     return results
