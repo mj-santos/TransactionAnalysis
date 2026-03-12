@@ -1507,18 +1507,61 @@ async function restoreDeletedCharge(merchant) {
 // Pending restore file — set by previewBackup(), consumed by confirmRestore()
 let _pendingRestoreFile = null;
 
-function downloadBackup() {
+async function downloadBackup() {
   const statusEl = document.getElementById('backup-export-status');
-  if (statusEl) statusEl.textContent = 'Preparing export…';
-  const a = document.createElement('a');
-  a.href = '/backup/export';
-  a.download = '';  // server sets Content-Disposition filename
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  if (statusEl) {
-    statusEl.textContent = 'Download started.';
-    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  const container = document.getElementById('export-progress-container');
+  const fill = document.getElementById('export-progress-fill');
+  const pctEl = document.getElementById('export-progress-pct');
+  const labelEl = document.getElementById('export-progress-label');
+
+  // Show progress bar
+  if (container) container.style.display = 'block';
+  if (fill) { fill.className = 'progress-bar-fill'; fill.style.width = '0%'; }
+  if (pctEl) pctEl.textContent = '0%';
+  if (labelEl) labelEl.textContent = 'Preparing export…';
+  if (statusEl) statusEl.textContent = '';
+
+  // Simulated progress
+  let pct = 0;
+  const progressInterval = setInterval(() => {
+    if (pct < 30) pct += 5;
+    else if (pct < 60) pct += 2;
+    else if (pct < 85) pct += 0.5;
+    if (fill) fill.style.width = `${Math.round(pct)}%`;
+    if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+  }, 150);
+
+  try {
+    const resp = await fetch('/backup/export');
+    clearInterval(progressInterval);
+    if (!resp.ok) throw new Error(resp.statusText);
+
+    const blob = await resp.blob();
+    const cd = resp.headers.get('content-disposition') || '';
+    const nameMatch = cd.match(/filename="?([^";\n]+)"?/);
+    const filename = nameMatch ? nameMatch[1] : 'spendly-backup.json';
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    // Success
+    if (fill) { fill.style.width = '100%'; fill.classList.add('success'); }
+    if (pctEl) pctEl.textContent = '100%';
+    if (labelEl) labelEl.textContent = 'Download complete';
+    toast('Backup downloaded.', 'success', 3000);
+  } catch (err) {
+    clearInterval(progressInterval);
+    if (fill) { fill.style.width = '100%'; fill.classList.add('error'); }
+    if (pctEl) pctEl.textContent = 'Failed';
+    if (labelEl) labelEl.textContent = 'Export failed';
+    toast(`Export failed: ${err.message}`, 'error');
+  } finally {
+    setTimeout(() => { if (container) container.style.display = 'none'; }, 6000);
   }
 }
 
@@ -3994,6 +4037,25 @@ async function loadUncategorized() {
   } catch (err) {
     container.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">Error: ${esc(err.message)}</span>`;
   }
+}
+
+function filterUncategorized() {
+  const q = (document.getElementById('uncategorized-search')?.value || '').toLowerCase();
+  const clearBtn = document.getElementById('uncategorized-search-clear');
+  if (clearBtn) clearBtn.style.display = q ? 'block' : 'none';
+
+  const listEl = document.getElementById('uncategorized-list');
+  if (!listEl) return;
+  const rows = listEl.children;
+  let shown = 0, total = rows.length;
+  for (const row of rows) {
+    const text = row.textContent.toLowerCase();
+    const match = !q || text.includes(q);
+    row.style.display = match ? '' : 'none';
+    if (match) shown++;
+  }
+  const countEl = document.getElementById('uncategorized-search-count');
+  if (countEl) countEl.textContent = q ? `${shown} of ${total} merchants` : '';
 }
 
 function _editCategorizedMerchant(el, merchant, currentCat) {
@@ -6840,21 +6902,44 @@ async function bulkMarkReviewed(type) {
   }
 }
 
-async function bulkAssignCategory(type) {
+function bulkAssignCategory(type) {
   const fps = Array.from(_bulkSelected[type]);
   if (!fps.length) return;
-  const cat = prompt('Enter category to assign to selected transactions:');
-  if (!cat) return;
-  try {
-    for (const fp of fps) {
-      await api('PATCH', `/transactions/${encodeURIComponent(fp)}`, { category_normalized: cat });
-    }
-    toast(`Category "${cat}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
-    bulkClearSelection(type);
-    loadTxnTab(type);
-  } catch (err) {
-    toast('Failed: ' + err.message, 'error');
-  }
+  const prefix = type === 'credit_card' ? 'cc' : 'bk';
+  const panel = document.getElementById(`${prefix}-bulk-category-panel`);
+  const countEl = document.getElementById(`${prefix}-bulk-cat-n`);
+  const anchor = document.getElementById(`${prefix}-bulk-cat-anchor`);
+  if (countEl) countEl.textContent = fps.length;
+  if (panel) panel.style.display = 'block';
+
+  openCategoryPicker(anchor, {
+    currentCategory: '',
+    allowRemove: false,
+    allowCustom: true,
+    placeholder: 'Search categories…',
+    onSave: async (cat) => {
+      try {
+        for (const fp of fps) {
+          await api('PATCH', `/transactions/${encodeURIComponent(fp)}`, {
+            category_normalized: cat.subcategory,
+            category_parent: cat.parent,
+          });
+        }
+        toast(`Category "${cat.subcategory}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
+        if (panel) panel.style.display = 'none';
+        bulkClearSelection(type);
+        loadTxnTab(type);
+      } catch (err) {
+        toast('Failed: ' + err.message, 'error');
+      }
+    },
+  });
+}
+
+function bulkAssignCategoryCancel(type) {
+  const prefix = type === 'credit_card' ? 'cc' : 'bk';
+  const panel = document.getElementById(`${prefix}-bulk-category-panel`);
+  if (panel) panel.style.display = 'none';
 }
 
 async function bulkExclude(type) {

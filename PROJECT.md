@@ -266,7 +266,7 @@ TransactionAnalysis/
 - Tag filter dropdown — filters transactions by assigned tag
 - Per-row tag chips showing assigned tags, "+tag" button opens tag assignment popup
 - Tag assignment popup: checkboxes for all tags, toggle to assign/remove per transaction
-- **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar (blue) appears when ≥1 selected with buttons: Assign Category, Mark Reviewed, Exclude, Assign Merchant (inline type-ahead panel), Assign Tag, Clear Selection ×; selected rows get left border accent + light blue tint; "{N} selected" counter updates in real time
+- **Bulk Actions**: select-all checkbox in header + per-row checkboxes; bulk action bar (blue) appears when ≥1 selected with buttons: Assign Category (inline panel with `openCategoryPicker`, sends `category_normalized` + `category_parent`), Mark Reviewed, Exclude, Assign Merchant (inline type-ahead panel), Assign Tag, Clear Selection ×; selected rows get left border accent + light blue tint; "{N} selected" counter updates in real time
 - **Inline Category Editing**: click category cell to edit via `openCategoryPicker`; sets `category_override=TRUE` on save to protect from batch normalization; override badge ("edited" pill) shown on overridden rows with click-to-reset; "Fix for All?" prompt after save offers to apply category to all transactions from same merchant (auto-dismiss 8s); `_fixForAllMerchant()` updates merchant→category map and patches non-override transactions
 - **Transaction Notes**: per-transaction notes via pencil icon; inline popup editor with textarea; auto-save on Enter or Save click; PATCH endpoint updates `notes` field
 - **Split Transactions**: split one transaction into N sub-rows across categories; parent marked `is_split=TRUE` and excluded from totals; children carry `split_parent_fingerprint`; "split" badge on child descriptions; unsplit restores parent and removes children. Per-row "⚡ Split" button on eligible transactions; "Unsplit" button on split child rows (triggers `unsplitTransaction` with parent fingerprint). Fixed in v2.26.0.
@@ -316,6 +316,7 @@ TransactionAnalysis/
   - Delete with confirmation
 - Re-normalize All Transactions button: `startRenormalize()` → `POST /normalize/apply` (background job, polled)
 - Uncategorized Merchants panel: `loadUncategorized()` → `GET /merchant-categories/uncategorized`
+  - **Search box**: `filterUncategorized()` — type-ahead filter with clear button and "{N} of {total} merchants" count; Escape key clears
   - Inline category assignment dropdown + assign button per merchant
   - Backfills category onto all transactions for that merchant
   - **"Show categorized merchants too" toggle**: fetches `GET /merchant-categories` and displays categorized merchants below the uncategorized list with inline category edit via `openCategoryPicker`
@@ -397,6 +398,7 @@ TransactionAnalysis/
   - Current database table row counts grid
   - Download Full Backup (JSON) button — `downloadBackup()` → `GET /backup/export`
     - Exports all 9 tables + wizard profile YAML files; timestamped filename
+    - **Export progress bar**: simulated progress (fast to 30%, medium to 60%, stalls at 85%); fills to 100% green on success or red on failure; auto-hides after 6s
   - File picker with preview modal — `previewBackup()` → client-side JSON parse
     - Shows backup version, creation date, row counts per table before confirming
     - `confirmRestore()` → `POST /backup/restore`; auto-snapshot saved before overwriting
@@ -835,11 +837,11 @@ Single-row table seeded with `1` on first migration run.
 ~~**BUG-18 (FIXED): Two category picker implementations — `_buildCategoryPickerHTML()` not consolidated**~~
 - Fixed in v2.26.1. Extended `openCategoryPicker()` with `allowCustom` option (supports both Remove and Custom free-text). Migrated uncategorized merchants and suggested merchant categories to use unified picker. Deleted 6 dead functions (`_buildCategoryPickerHTML`, `_openCatPicker`, `_filterCatPicker`, `_renderCatPickerOptions`, `_selectCatOption`, `_selectCatCustom`).
 
-**BUG-19: `bulkAssignCategory()` uses `prompt()` instead of category picker**
-- File: `app.js`, Line: 6196
-- Description: The bulk "Assign Category" action on CC/Bank transaction pages uses `prompt()` (browser built-in dialog) for category input instead of `openCategoryPicker()`. Similarly, bulk tag assignment (line 6234) uses `prompt()`. These bypass the structured category taxonomy entirely.
-- Impact: Medium — users can type arbitrary categories that don't match the taxonomy.
-- Fix: Replace `prompt()` with `openCategoryPicker()` for category, and a tag selector for tags.
+**~~BUG-19 (FIXED): `bulkAssignCategory()` uses `prompt()` instead of category picker~~**
+- ~~File: `app.js`, Line: 6196~~
+- ~~Description: The bulk "Assign Category" action on CC/Bank transaction pages uses `prompt()` (browser built-in dialog) for category input instead of `openCategoryPicker()`. Similarly, bulk tag assignment (line 6234) uses `prompt()`. These bypass the structured category taxonomy entirely.~~
+- ~~Impact: Medium — users can type arbitrary categories that don't match the taxonomy.~~
+- Fixed in v2.32.0. Replaced `prompt()` with `openCategoryPicker()` for bulk category assignment; inline category panel with search anchor and cancel button on both CC and Bank tabs; sends both `category_normalized` and `category_parent` fields.
 
 **BUG-20: Dark mode selectors for run-status badges will never match**
 - File: `style.css`, Lines: 1377-1379
@@ -1055,7 +1057,7 @@ openCategoryPicker shared component, merchant_filter on POST /normalize/apply, d
 | Component | Count | Locations | Recommendation |
 |---|---|---|---|
 | ~~Category picker implementations~~ | ~~**2**~~ | ~~`openCategoryPicker()` (line 6340) + `_buildCategoryPickerHTML()` (line 6930)~~ | ~~Consolidated in v2.26.1~~ |
-| `prompt()` for category/tag input | **2** | `bulkAssignCategory` (line 6196), bulk tag assign (line 6234) | Replace with `openCategoryPicker()` / tag selector |
+| ~~`prompt()` for category/tag input~~ | ~~**2**~~ | ~~`bulkAssignCategory` (line 6196), bulk tag assign (line 6234)~~ | ~~Bulk category fixed in v2.32.0; bulk tag still uses `prompt()`~~ |
 | Income filter inline copies | **2** | `api.py:3779`, `api.py:3795` (tag totals with `tn.` alias) | Add comment referencing INCOME_FILTER; can't use constant due to table alias |
 | Income filter stale tooltip | **1** | `api.py:2606` — tooltip omits `statement_type = 'bank'` condition | Update tooltip text |
 | POST /merchant-categories callers | **7** | Lines 3506, 3527, 3752, 3778, 6513, 6678, 6732 | Inconsistent: only lines 6678 and 6732 pass `source` field |
@@ -1253,6 +1255,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.32.0 | 2026-03-12 | feat: UX polish sprint — bulk category assign now uses `openCategoryPicker()` instead of `prompt()` with inline panel on CC/Bank tabs (BUG-19); backup export progress bar with simulated progress + success/error states; uncategorized merchants search box with live filter and count; category grouping queries now prefer `category_normalized` over `category_parent` for accurate dashboard/analytics breakdown |
 | v2.31.0 | 2026-03-12 | feat: suggestion panel improvements — subcategory-aware category matching (Coffee→Coffee Shops, not Restaurants); persistent dismissals for category + rule suggestions via new `category_dismissals` and `rule_dismissals` DB tables; annual suggestions Re-analyze/View Dismissed/View Deleted inline buttons with undo/restore actions; dismiss buttons changed from "✗" to "Dismiss" text across all suggestion panels; new API endpoints for dismiss/undo/list-dismissed/list-deleted/restore; 15 new tests; 366 total tests |
 | v2.30.0 | 2026-03-12 | feat: recurring charges dropdown actions + paused section + suggestion dates — replaced Unmark button with ⋯ dropdown menu (Edit/Pause/Delete); inline edit form for label/amount/frequency; Pause moves charges to new "Paused Recurring Charges" section with Resume button; Delete suppresses auto-detected or removes manual overrides; accepted annual fee suggestions now carry `last_date` through to override for Last Charged/Next Estimated display; new `paused` and `last_date` columns on `recurring_overrides`; `detect_recurring()` returns (active, paused) tuple; `GET /recurring` response includes `paused` array; `POST /recurring/override` accepts label/amount/frequency/paused/last_date; 5 new tests; 351 total tests |
 | v2.29.1 | 2026-03-12 | fix: annual fee suggestion accept/edit bugs — (BUG-30) edit/save and accept now immediately remove suggestion row from DOM via `_removeAnnualSuggestionRow()` helper; (BUG-31) `detect_recurring()` now reads full override row (label, amount, frequency) and builds synthetic pattern for overrides with no matching transactions so accepted annual fees always appear in Detected Recurring Charges; 2 new tests |
