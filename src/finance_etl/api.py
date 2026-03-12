@@ -673,11 +673,24 @@ No cloud services, no external dependencies — all data stays on your machine.
                             pass
             except Exception:
                 pass
+            # Collect reason summary for banner display
+            dup_reasons = []
+            try:
+                rconn = get_connection(db_path, read_only=True)
+                reason_rows = rconn.execute(
+                    "SELECT reason, COUNT(*) FROM duplicate_candidates "
+                    "WHERE status = 'pending' GROUP BY reason"
+                ).fetchall()
+                rconn.close()
+                dup_reasons = [{"reason": r[0], "count": r[1]} for r in reason_rows]
+            except Exception:
+                pass
             _async_runs[run_id] = {
                 "status": "success",
                 "run_id": result.run_id,
                 "counts": result.counts,
                 "duplicate_count": dup_count,
+                "duplicate_reasons": dup_reasons,
             }
             # Auto-backup after successful commit (non-fatal on failure)
             try:

@@ -390,7 +390,7 @@ function onRunComplete(run) {
     toast('Import complete!', 'success');
     // Show duplicate detection banner if any found
     if (run.duplicate_count > 0) {
-      _showDuplicateBanner(run.duplicate_count);
+      _showDuplicateBanner(run.duplicate_count, run.duplicate_reasons || []);
     }
     refreshDupBadge();
   } else if (run.status === 'failed') {
@@ -399,14 +399,28 @@ function onRunComplete(run) {
   }
 }
 
-function _showDuplicateBanner(count) {
+function _showDuplicateBanner(count, reasons) {
   const existing = document.getElementById('dup-banner');
   if (existing) existing.remove();
   const banner = document.createElement('div');
   banner.id = 'dup-banner';
   banner.className = 'dup-banner';
-  banner.innerHTML = `⚠️ ${count} possible duplicate transaction${count !== 1 ? 's' : ''} detected.
-    <a href="#" onclick="event.preventDefault(); navigate('utilities'); ensureCardExpanded('util-card-duplicates');">Review them in Utilities → Duplicate Review.</a>
+
+  // Determine banner text based on reason types
+  const reasonSet = new Set((reasons || []).map(r => r.reason || ''));
+  const hasAmtVar = [...reasonSet].some(r => r.includes('amount_variance'));
+  const hasFuzzyDesc = [...reasonSet].some(r => r.includes('fuzzy_description'));
+  let bannerText;
+  if (hasAmtVar && !hasFuzzyDesc) {
+    bannerText = `⚠️ ${count} possible duplicate transaction${count !== 1 ? 's' : ''} found — some may be pending charges that settled at a different amount.`;
+  } else if (hasFuzzyDesc && !hasAmtVar) {
+    bannerText = `⚠️ ${count} possible duplicate transaction${count !== 1 ? 's' : ''} found — bank descriptions may have changed between exports.`;
+  } else {
+    bannerText = `⚠️ ${count} possible duplicate transaction${count !== 1 ? 's' : ''} detected.`;
+  }
+
+  banner.innerHTML = `${bannerText}
+    <a href="#" onclick="event.preventDefault(); navigate('utilities'); ensureCardExpanded('util-card-duplicates');">Review in Utilities → Duplicate Review.</a>
     <button onclick="this.parentElement.remove()" style="background:none; border:none; cursor:pointer; font-size:16px; color:var(--text-muted); margin-left:8px;">×</button>`;
   const statusCard = document.getElementById('run-status');
   if (statusCard) statusCard.parentElement.insertBefore(banner, statusCard.nextSibling);
@@ -6889,27 +6903,64 @@ async function loadUtilDuplicates() {
       el.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted);">No duplicate candidates — your data looks clean ✓</div>';
       return;
     }
-    el.innerHTML = rows.map(r => `
+    el.innerHTML = rows.map(r => {
+      const isAmtVar = r.reason && r.reason.includes('amount_variance');
+      const amtDiff = r.amount_a != null && r.amount_b != null && Math.abs(r.amount_a - r.amount_b) > 0.001;
+      const descDiff = (r.desc_a || '') !== (r.desc_b || '');
+      const dateDiff = (r.date_a || '') !== (r.date_b || '');
+      const amberStyle = 'background:rgba(245,158,11,0.12); color:var(--warning); font-weight:600;';
+      const _fmtImp = (v) => v ? new Date(v).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) : '—';
+
+      // Amount variance callout
+      const amtCallout = isAmtVar ? `
+        <div style="background:rgba(245,158,11,0.08); border:1px solid var(--warning); border-radius:6px; padding:8px 10px; margin-bottom:8px; font-size:12px;">
+          <strong>⚠️ Amount difference detected</strong><br>
+          Original: ${_fmt$(r.amount_a)} → Re-imported: ${_fmt$(r.amount_b)}<br>
+          <span style="color:var(--text-muted);">This may be a pending transaction that settled at a different amount. Remove the original if the new amount is correct.</span>
+        </div>` : '';
+
+      // Side-by-side comparison table
+      const compTable = `
+        <table style="width:100%; font-size:12px; border-collapse:collapse; margin-bottom:8px;">
+          <thead><tr>
+            <th style="text-align:left; padding:4px 6px; border-bottom:1px solid var(--border);">Field</th>
+            <th style="text-align:left; padding:4px 6px; border-bottom:1px solid var(--border);">Original</th>
+            <th style="text-align:left; padding:4px 6px; border-bottom:1px solid var(--border);">Re-imported</th>
+          </tr></thead>
+          <tbody>
+            <tr><td style="padding:4px 6px;">Date</td>
+              <td style="padding:4px 6px;${dateDiff ? amberStyle : ''}">${r.date_a || '—'}</td>
+              <td style="padding:4px 6px;${dateDiff ? amberStyle : ''}">${r.date_b || '—'}</td></tr>
+            <tr><td style="padding:4px 6px;">Description</td>
+              <td style="padding:4px 6px;${descDiff ? amberStyle : ''}">${esc(r.desc_a || '')}</td>
+              <td style="padding:4px 6px;${descDiff ? amberStyle : ''}">${esc(r.desc_b || '')}</td></tr>
+            <tr><td style="padding:4px 6px;">Amount</td>
+              <td style="padding:4px 6px;${amtDiff ? amberStyle : ''}">${_fmt$(r.amount_a)}</td>
+              <td style="padding:4px 6px;${amtDiff ? amberStyle : ''}">${_fmt$(r.amount_b)}</td></tr>
+            <tr><td style="padding:4px 6px;">Imported</td>
+              <td style="padding:4px 6px;">${_fmtImp(r.ingested_at_a)}</td>
+              <td style="padding:4px 6px;">${_fmtImp(r.ingested_at_b)}</td></tr>
+          </tbody>
+        </table>`;
+
+      // Resolution buttons — contextual labels for amount variance
+      const keepBothLabel = isAmtVar ? 'Keep as separate transactions' : 'Keep Both';
+      const removeNewLabel = isAmtVar ? `Keep original amount (${_fmt$(r.amount_a)})` : 'Remove Newer';
+      const removeOldLabel = isAmtVar ? `Use corrected amount (${_fmt$(r.amount_b)})` : 'Remove Older';
+
+      return `
       <div class="dup-pair" style="border:1px solid var(--border); border-radius:6px; padding:12px; margin-bottom:10px;">
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:12px; margin-bottom:8px;">
-          <div>
-            <div style="font-weight:700; margin-bottom:4px; color:var(--text-muted);">Existing Transaction</div>
-            <div>${r.date_a || '—'} · ${esc(r.desc_a || '')} · ${_fmt$(r.amount_a)} · ${esc(r.account_a || '')}</div>
-          </div>
-          <div>
-            <div style="font-weight:700; margin-bottom:4px; color:var(--text-muted);">New Transaction</div>
-            <div>${r.date_b || '—'} · ${esc(r.desc_b || '')} · ${_fmt$(r.amount_b)} · ${esc(r.account_b || '')}</div>
-          </div>
-        </div>
+        ${amtCallout}
+        ${compTable}
         <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Reason: ${_dupReasonLabel(r.reason)}${r.similarity_score != null ? ' (' + Math.round(r.similarity_score * 100) + '% match)' : ''}</div>
-        <div style="display:flex; gap:6px;">
-          <button class="btn btn-secondary btn-sm" onclick="resolveDup(${r.id}, 'keep_both')">Keep Both</button>
-          <button class="btn btn-danger btn-sm" onclick="resolveDup(${r.id}, 'delete_b')">Remove Newer</button>
-          <button class="btn btn-danger btn-sm" onclick="resolveDup(${r.id}, 'delete_a')">Remove Older</button>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="resolveDup(${r.id}, 'keep_both')">${esc(keepBothLabel)}</button>
+          <button class="btn btn-danger btn-sm" onclick="resolveDup(${r.id}, 'delete_b')">${esc(removeNewLabel)}</button>
+          <button class="btn btn-danger btn-sm" onclick="resolveDup(${r.id}, 'delete_a')">${esc(removeOldLabel)}</button>
           <button class="btn btn-secondary btn-sm" onclick="resolveDup(${r.id}, 'not_duplicate')">Not a Duplicate</button>
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   } catch (err) {
     el.innerHTML = `<span style="color:var(--text-muted);">Error: ${esc(err.message)}</span>`;
   }
