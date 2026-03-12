@@ -6868,6 +6868,14 @@ async function testRuleUtil() {
 }
 
 // -- Duplicate Review --
+function _dupReasonLabel(reason) {
+  if (!reason) return '—';
+  if (reason === 'fuzzy_description_match') return 'Similar description';
+  if (reason === 'amount_variance') return 'Amount difference';
+  if (reason === 'fuzzy_description_and_amount_variance') return 'Similar description + amount difference';
+  return esc(reason);
+}
+
 async function loadUtilDuplicates() {
   const el = document.getElementById('util-dup-list');
   if (!el) return;
@@ -6893,10 +6901,11 @@ async function loadUtilDuplicates() {
             <div>${r.date_b || '—'} · ${esc(r.desc_b || '')} · ${_fmt$(r.amount_b)} · ${esc(r.account_b || '')}</div>
           </div>
         </div>
-        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Reason: ${esc(r.reason || '')} · Score: ${r.similarity_score}</div>
+        <div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Reason: ${_dupReasonLabel(r.reason)}${r.similarity_score != null ? ' (' + Math.round(r.similarity_score * 100) + '% match)' : ''}</div>
         <div style="display:flex; gap:6px;">
           <button class="btn btn-secondary btn-sm" onclick="resolveDup(${r.id}, 'keep_both')">Keep Both</button>
           <button class="btn btn-danger btn-sm" onclick="resolveDup(${r.id}, 'delete_b')">Remove Newer</button>
+          <button class="btn btn-danger btn-sm" onclick="resolveDup(${r.id}, 'delete_a')">Remove Older</button>
           <button class="btn btn-secondary btn-sm" onclick="resolveDup(${r.id}, 'not_duplicate')">Not a Duplicate</button>
         </div>
       </div>
@@ -6909,7 +6918,8 @@ async function loadUtilDuplicates() {
 async function resolveDup(id, action) {
   try {
     await api('POST', `/duplicates/${id}/resolve`, { action });
-    toast(`Duplicate resolved: ${action.replace('_', ' ')}`, 'success');
+    const labels = {keep_both: 'Kept both', delete_b: 'Removed newer', delete_a: 'Removed older', not_duplicate: 'Not a duplicate'};
+    toast(`Duplicate resolved: ${labels[action] || action}`, 'success');
     loadUtilDuplicates();
   } catch (err) {
     toast(`Failed: ${err.message}`, 'error');

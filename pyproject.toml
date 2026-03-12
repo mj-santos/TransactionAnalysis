@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finance_etl"
-version = "2.26.1"
+version = "2.26.2"
 description = "Local deterministic ETL + analytics for bank/credit-card transaction CSVs"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,6 +16,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
+    "rapidfuzz>=3.0",
 ]
 
 [project.optional-dependencies]

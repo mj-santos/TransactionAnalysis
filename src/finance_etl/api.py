@@ -652,6 +652,27 @@ No cloud services, no external dependencies — all data stays on your machine.
                 dup_count = _detect_duplicates(run_id)
             except Exception:
                 pass
+            # Run fuzzy duplicate detection (description drift, amount variance)
+            try:
+                from finance_etl.utils.fuzzy_dedup import fuzzy_duplicate_detection
+                fconn = None
+                try:
+                    fconn = get_connection(db_path)
+                    new_fps = [r[0] for r in fconn.execute(
+                        "SELECT transaction_fingerprint FROM transactions_norm WHERE run_id = ?",
+                        [run_id],
+                    ).fetchall()]
+                    if new_fps:
+                        fuzzy_count = fuzzy_duplicate_detection(fconn, new_fps)
+                        dup_count += fuzzy_count
+                finally:
+                    if fconn:
+                        try:
+                            fconn.close()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             _async_runs[run_id] = {
                 "status": "success",
                 "run_id": result.run_id,
@@ -2129,10 +2150,10 @@ No cloud services, no external dependencies — all data stays on your machine.
                            dc.detected_at, dc.resolved_at,
                            a.transaction_date AS date_a, a.description AS desc_a,
                            a.merchant AS merchant_a, a.amount AS amount_a,
-                           a.account_name AS account_a,
+                           a.account_name AS account_a, a.ingested_at AS ingested_at_a,
                            b.transaction_date AS date_b, b.description AS desc_b,
                            b.merchant AS merchant_b, b.amount AS amount_b,
-                           b.account_name AS account_b
+                           b.account_name AS account_b, b.ingested_at AS ingested_at_b
                     FROM duplicate_candidates dc
                     LEFT JOIN transactions_norm a ON a.transaction_fingerprint = dc.fingerprint_a
                     LEFT JOIN transactions_norm b ON b.transaction_fingerprint = dc.fingerprint_b
@@ -2167,8 +2188,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         Body: {"action": "keep_both" | "delete_b" | "not_duplicate"}
         """
         action = body.get("action", "")
-        if action not in ("keep_both", "delete_b", "not_duplicate"):
-            raise HTTPException(status_code=400, detail="action must be 'keep_both', 'delete_b', or 'not_duplicate'")
+        if action not in ("keep_both", "delete_b", "delete_a", "not_duplicate"):
+            raise HTTPException(status_code=400, detail="action must be 'keep_both', 'delete_b', 'delete_a', or 'not_duplicate'")
         conn = None
         try:
             conn = get_connection(db_path)
@@ -2180,11 +2201,25 @@ No cloud services, no external dependencies — all data stays on your machine.
                 raise HTTPException(status_code=404, detail="Duplicate candidate not found")
             if candidate[1] != "pending":
                 raise HTTPException(status_code=400, detail="Already resolved")
-            new_status = "not_duplicate" if action == "not_duplicate" else "confirmed_duplicate" if action == "delete_b" else "not_duplicate"
+            if action == "keep_both":
+                new_status = "resolved_kept_both"
+            elif action == "delete_b":
+                new_status = "resolved_removed_new"
+            elif action == "delete_a":
+                new_status = "resolved_removed_old"
+            else:
+                new_status = "not_duplicate"
+            fp_a_val = conn.execute(
+                "SELECT fingerprint_a FROM duplicate_candidates WHERE id = ?", [dup_id]
+            ).fetchone()[0]
             if action == "delete_b":
                 fp_b = candidate[0]
                 conn.execute(
                     "DELETE FROM transactions_norm WHERE transaction_fingerprint = ?", [fp_b]
+                )
+            elif action == "delete_a":
+                conn.execute(
+                    "DELETE FROM transactions_norm WHERE transaction_fingerprint = ?", [fp_a_val]
                 )
             conn.execute(
                 "UPDATE duplicate_candidates SET status = ?, resolved_at = ? WHERE id = ?",
