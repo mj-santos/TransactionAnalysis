@@ -7668,19 +7668,53 @@ async function refreshDupBadge() {
 }
 
 // -- Data Health --
+
+/** Navigate to the correct transaction tab and apply a filter checkbox.
+ *  Uses per_type breakdown from health API to pick CC vs bank tab. */
+function _healthNavigateWithFilter(perType, filterKey) {
+  // filterKey: 'no_category', 'unreviewed', 'no_merchant'
+  const metricKey = filterKey === 'no_category' ? 'uncategorized'
+                  : filterKey === 'unreviewed'  ? 'unreviewed'
+                  : 'no_merchant';
+  const cc = (perType?.credit_card || {})[metricKey] || 0;
+  const bk = (perType?.bank || {})[metricKey] || 0;
+  const type = cc >= bk ? 'credit_card' : 'bank';
+  const page = type === 'credit_card' ? 'credit-cards' : 'bank-transactions';
+  const prefix = type === 'credit_card' ? 'cc' : 'bk';
+  navigate(page);
+  setTimeout(() => {
+    // Map filterKey to the checkbox ID suffix
+    const idMap = {
+      'no_category': `${prefix}-no-category`,
+      'no_merchant': `${prefix}-no-merchant`,
+      'unreviewed':  `${prefix}-unreviewed-only`,
+    };
+    const checkbox = document.getElementById(idMap[filterKey]);
+    if (checkbox && !checkbox.checked) {
+      checkbox.checked = true;
+      loadTxnTab(type);
+    }
+    if (cc > 0 && bk > 0) {
+      toast(`Showing ${type === 'credit_card' ? 'Credit Card' : 'Bank'} tab (${type === 'credit_card' ? cc : bk}). Also check ${type === 'credit_card' ? 'Bank' : 'Credit Card'} tab (${type === 'credit_card' ? bk : cc}).`, 'info', 5000);
+    }
+  }, 150);
+}
+
 async function loadUtilHealth() {
   const el = document.getElementById('util-health-list');
   if (!el) return;
   el.innerHTML = '<span style="color:var(--text-muted);">Loading…</span>';
   try {
     const h = await api('GET', '/utilities/health');
+    // Store per_type for click handlers
+    window._healthPerType = h.per_type || {};
     el.innerHTML = `
       <div class="health-grid">
-        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('bank-transactions');">
+        <a class="health-metric" href="#" onclick="event.preventDefault(); _healthNavigateWithFilter(window._healthPerType, 'no_category');">
           <span class="health-label">Uncategorized transactions</span>
           <span class="health-value${h.uncategorized_transactions > 0 ? ' health-warn' : ''}">${h.uncategorized_transactions}</span>
         </a>
-        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('bank-transactions');">
+        <a class="health-metric" href="#" onclick="event.preventDefault(); _healthNavigateWithFilter(window._healthPerType, 'unreviewed');">
           <span class="health-label">Unreviewed transactions</span>
           <span class="health-value${h.unreviewed_transactions > 0 ? ' health-warn' : ''}">${h.unreviewed_transactions}</span>
         </a>
@@ -7688,7 +7722,7 @@ async function loadUtilHealth() {
           <span class="health-label">Merchants without a category</span>
           <span class="health-value${h.merchants_without_category > 0 ? ' health-warn' : ''}">${h.merchants_without_category}</span>
         </a>
-        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('merchant-rules');">
+        <a class="health-metric" href="#" onclick="event.preventDefault(); _healthNavigateWithFilter(window._healthPerType, 'no_merchant');">
           <span class="health-label">Transactions with no merchant match</span>
           <span class="health-value${h.no_merchant_match > 0 ? ' health-warn' : ''}">${h.no_merchant_match}</span>
         </a>

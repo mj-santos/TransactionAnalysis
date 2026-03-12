@@ -397,7 +397,7 @@ TransactionAnalysis/
   - Last auto-backup timestamp and count display — `loadBackupStatus()` → `GET /backup/status`
   - Current database table row counts grid
   - Download Full Backup (JSON) button — `downloadBackup()` → `GET /backup/export`
-    - Exports all 9 tables + wizard profile YAML files; timestamped filename
+    - Exports all 20 tables + wizard profile YAML files; timestamped filename
     - **Export progress bar**: simulated progress (fast to 30%, medium to 60%, stalls at 85%); fills to 100% green on success or red on failure; auto-hides after 6s
   - File picker with preview modal — `previewBackup()` → client-side JSON parse
     - Shows backup version, creation date, row counts per table before confirming
@@ -849,17 +849,15 @@ Single-row table seeded with `1` on first migration run.
 - Impact: Low — run status badges have no dark mode styling.
 - Fix: Change to `[data-theme="dark"] .run-status.success` etc.
 
-**BUG-14: Data Health "Uncategorized transactions" link hardcodes bank-transactions tab**
-- File: `app.js`, Line: ~6825
-- Description: Data Health metric "Uncategorized transactions" navigates to `bank-transactions` but uncategorized transactions can exist in both CC and bank tabs. The health API (`GET /utilities/health`) returns only a count, not per-statement_type breakdown, so `resolveTransactionTab()` cannot be applied without fetching transaction data first.
-- Impact: Low — user may not see uncategorized CC transactions when clicking the link.
-- Fix: Either split the health metric into CC/bank counts, or fetch a sample of uncategorized transactions to resolve the tab.
+**~~BUG-14 (FIXED): Data Health "Uncategorized transactions" link hardcodes bank-transactions tab~~**
+- ~~File: `app.js`, Line: ~6825~~
+- ~~Description: Data Health metric "Uncategorized transactions" navigates to `bank-transactions` but uncategorized transactions can exist in both CC and bank tabs.~~
+- Fixed in v2.33.0. Health API now returns `per_type` breakdown by statement_type; `_healthNavigateWithFilter()` picks the tab with more matching items and auto-checks the appropriate filter checkbox. Toast notifies if both tabs have matches.
 
-**BUG-15: Data Health "Unreviewed transactions" link hardcodes bank-transactions tab**
-- File: `app.js`, Line: ~6829
-- Description: Same issue as BUG-14 but for unreviewed transactions. Navigates to `bank-transactions` but unreviewed transactions span both tabs.
-- Impact: Low — user may not see unreviewed CC transactions when clicking the link.
-- Fix: Same approach as BUG-14.
+**~~BUG-15 (FIXED): Data Health "Unreviewed transactions" link hardcodes bank-transactions tab~~**
+- ~~File: `app.js`, Line: ~6829~~
+- ~~Description: Same issue as BUG-14 but for unreviewed transactions.~~
+- Fixed in v2.33.0 alongside BUG-14. Same `_healthNavigateWithFilter()` approach with `unreviewed-only` checkbox.
 
 ### Previously Fixed Bugs
 
@@ -1255,6 +1253,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.33.0 | 2026-03-12 | fix: backup/restore + data health — backup now exports/restores `recurring_dismissals`, `category_dismissals`, `rule_dismissals` tables (were silently lost); `recurring_overrides` restore now includes all columns (`label`, `amount`, `frequency`, `paused`, `last_date`) so accepted annual fees and edited recurring charges survive restore; Data Health navigation fixed (BUG-14/BUG-15) — health API returns `per_type` breakdown, click handlers auto-navigate to correct CC/bank tab and set filter checkboxes (`no_category`, `unreviewed`, `no_merchant`), toast if both tabs have matches; "Merchants without a category" metric aligned with Uncategorized Merchants page (uses `merchant_category_map` lookup instead of `category_normalized`); "No merchant match" click now goes to transactions with filter instead of merchant-rules; 5 new tests; 373 total tests |
 | v2.32.0 | 2026-03-12 | feat: UX polish sprint — bulk category assign now uses `openCategoryPicker()` instead of `prompt()` with inline panel on CC/Bank tabs (BUG-19); backup export progress bar with simulated progress + success/error states; uncategorized merchants search box with live filter and count; category grouping queries now prefer `category_normalized` over `category_parent` for accurate dashboard/analytics breakdown |
 | v2.31.0 | 2026-03-12 | feat: suggestion panel improvements — subcategory-aware category matching (Coffee→Coffee Shops, not Restaurants); persistent dismissals for category + rule suggestions via new `category_dismissals` and `rule_dismissals` DB tables; annual suggestions Re-analyze/View Dismissed/View Deleted inline buttons with undo/restore actions; dismiss buttons changed from "✗" to "Dismiss" text across all suggestion panels; new API endpoints for dismiss/undo/list-dismissed/list-deleted/restore; 15 new tests; 366 total tests |
 | v2.30.0 | 2026-03-12 | feat: recurring charges dropdown actions + paused section + suggestion dates — replaced Unmark button with ⋯ dropdown menu (Edit/Pause/Delete); inline edit form for label/amount/frequency; Pause moves charges to new "Paused Recurring Charges" section with Resume button; Delete suppresses auto-detected or removes manual overrides; accepted annual fee suggestions now carry `last_date` through to override for Last Charged/Next Estimated display; new `paused` and `last_date` columns on `recurring_overrides`; `detect_recurring()` returns (active, paused) tuple; `GET /recurring` response includes `paused` array; `POST /recurring/override` accepts label/amount/frequency/paused/last_date; 5 new tests; 351 total tests |
