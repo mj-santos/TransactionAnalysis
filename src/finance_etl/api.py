@@ -2312,7 +2312,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                       tn.merchant AS normalized_name,
                       COUNT(*) AS txn_count,
                       SUM(tn.amount) AS total_spend,
-                      mcm.category AS assigned_category,
+                      COALESCE(mcm.category,
+                               MODE(tn.category_normalized)) AS assigned_category,
                       MAX(tn.transaction_date) AS last_seen
                    FROM transactions_norm tn
                    LEFT JOIN merchant_category_map mcm
@@ -4559,14 +4560,14 @@ No cloud services, no external dependencies — all data stays on your machine.
             top_cat_rows = conn.execute(
                 """
                 SELECT
-                    COALESCE(category_parent, category) AS grp,
+                    COALESCE(category_normalized, category_parent, category) AS grp,
                     SUM(resolved_amount) AS total_amount,
                     COUNT(*) AS cnt
                 FROM transactions_norm
                 WHERE transaction_subtype = 'spending'
                   AND YEAR(transaction_date) = ?
                   AND MONTH(transaction_date) = ?
-                  AND COALESCE(category_parent, category) IS NOT NULL
+                  AND COALESCE(category_normalized, category_parent, category) IS NOT NULL
                 GROUP BY grp
                 ORDER BY total_amount DESC
                 LIMIT 8
@@ -4919,7 +4920,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             cat_rows = conn.execute(
                 f"""
                 SELECT
-                    COALESCE(category_parent, category, 'Uncategorized') AS grp,
+                    COALESCE(category_normalized, category_parent, category, 'Uncategorized') AS grp,
                     ABS(SUM(amount)) AS total
                 FROM transactions_norm
                 WHERE transaction_date >= ? AND transaction_date <= ?
