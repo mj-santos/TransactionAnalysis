@@ -2870,13 +2870,16 @@ No cloud services, no external dependencies — all data stays on your machine.
              summary="Analyze descriptions and suggest normalization rules")
     def get_rule_suggestions(
         min_transactions: int = Query(3, description="Min transaction count for a suggestion to appear"),
+        include_low_frequency: bool = Query(False, description="Include groups with fewer than min_transactions"),
+        fuzzy_threshold: float = Query(0.75, description="Fuzzy merge threshold 0-1 (token_sort_ratio)"),
     ):
         """
         Analyze all raw transaction descriptions and suggest merchant normalization rules.
 
         Groups similar descriptions by their stripped 'core' (after removing noise like
-        transaction IDs, platform prefixes, state codes). Each group becomes a suggestion
-        with an inferred match type (startswith or contains) and a cleaned merchant name.
+        transaction IDs, platform prefixes, state codes). Similar cores are then
+        fuzzy-merged using token_sort_ratio so that variants like
+        "BEST WESTERN INN S" and "BEST WESTERN SEVEN S" are grouped together.
 
         Already-covered descriptions (matched by existing rules) are excluded.
         Results are sorted by transaction count — highest-impact suggestions first.
@@ -2884,11 +2887,23 @@ No cloud services, no external dependencies — all data stays on your machine.
         from finance_etl.merchant_rules import analyze_descriptions
         try:
             conn = get_connection(db_path, read_only=True)
-            suggestions = analyze_descriptions(conn, min_transactions=min_transactions)
+            suggestions = analyze_descriptions(
+                conn,
+                min_transactions=min_transactions,
+                fuzzy_threshold=fuzzy_threshold,
+                include_low_frequency=include_low_frequency,
+            )
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}") from exc
-        return {"suggestions": suggestions, "count": len(suggestions)}
+        standard = [s for s in suggestions if s["count"] >= min_transactions]
+        low_freq = [s for s in suggestions if s["count"] < min_transactions]
+        return {
+            "suggestions": standard,
+            "count": len(standard),
+            "low_frequency": low_freq,
+            "low_frequency_count": len(low_freq),
+        }
 
     @app.get("/merchant-categories/suggestions", tags=["merchant"],
              summary="Suggest categories for uncategorized merchants")
@@ -2999,6 +3014,25 @@ No cloud services, no external dependencies — all data stays on your machine.
     # -----------------------------------------------------------------------
     # Batch re-normalization
     # -----------------------------------------------------------------------
+
+    @app.post("/normalize/auto-fill", tags=["merchant"],
+              summary="Auto-fill merchant for unmatched transactions")
+    def auto_fill_merchants():
+        """
+        Set merchant = cleaned description for all transactions where merchant is NULL.
+
+        This makes previously invisible transactions appear in the uncategorized panel
+        and merchant analytics.
+        """
+        from finance_etl.merchant_rules import auto_normalize_unmatched
+        conn = get_connection(db_path)
+        try:
+            count = auto_normalize_unmatched(conn)
+        except Exception as exc:
+            conn.close()
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        conn.close()
+        return {"status": "success", "rows_updated": count}
 
     @app.post("/normalize/apply", tags=["merchant"],
               summary="Start a batch re-normalization job", status_code=202)
