@@ -7226,12 +7226,12 @@ function openCategoryPicker(targetEl, options = {}) {
   }
 
   function cleanup() {
+    targetEl.innerHTML = originalHTML;
     document.removeEventListener('keydown', escHandler);
     document.removeEventListener('mousedown', outsideHandler);
   }
 
   function cancel() {
-    targetEl.innerHTML = originalHTML;
     cleanup();
   }
 
