@@ -383,6 +383,9 @@ CREATE TABLE IF NOT EXISTS annual_reports (
     "ALTER TABLE recurring_overrides ADD COLUMN paused BOOLEAN DEFAULT FALSE",
     "ALTER TABLE recurring_overrides ADD COLUMN last_date TEXT",
 
+    # ── Recurring overrides: user-editable next_estimated ────────────────
+    "ALTER TABLE recurring_overrides ADD COLUMN next_estimated TEXT",
+
     # ── Recurring suggestion dismissals ──────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS recurring_dismissals (
         suggestion_id TEXT PRIMARY KEY,

@@ -354,7 +354,7 @@ TransactionAnalysis/
   - Card-specific fees (e.g., "RENEWAL MEMBERSHIP FEE") auto-labeled with the account name (e.g., "Gold Card Annual Fee")
   - Known subscriptions (Amazon Prime, Costco, etc.) use fixed labels
   - Groups by (keyword, account_name) so same fee on different cards produces separate suggestions
-  - Accept creates a `recurring_overrides` entry and immediately removes the row from the suggestion panel; Edit allows changing label/amount/frequency before accepting; Dismiss hides the suggestion permanently
+  - Accept creates a `recurring_overrides` entry, dismisses the suggestion, and immediately removes the row from the suggestion panel; Edit allows changing label/amount/frequency/last_date/next_estimated before accepting; Dismiss hides the suggestion permanently
   - Dismissed suggestions stored in `recurring_dismissals` table
   - Excludes suggestions already in overrides or auto-detected as annual by interval engine
   - **Re-analyze** button: re-runs detection fresh to find new suggestions
@@ -362,8 +362,9 @@ TransactionAnalysis/
   - **View Deleted** button: shows suppressed recurring charges (is_recurring=false overrides) with Restore button
   - Card always visible (even with 0 suggestions) so action buttons remain accessible
   - `detect_annual_fee_suggestions()` in `recurring.py`
-- User overrides stored in `recurring_overrides` DB table (columns: `label`, `amount`, `frequency`, `paused`, `last_date`); take precedence over auto-detection; overrides with no matching transactions (e.g. accepted annual fee labels) are included as synthetic patterns using stored amount/frequency/last_date
-- Accepted suggestions carry `last_date` through to the override, enabling Last Charged and Next Estimated display for keyword-matched annual fees
+- User overrides stored in `recurring_overrides` DB table (columns: `label`, `amount`, `frequency`, `paused`, `last_date`, `next_estimated`); take precedence over auto-detection; overrides with no matching transactions (e.g. accepted annual fee labels) are included as synthetic patterns using stored amount/frequency/last_date
+- Accepted suggestions carry `last_date` and `next_estimated` through to the override, enabling Last Charged and Next Estimated display for keyword-matched annual fees
+- **Date editing**: Both Detected Recurring edit form and Suggested Annual edit form include Last Charged and Next Estimated date fields; changing Last Charged auto-recalculates Next Estimated based on frequency; user can override Next Estimated independently
 - Included in v2 backup/restore system
 - Detection engine: `src/finance_etl/recurring.py`
 - API: `GET /recurring`, `POST /recurring/override`, `DELETE /recurring/override/{merchant}`, `GET /recurring/suggestions`, `POST /recurring/suggestions/{id}/accept`, `POST /recurring/suggestions/{id}/dismiss`, `GET /recurring/suggestions/dismissed`, `POST /recurring/suggestions/dismissed/{id}/undo`, `GET /recurring/deleted`, `POST /recurring/deleted/{merchant}/restore`
@@ -680,6 +681,7 @@ Used by both merchant renormalization (`batch_renormalize`) and category normali
 | `frequency` | TEXT | Override frequency (weekly/monthly/quarterly/annual) |
 | `paused` | BOOLEAN DEFAULT FALSE | `TRUE` = charge is paused (excluded from active list and monthly cost) |
 | `last_date` | TEXT | ISO date of last charge (carried from suggestion; used for next_estimated) |
+| `next_estimated` | TEXT | ISO date of user-overridden next estimated charge (if NULL, computed dynamically from last_date + frequency) |
 | `created_at` | TEXT | ISO timestamp |
 | `updated_at` | TEXT | ISO timestamp |
 
@@ -1248,6 +1250,7 @@ No npm, no package.json, no build step. All frontend code is vanilla browser JS/
 | v2.24.1 | 2026-03-10 | Fixed static sidebar version — now reads dynamically from pyproject.toml via GET /version; pyproject.toml version synced to v2.24.1 (was stuck at 2.0.0 since initial release); 2 new version endpoint tests; 296 total tests |
 | v2.24.2 | 2026-03-10 | Fixed View All in Transactions tab routing — destination derived from statement_type data via `resolveTransactionTab()`; mixed-source categories show info toast; tie defaults to credit_card; audited all navigate/loadTxnTab calls — 2 Data Health links filed as follow-up bugs (BUG-14/15); 5 new tab routing tests; 301 total tests |
 | v2.25.1 | 2026-03-10 | Audit 1 — Codebase vs PROJECT.md reality check: documented 5 new bugs (BUG-16 through BUG-20), identified 4 dead JS functions, 6 dead API endpoints, 2 dead Python functions, 7 dead CSS classes, 3 broken dark mode selectors, 2 undocumented API endpoints, 5 frontend status inaccuracies, 6 schema gaps, 2 duplicate category picker implementations; updated Feature Inventory, API Reference, and Known Issues sections |
+| v2.35.0 | 2026-03-13 | feat: recurring charges date editing + suggestion dismissal — edit forms for Detected Recurring Charges and Suggested Annual Charges now include Last Charged and Next Estimated date fields; changing Last Charged auto-recalculates Next Estimated from frequency; user can override Next Estimated; accepting/editing a suggestion now also dismisses it (belt-and-suspenders); `saveRecurringEdit()` and `submitEditSuggestion()` pass `last_date` + `next_estimated` through to API; new `next_estimated` column on `recurring_overrides`; `detect_recurring()` prefers user-set `next_estimated` over computed; backup/restore includes `next_estimated` |
 | v2.34.0 | 2026-03-13 | refactor: merge uncategorized merchants into Data Health — removed standalone Uncategorized Merchants panel from Merchants page; "Merchants without a category" metric in Data Health now expands an inline panel with search, category assignment, and "Show categorized too" toggle; all callers updated to `loadHealthUncategorized()`; assigning/removing a category refreshes both the list and the health count |
 | v2.33.0 | 2026-03-12 | fix: backup/restore + data health — backup now exports/restores `recurring_dismissals`, `category_dismissals`, `rule_dismissals` tables (were silently lost); `recurring_overrides` restore now includes all columns (`label`, `amount`, `frequency`, `paused`, `last_date`) so accepted annual fees and edited recurring charges survive restore; Data Health navigation fixed (BUG-14/BUG-15) — health API returns `per_type` breakdown, click handlers auto-navigate to correct CC/bank tab and set filter checkboxes (`no_category`, `unreviewed`, `no_merchant`), toast if both tabs have matches; "Merchants without a category" metric aligned with Uncategorized Merchants page (uses `merchant_category_map` lookup instead of `category_normalized`); "No merchant match" click now goes to transactions with filter instead of merchant-rules; 5 new tests; 373 total tests |
 | v2.32.0 | 2026-03-12 | feat: UX polish sprint — bulk category assign now uses `openCategoryPicker()` instead of `prompt()` with inline panel on CC/Bank tabs (BUG-19); backup export progress bar with simulated progress + success/error states; uncategorized merchants search box with live filter and count; category grouping queries now prefer `category_normalized` over `category_parent` for accurate dashboard/analytics breakdown |

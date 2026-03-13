@@ -5524,6 +5524,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         frequency = body.get("frequency")
         paused = body.get("paused", False)
         last_date = body.get("last_date")
+        next_estimated = body.get("next_estimated")
 
         now = _dt.datetime.utcnow().isoformat()
         try:
@@ -5537,11 +5538,11 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn.execute(
                 """INSERT INTO recurring_overrides
                    (merchant_key, is_recurring, label, amount, frequency,
-                    paused, last_date, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    paused, last_date, next_estimated, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [merchant, bool(is_recurring), label,
                  float(amount) if amount is not None else None,
-                 frequency, bool(paused), last_date, now, now],
+                 frequency, bool(paused), last_date, next_estimated, now, now],
             )
             conn.close()
         except Exception as exc:
@@ -5631,6 +5632,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         amount = body.get("amount")
         frequency = body.get("frequency", "annual")
         last_date = body.get("last_date")
+        next_estimated = body.get("next_estimated")
 
         if not label:
             raise HTTPException(status_code=400, detail="label is required.")
@@ -5646,16 +5648,21 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn.execute(
                 """INSERT INTO recurring_overrides
                    (merchant_key, is_recurring, label, amount, frequency,
-                    last_date, created_at, updated_at)
-                   VALUES (?, TRUE, ?, ?, ?, ?, ?, ?)""",
+                    last_date, next_estimated, created_at, updated_at)
+                   VALUES (?, TRUE, ?, ?, ?, ?, ?, ?, ?)""",
                 [label, label,
                  float(amount) if amount is not None else None,
-                 frequency, last_date, now, now],
+                 frequency, last_date, next_estimated, now, now],
             )
-            # Remove from dismissals if it was previously dismissed
+            # Also dismiss the suggestion so it never re-appears
             conn.execute(
                 "DELETE FROM recurring_dismissals WHERE suggestion_id = ?",
                 [suggestion_id],
+            )
+            conn.execute(
+                "INSERT INTO recurring_dismissals (suggestion_id, dismissed_at) "
+                "VALUES (?, ?)",
+                [suggestion_id, now],
             )
             conn.close()
         except Exception as exc:
@@ -6059,12 +6066,12 @@ No cloud services, no external dependencies — all data stays on your machine.
                 conn.execute(
                     """INSERT INTO recurring_overrides
                        (merchant_key, is_recurring, label, amount, frequency,
-                        paused, last_date, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                        paused, last_date, next_estimated, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
                     [r["merchant_key"], r.get("is_recurring", True),
                      r.get("label"), r.get("amount"),
                      r.get("frequency"), r.get("paused", False),
-                     r.get("last_date"),
+                     r.get("last_date"), r.get("next_estimated"),
                      r.get("created_at", now), r.get("updated_at", now)],
                 )
 

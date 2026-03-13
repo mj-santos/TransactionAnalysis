@@ -1098,6 +1098,9 @@ function _renderRecurringList(patterns, container) {
     const editId = `rec-edit-${i}`;
     const mEsc = esc(p.merchant).replace(/'/g, "\\'");
 
+    const lastDateVal = p.last_date || '';
+    const nextEstVal = p.next_estimated || '';
+
     html += `<tr id="rec-row-${i}" style="border-bottom:1px solid var(--border);">
       <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}${badge}</td>
       <td style="padding:8px 10px; font-weight:600;">$${Number(p.median_amount).toFixed(2)}</td>
@@ -1143,6 +1146,11 @@ function _renderRecurringList(patterns, container) {
             <option value="quarterly"${p.frequency === 'quarterly' ? ' selected' : ''}>Quarterly</option>
             <option value="annual"${p.frequency === 'annual' ? ' selected' : ''}>Annual</option>
           </select>
+          <label style="font-size:11px; color:var(--text-muted);">Last Charged</label>
+          <input type="date" id="${editId}-lastdate" value="${lastDateVal}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;"
+            onchange="_recalcNextEstimated('${editId}')" />
+          <label style="font-size:11px; color:var(--text-muted);">Next Estimated</label>
+          <input type="date" id="${editId}-nextest" value="${nextEstVal}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;" />
           <button class="btn btn-primary btn-sm" style="font-size:11px;" onclick="saveRecurringEdit(${i}, '${mEsc}')">Save</button>
           <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="document.getElementById('${editId}').style.display='none'">Cancel</button>
         </div>
@@ -1206,11 +1214,27 @@ function _showRecEditForm(idx, merchant, amount, freq) {
   if (editRow) editRow.style.display = '';
 }
 
+/** Recalculate Next Estimated from Last Charged date + frequency. */
+function _recalcNextEstimated(editId) {
+  const lastDate = document.getElementById(`${editId}-lastdate`)?.value;
+  const freqEl = document.getElementById(`${editId}-freq`);
+  const nextEl = document.getElementById(`${editId}-nextest`);
+  if (!lastDate || !nextEl) return;
+  const freq = freqEl?.value || 'monthly';
+  const freqDays = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, annual: 365 };
+  const days = freqDays[freq] || 30;
+  const d = new Date(lastDate + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  nextEl.value = d.toISOString().split('T')[0];
+}
+
 async function saveRecurringEdit(idx, originalMerchant) {
   const editId = `rec-edit-${idx}`;
   const label = document.getElementById(`${editId}-label`)?.value?.trim();
   const amount = parseFloat(document.getElementById(`${editId}-amount`)?.value);
   const frequency = document.getElementById(`${editId}-freq`)?.value || 'monthly';
+  const last_date = document.getElementById(`${editId}-lastdate`)?.value || null;
+  const next_estimated = document.getElementById(`${editId}-nextest`)?.value || null;
 
   if (!label) { toast('Label is required', 'error', 2000); return; }
 
@@ -1218,6 +1242,7 @@ async function saveRecurringEdit(idx, originalMerchant) {
     await api('POST', '/recurring/override', {
       merchant: originalMerchant, is_recurring: true,
       label, amount: isNaN(amount) ? null : amount, frequency,
+      last_date, next_estimated,
     });
     toast(`Updated "${label}"`, 'success', 2500);
     loadRecurringTransactions();
@@ -1316,13 +1341,22 @@ async function loadAnnualSuggestions() {
         </div>
         <div id="edit-form-${esc(s.suggestion_id)}" style="display:none; margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <label style="font-size:11px; color:var(--text-muted);">Label</label>
             <input type="text" id="edit-label-${esc(s.suggestion_id)}" value="${esc(s.label)}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:200px;" placeholder="Label" />
+            <label style="font-size:11px; color:var(--text-muted);">Amount</label>
             <input type="number" id="edit-amount-${esc(s.suggestion_id)}" value="${s.amount}" step="0.01" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:100px;" placeholder="Amount" />
-            <select id="edit-freq-${esc(s.suggestion_id)}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
+            <label style="font-size:11px; color:var(--text-muted);">Frequency</label>
+            <select id="edit-freq-${esc(s.suggestion_id)}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;"
+              onchange="_recalcSuggestionNextEst('${esc(s.suggestion_id)}')">
               <option value="annual" selected>Annual</option>
               <option value="monthly">Monthly</option>
               <option value="quarterly">Quarterly</option>
             </select>
+            <label style="font-size:11px; color:var(--text-muted);">Last Charged</label>
+            <input type="date" id="edit-lastdate-${esc(s.suggestion_id)}" value="${s.last_date || ''}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;"
+              onchange="_recalcSuggestionNextEst('${esc(s.suggestion_id)}')" />
+            <label style="font-size:11px; color:var(--text-muted);">Next Estimated</label>
+            <input type="date" id="edit-nextest-${esc(s.suggestion_id)}" value="${s.next_estimated || ''}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;" />
             <button class="btn btn-primary btn-sm" style="font-size:11px;" onclick="submitEditSuggestion('${esc(s.suggestion_id)}')">Save</button>
             <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="cancelEditSuggestion('${esc(s.suggestion_id)}')">Cancel</button>
           </div>
@@ -1348,6 +1382,7 @@ async function acceptAnnualSuggestion(sid) {
       amount: s.amount,
       frequency: s.frequency,
       last_date: s.last_date,
+      next_estimated: s.next_estimated,
     });
     _removeAnnualSuggestionRow(sid);
     toast(`Added "${s.label}" to recurring charges`, 'success', 3000);
@@ -1375,14 +1410,15 @@ async function submitEditSuggestion(sid) {
   const label = document.getElementById(`edit-label-${sid}`)?.value?.trim();
   const amount = parseFloat(document.getElementById(`edit-amount-${sid}`)?.value);
   const frequency = document.getElementById(`edit-freq-${sid}`)?.value || 'annual';
+  const last_date = document.getElementById(`edit-lastdate-${sid}`)?.value || null;
+  const next_estimated = document.getElementById(`edit-nextest-${sid}`)?.value || null;
 
   if (!label) { toast('Label is required', 'error', 2000); return; }
 
   try {
-    const origSuggestion = _annualSuggestions.find(x => x.suggestion_id === sid);
     await api('POST', `/recurring/suggestions/${encodeURIComponent(sid)}/accept`, {
       label, amount: isNaN(amount) ? null : amount, frequency,
-      last_date: origSuggestion?.last_date,
+      last_date, next_estimated,
     });
     _removeAnnualSuggestionRow(sid);
     toast(`Added "${label}" to recurring charges`, 'success', 3000);
@@ -1390,6 +1426,19 @@ async function submitEditSuggestion(sid) {
   } catch (err) {
     toast(`Save failed: ${err.message}`, 'error');
   }
+}
+
+/** Recalculate Next Estimated in suggestion edit form from Last Charged + frequency. */
+function _recalcSuggestionNextEst(sid) {
+  const lastDate = document.getElementById(`edit-lastdate-${sid}`)?.value;
+  const freq = document.getElementById(`edit-freq-${sid}`)?.value || 'annual';
+  const nextEl = document.getElementById(`edit-nextest-${sid}`);
+  if (!lastDate || !nextEl) return;
+  const freqDays = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, annual: 365 };
+  const days = freqDays[freq] || 365;
+  const d = new Date(lastDate + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  nextEl.value = d.toISOString().split('T')[0];
 }
 
 /** Remove an annual suggestion row from DOM and update badge/card visibility. */

@@ -99,16 +99,19 @@ class _FakeConn:
     """Minimal mock of a DuckDB connection returning canned data."""
     def __init__(self, txn_rows, override_rows=None):
         self._txn_rows = txn_rows
-        # Normalize override rows to 7-column tuples:
-        # (merchant_key, is_recurring, label, amount, frequency, paused, last_date)
+        # Normalize override rows to 8-column tuples:
+        # (merchant_key, is_recurring, label, amount, frequency, paused, last_date, next_estimated)
         normalized = []
         for row in (override_rows or []):
             if len(row) == 2:
                 # Legacy 2-col: (merchant_key, is_recurring)
-                normalized.append((row[0], row[1], row[0], None, None, False, None))
+                normalized.append((row[0], row[1], row[0], None, None, False, None, None))
             elif len(row) == 5:
                 # 5-col: (merchant_key, is_recurring, label, amount, frequency)
-                normalized.append((*row, False, None))
+                normalized.append((*row, False, None, None))
+            elif len(row) == 7:
+                # 7-col: missing next_estimated
+                normalized.append((*row, None))
             else:
                 normalized.append(row)
         self._override_rows = normalized
