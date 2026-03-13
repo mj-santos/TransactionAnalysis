@@ -20,6 +20,8 @@ The web UI is built in and served by the same process — no separate install ne
 
 ## Quick start (recommended — Docker)
 
+> **Multi-arch images:** The Docker image is built for both `linux/amd64` (Intel/AMD) and `linux/arm64` (Apple Silicon, ARM servers), so it runs natively on all supported platforms.
+
 ### Option A — One-liner installer
 
 No git required. Installs into `~/finance-etl/`, pulls the Docker image, and starts the service.
@@ -27,6 +29,8 @@ No git required. Installs into `~/finance-etl/`, pulls the Docker image, and sta
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mj-santos/TransactionAnalysis/main/install.sh | bash
 ```
+
+> **Requires a Unix shell** — run this from macOS Terminal, any Linux terminal, or WSL2 on Windows. It will not work in PowerShell or CMD.
 
 Open **http://localhost:8000** when the script finishes.
 
@@ -47,7 +51,7 @@ The script detects the repo clone and builds the image locally.
 ### Option C — Docker run (single command)
 
 ```bash
-mkdir -p ~/finance-etl/{data,config/mappings}
+mkdir -p ~/finance-etl/data ~/finance-etl/config/mappings
 cd ~/finance-etl
 
 docker run -d \
@@ -59,6 +63,8 @@ docker run -d \
   ghcr.io/mj-santos/transactionanalysis:latest \
   finance_etl api --host 0.0.0.0 --port 8000
 ```
+
+> **Windows (PowerShell):** Replace `$PWD` with `${PWD}` and `~/finance-etl` with `$HOME/finance-etl`. Requires Docker Desktop.
 
 Open **http://localhost:8000**.
 
@@ -151,15 +157,18 @@ View them in the **Reports** tab, or download as CSV files.
 
 ## Supported environments
 
-| Platform | Support | Notes |
+| Platform | Install methods | Notes |
 |---|---|---|
-| Linux (Ubuntu / Debian) | **Primary** | Recommended for servers and CI |
-| macOS | Supported | Full dev and prod use |
-| Windows | Via WSL2 | Native Windows not tested |
+| Linux x86_64 (Ubuntu / Debian) | All (A–E) | **Primary** — recommended for servers and CI |
+| Linux ARM64 (Raspberry Pi, etc.) | All (A–E) | Multi-arch Docker image included |
+| macOS Intel | All (A–E) | Full dev and prod use |
+| macOS Apple Silicon (M1/M2/M3/M4) | All (A–E) | Native ARM64 Docker image; automatic source build fallback |
+| Windows 10/11 + WSL2 | A, B, C, D, E | Run bash commands inside a WSL2 terminal |
+| Windows (PowerShell / CMD) | C, D only | Docker Desktop required; bash scripts (A, B) not supported |
 
 **Requirements:**
-- Docker 24+ with Compose plugin (for Docker install methods)
-- Python 3.11+ (for the venv install method)
+- Docker 24+ with Compose plugin (for Docker install methods A–D)
+- Python 3.11+ (for the venv install method E only)
 
 ---
 

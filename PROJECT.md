@@ -64,7 +64,7 @@ TransactionAnalysis/
 ├── setup_wizard.py             ← standalone CLI wizard (legacy; duplicated by web wizard)
 ├── conftest.py                 ← pytest path fix: inserts src/ into sys.path so tests can find finance_etl without pip install
 ├── pytest.ini                  ← pytest config (duplicates pyproject.toml [tool.pytest.ini_options])
-├── install.sh                  ← bash installer (safe for curl|bash piped execution; wraps body in main())
+├── install.sh                  ← bash installer (curl|bash safe; main() wrapper; bash 3.2 compat; Windows/MINGW detection; 6-step progress with ERR trap)
 ├── .env / .env.example         ← API host/port overrides
 ├── .github/workflows/
 │   └── docker-publish.yml      ← publishes Docker image to registry on push
@@ -886,6 +886,8 @@ Single-row table seeded with `1` on first migration run.
   - System diagnostics printed at start (OS, bash version, architecture) for troubleshooting
   - Numbered steps (1/6 through 6/6) for clear progress tracking
   - `(( expr ))` arithmetic replaced with POSIX `$((expr))` for broader shell compatibility
+  - Windows/MINGW/MSYS2/Cygwin detection with clear WSL2 guidance message
+  - Updated `README.md` and `docs/INSTALL.md` with per-platform install guidance, multi-arch image notes, WSL2 setup instructions, and expanded troubleshooting
 
 **BUG-20: Dark mode selectors for run-status badges will never match**
 - File: `style.css`, Lines: 1377-1379
