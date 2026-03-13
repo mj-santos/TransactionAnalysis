@@ -869,9 +869,23 @@ Single-row table seeded with `1` on first migration run.
 - Fixed: (1) Renamed "Card Balance" to "Net Activity" with tooltip explaining the calculation. (2) Added collapsible "Card Financial Summary" panel below CC totals showing Purchases, Payments to Card, Credits & Adjustments, and Net Activity as a clear breakdown.
 
 ~~**BUG-37 (FIXED): `install.sh` fails when piped via `curl | bash`**~~
-- File: `install.sh`, Line: 4
-- Description: `exec < /dev/null` on line 4 redirected stdin to `/dev/null` to prevent commands like `source .env` from consuming piped input. However, when the script is run via `curl -fsSL <url> | bash`, bash reads the script itself from stdin. `exec < /dev/null` replaces stdin mid-execution, so bash can no longer read the remaining script content — execution silently stops after line 4.
-- Fixed: Wrapped the entire script body in a `main()` function (the industry-standard pattern used by Homebrew, Rust, Node.js installers). Bash parses the full function definition into memory before executing, making it immune to stdin changes. Removed `exec < /dev/null` and added `< /dev/null` to the specific `source .env` command that needed stdin protection. Also added `data/auto_backups` to the directory creation list.
+- File: `install.sh`
+- Description: Multiple issues prevented the installer from working when piped via `curl | bash`, especially on macOS:
+  1. `exec < /dev/null` (line 4) replaced stdin mid-execution, preventing bash from reading the rest of the script
+  2. `set -u` (nounset) triggered "unbound variable" errors on macOS bash 3.2 when accessing `BASH_SOURCE[0]` on an empty array — bash 3.2 does not honor the `:-` fallback on empty array elements
+  3. `docker pull 2>/dev/null` and other commands silently swallowed errors, giving users no indication of what failed
+  4. No error trap — when `set -e` killed the script, no message told the user what happened or how to debug
+- Fixed: Complete rewrite of `install.sh`:
+  - Wrapped body in `main()` function (industry-standard pattern for piped installers)
+  - Removed `set -u` for bash 3.2 compatibility; uses explicit checks instead
+  - Safe `BASH_SOURCE` access that checks array existence before element access
+  - Added `trap ERR` handler that prints failed line number and suggests `bash -x` for debug trace
+  - Every critical step (curl downloads, docker pull/build, compose up) now has explicit error handling with clear, actionable error messages
+  - Docker pull errors shown to user with pattern matching for common failures (manifest not found, platform mismatch, unauthorized)
+  - Port-in-use check before starting the service
+  - System diagnostics printed at start (OS, bash version, architecture) for troubleshooting
+  - Numbered steps (1/6 through 6/6) for clear progress tracking
+  - `(( expr ))` arithmetic replaced with POSIX `$((expr))` for broader shell compatibility
 
 **BUG-20: Dark mode selectors for run-status badges will never match**
 - File: `style.css`, Lines: 1377-1379
