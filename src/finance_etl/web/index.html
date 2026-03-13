@@ -1600,41 +1600,6 @@
             <span style="color:var(--text-muted);">Loading…</span>
           </div>
 
-          <!-- Expandable uncategorized merchants panel (shown on metric click) -->
-          <div id="health-uncategorized-panel" style="display:none; margin-top:16px; border-top:1px solid var(--border); padding-top:12px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-              <div style="font-size:14px; font-weight:600;">Uncategorized Merchants</div>
-              <div style="display:flex; gap:8px; align-items:center;">
-                <label class="toggle-row" style="margin-bottom:0;">
-                  <input type="checkbox" id="health-show-categorized-toggle" onchange="loadHealthUncategorized()" /> Show categorized too
-                </label>
-                <button class="btn btn-secondary btn-sm" onclick="loadHealthUncategorized()">↻ Refresh</button>
-                <button class="btn btn-secondary btn-sm" onclick="toggleHealthUncategorized()">✕ Close</button>
-              </div>
-            </div>
-            <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
-              Merchants in the ledger with no category assigned. Assign a category to apply it to all matching transactions.
-            </p>
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-              <div style="position:relative; flex:1; max-width:320px;">
-                <input id="health-uncategorized-search" type="text" placeholder="Search merchants…"
-                  oninput="filterHealthUncategorized()" onkeydown="if(event.key==='Escape'){this.value='';filterHealthUncategorized();}"
-                  style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
-                <button id="health-uncategorized-search-clear" onclick="document.getElementById('health-uncategorized-search').value='';filterHealthUncategorized();"
-                  style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">&times;</button>
-              </div>
-              <span id="health-uncategorized-search-count" style="font-size:12px; color:var(--text-muted);"></span>
-            </div>
-            <div id="health-categorized-section" style="display:none; margin-bottom:16px;">
-              <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text-muted);">Categorized Merchants</div>
-              <div id="health-categorized-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:8px;"></div>
-              <div style="border-bottom:1px solid var(--border); margin:12px 0;"></div>
-              <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:var(--text-muted);">Uncategorized Merchants</div>
-            </div>
-            <div id="health-uncategorized-list" class="suggestions-scroll" style="display:flex; flex-direction:column; gap:8px;">
-              <span style="color:var(--text-muted); font-size:13px;">Click the metric above to load.</span>
-            </div>
-          </div>
 
         </div>
       </div>

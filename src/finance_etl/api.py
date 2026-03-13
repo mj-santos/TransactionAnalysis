@@ -2436,17 +2436,6 @@ No cloud services, no external dependencies — all data stays on your machine.
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS no_merchant
                 FROM transactions_norm
             """).fetchone()
-            # Merchants without a category — aligned with uncategorized
-            # merchants page logic (NOT IN merchant_category_map)
-            merchants_no_cat = conn.execute("""
-                SELECT COUNT(DISTINCT tn.merchant)
-                FROM transactions_norm tn
-                WHERE COALESCE(tn.is_split, FALSE) = FALSE
-                  AND tn.merchant IS NOT NULL AND tn.merchant != ''
-                  AND LOWER(tn.merchant) NOT IN (
-                    SELECT LOWER(merchant) FROM merchant_category_map
-                  )
-            """).fetchone()
             # Per-statement_type breakdown for navigation
             per_type_rows = conn.execute("""
                 SELECT
@@ -2496,7 +2485,6 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {
             "uncategorized_transactions": r[0] or 0,
             "unreviewed_transactions": r[1] or 0,
-            "merchants_without_category": merchants_no_cat[0] if merchants_no_cat else 0,
             "no_merchant_match": r[2] or 0,
             "pending_duplicates": pending_dups[0] if pending_dups else 0,
             "orphaned_categories": orphaned[0] if orphaned else 0,
