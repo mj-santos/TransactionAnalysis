@@ -256,3 +256,46 @@ def test_merchant_list_bulk_category_remove(tmp_path: Path):
     cats = resp2.json()["categories"]
     merchants = [c["merchant"] for c in cats]
     assert "ToRemove" not in merchants
+
+
+# ---------------------------------------------------------------------------
+# 7. Bulk category assignment with override survives renormalization
+# ---------------------------------------------------------------------------
+
+def test_bulk_category_with_override_survives_renormalization(tmp_path: Path):
+    """Simulate bulk category assignment (PATCH with category_override=true)
+    and verify the categories are preserved after a full batch renormalization."""
+    from finance_etl.merchant_rules import batch_renormalize, create_normalization_job
+
+    client, db_path = _make_client(tmp_path)
+    _seed_transactions(db_path, [
+        ("fp1", "Acme Corp", None, -10.00, False),
+        ("fp2", "Acme Corp", None, -20.00, False),
+    ])
+
+    # Simulate bulk category assignment (as the frontend now does)
+    for fp in ("fp1", "fp2"):
+        resp = client.patch(f"/transactions/{fp}", json={
+            "category_normalized": "Office Supplies",
+            "category_parent": "Business",
+            "category_override": True,
+        })
+        assert resp.status_code == 200
+
+    # Run a full batch renormalization synchronously
+    conn = get_connection(db_path)
+    job_id = create_normalization_job(conn)
+    conn.close()
+    batch_renormalize(str(db_path), job_id)
+
+    # Verify overridden categories survived
+    conn = get_connection(db_path, read_only=True)
+    rows = conn.execute(
+        "SELECT transaction_fingerprint, category_normalized, category_override "
+        "FROM transactions_norm ORDER BY transaction_fingerprint"
+    ).fetchall()
+    conn.close()
+
+    for fp, cat, override in rows:
+        assert cat == "Office Supplies", f"{fp} category was overwritten by renormalization"
+        assert override == True, f"{fp} category_override was cleared"

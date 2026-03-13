@@ -4022,149 +4022,6 @@ function _pollRenorm() {
   }, 1500);
 }
 
-// ── Merchant category panel (in Data Health card) ─────────────
-
-let _healthUncategorizedLoaded = false;
-
-function toggleHealthUncategorized() {
-  const panel = document.getElementById('health-uncategorized-panel');
-  if (!panel) return;
-  const visible = panel.style.display !== 'none';
-  panel.style.display = visible ? 'none' : '';
-  if (!visible && !_healthUncategorizedLoaded) {
-    loadHealthUncategorized();
-    _healthUncategorizedLoaded = true;
-  }
-}
-
-async function loadHealthUncategorized() {
-  const container = document.getElementById('health-uncategorized-list');
-  if (!container) return;
-  container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Loading…</span>';
-  const showCategorized = document.getElementById('health-show-categorized-toggle')?.checked || false;
-  const catSection = document.getElementById('health-categorized-section');
-  const catList = document.getElementById('health-categorized-list');
-
-  try {
-    // Load categorized merchants if toggle is on
-    if (showCategorized && catSection && catList) {
-      catSection.style.display = 'block';
-      try {
-        const catData = await api('GET', '/merchant-categories');
-        const entries = catData.categories || catData.merchant_categories || [];
-        if (entries.length) {
-          catList.innerHTML = entries.map(e => {
-            const jsonArg = JSON.stringify(e.merchant).replace(/"/g, '&quot;');
-            const safeId  = e.merchant.replace(/[^a-zA-Z0-9]/g, '_');
-            return `
-              <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
-                <span style="flex:1; font-size:13px;">${esc(e.merchant)}</span>
-                <span style="font-size:12px; color:var(--text-muted); cursor:pointer;" onclick="_editCategorizedMerchant(this, ${jsonArg}, '${esc(e.category)}')">${esc(e.category)} ✎</span>
-              </div>`;
-          }).join('');
-        } else {
-          catList.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No categorized merchants.</span>';
-        }
-      } catch { catList.innerHTML = ''; }
-    } else if (catSection) {
-      catSection.style.display = 'none';
-    }
-
-    const data = await api('GET', '/merchant-categories/uncategorized');
-    if (!data.merchants.length) {
-      container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All merchants are categorized.</span>';
-      return;
-    }
-    // Ensure taxonomy is loaded for picker
-    _ensureCategoryTaxonomy();
-    container.innerHTML = data.merchants.map(m => {
-      const safeId  = m.replace(/[^a-zA-Z0-9]/g, '_');
-      // JSON.stringify wraps in double-quotes; escape them for the HTML attribute
-      const jsonArg = JSON.stringify(m).replace(/"/g, '&quot;');
-      return `
-        <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border);">
-          <span style="flex:1; font-size:13px;">${esc(m)}</span>
-          <span class="cat-picker-target" id="cat-target-${safeId}"
-                style="display:inline-block; min-width:160px; padding:3px 6px; font-size:12px;
-                       border:1px solid var(--border); border-radius:4px; cursor:pointer; color:var(--text-muted);"
-                onclick="openCategoryPickerForMerchant(this, '${safeId}')">
-            Search categories…
-          </span>
-          <input type="hidden" id="cat-input-${safeId}" value="" />
-          <button class="btn btn-primary btn-sm" onclick="assignCategory(${jsonArg})">Assign</button>
-        </div>`;
-    }).join('');
-  } catch (err) {
-    container.innerHTML = `<span style="color:var(--text-muted);font-size:13px;">Error: ${esc(err.message)}</span>`;
-  }
-}
-
-function filterHealthUncategorized() {
-  const q = (document.getElementById('health-uncategorized-search')?.value || '').toLowerCase();
-  const clearBtn = document.getElementById('health-uncategorized-search-clear');
-  if (clearBtn) clearBtn.style.display = q ? 'block' : 'none';
-
-  const listEl = document.getElementById('health-uncategorized-list');
-  if (!listEl) return;
-  const rows = listEl.children;
-  let shown = 0, total = rows.length;
-  for (const row of rows) {
-    const text = row.textContent.toLowerCase();
-    const match = !q || text.includes(q);
-    row.style.display = match ? '' : 'none';
-    if (match) shown++;
-  }
-  const countEl = document.getElementById('health-uncategorized-search-count');
-  if (countEl) countEl.textContent = q ? `${shown} of ${total} merchants` : '';
-}
-
-function _editCategorizedMerchant(el, merchant, currentCat) {
-  const parentDiv = el.closest('div');
-  const catSpan = el;
-  openCategoryPicker(catSpan, {
-    currentCategory: currentCat,
-    onSave: async (cat) => {
-      await api('POST', '/merchant-categories', { merchant, category: cat.subcategory });
-      catSpan.innerHTML = `${esc(cat.subcategory)} ✎`;
-      toast(`${merchant} → ${cat.subcategory}`, 'success');
-    },
-    onRemove: async () => {
-      await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
-      toast('Category removed from ' + merchant, 'info');
-      loadHealthUncategorized(); loadUtilHealth(); // Refresh to move to uncategorized list
-    },
-  });
-}
-
-function openCategoryPickerForMerchant(el, safeId) {
-  openCategoryPicker(el, {
-    allowRemove: false,
-    allowCustom: true,
-    onSave: (cat) => {
-      document.getElementById('cat-input-' + safeId).value = cat.subcategory;
-      el.textContent = cat.subcategory;
-      el.style.color = 'var(--text)';
-    },
-  });
-}
-
-async function assignCategory(merchant) {
-  const safeKey = merchant.replace(/[^a-zA-Z0-9]/g, '_');
-  const input = document.getElementById(`cat-input-${safeKey}`);
-  const category = input ? input.value.trim() : '';
-  if (!category) {
-    toast('Enter a category name first.', 'error');
-    return;
-  }
-  try {
-    await api('POST', '/merchant-categories', { merchant, category });
-    toast(`Category "${category}" assigned to "${merchant}".`, 'success');
-    loadHealthUncategorized();
-    loadUtilHealth();
-  } catch (err) {
-    toast(`Failed: ${err.message}`, 'error');
-  }
-}
 
 
 // ── Rule Suggestions ──────────────────────────────────────────
@@ -4237,7 +4094,7 @@ async function autoNormalizeUnmatched() {
     const r = await api('POST', '/normalize/auto-fill');
     toast(`Auto-filled ${r.rows_updated} transaction${r.rows_updated !== 1 ? 's' : ''}`, 'success');
     loadMerchantAnalytics();
-    loadHealthUncategorized(); loadUtilHealth();
+    loadUtilHealth();
   } catch (e) {
     toast('Auto-fill failed: ' + e.message, 'error');
   } finally {
@@ -4512,7 +4369,7 @@ async function acceptMerchantCatSuggestion(idx) {
     s._dismissed = true;
     toast(`"${s.merchant}" → ${category}`, 'success');
     _renderCategorySuggestions();
-    loadHealthUncategorized(); loadUtilHealth();
+    loadUtilHealth();
   } catch (err) {
     toast(`Failed: ${err.message}`, 'error');
   }
@@ -4548,7 +4405,7 @@ async function acceptAllCategorySuggestions() {
   }
   toast(`${ok} categor${ok !== 1 ? 'ies' : 'y'} assigned${fail ? ` (${fail} failed)` : ''}.`, ok ? 'success' : 'error');
   _renderCategorySuggestions();
-  loadHealthUncategorized(); loadUtilHealth();
+  loadUtilHealth();
 }
 
 // ── Dashboard ─────────────────────────────────────────────────
@@ -6984,6 +6841,7 @@ function bulkAssignCategory(type) {
           await api('PATCH', `/transactions/${encodeURIComponent(fp)}`, {
             category_normalized: cat.subcategory,
             category_parent: cat.parent,
+            category_override: true,
           });
         }
         toast(`Category "${cat.subcategory}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
@@ -7778,10 +7636,6 @@ async function loadUtilHealth() {
         <a class="health-metric" href="#" onclick="event.preventDefault(); _healthNavigateWithFilter(window._healthPerType, 'unreviewed');">
           <span class="health-label">Unreviewed transactions</span>
           <span class="health-value${h.unreviewed_transactions > 0 ? ' health-warn' : ''}">${h.unreviewed_transactions}</span>
-        </a>
-        <a class="health-metric" href="#" onclick="event.preventDefault(); toggleHealthUncategorized();">
-          <span class="health-label">Merchants without a category</span>
-          <span class="health-value${h.merchants_without_category > 0 ? ' health-warn' : ''}">${h.merchants_without_category}</span>
         </a>
         <a class="health-metric" href="#" onclick="event.preventDefault(); _healthNavigateWithFilter(window._healthPerType, 'no_merchant');">
           <span class="health-label">Transactions with no merchant match</span>
