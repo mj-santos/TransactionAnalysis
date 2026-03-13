@@ -1,4 +1,4 @@
-# finance_etl
+# Spendly (finance_etl)
 
 > A fully local, privacy-first tool for importing, organising, and analysing bank and credit-card transaction CSVs — no cloud, no subscriptions, all data stays on your machine.
 
@@ -8,11 +8,11 @@
 
 ## What it does
 
-1. **Import** — Upload any bank CSV export; a YAML mapping file tells the pipeline how to interpret each bank's columns
-2. **Preview** — Review the parsed rows before they hit your ledger (optional but recommended)
+1. **Import** — Upload any bank CSV; the built-in mapping wizard auto-detects your columns and date formats
+2. **Preview** — Review parsed rows before they hit your ledger (recommended)
 3. **Commit** — Confirm to load the transactions permanently
-4. **Analyse** — Five analytics reports are generated automatically: spend by category, cashflow, top merchants, and more
-5. **Download** — Export any report as CSV or view it in the browser as a table
+4. **Categorise** — Merchant normalization rules and category rules organise your data automatically
+5. **Analyse** — Dashboard, cash flow charts, budget tracking, recurring charge detection, and downloadable reports
 
 The web UI is built in and served by the same process — no separate install needed.
 
@@ -93,26 +93,19 @@ finance_etl api
 
 ---
 
-## First run: add a bank mapping
+## First run: importing your data
 
-finance_etl needs to know which column in your bank's CSV is the date, which is the amount, etc. This is configured with a simple YAML file.
+No manual configuration needed. The built-in **Mapping Wizard** handles everything:
 
-Two ready-to-use templates are included:
+1. Open **http://localhost:8000** and go to the **Import** tab
+2. Drag-and-drop your bank CSV (or click to browse)
+3. The wizard auto-detects your CSV columns, date format, and statement type (credit card or bank)
+4. Review the suggested column mappings and adjust if needed
+5. Click through to import — the wizard saves your mapping profile for next time
 
-| Template | Format | Banks |
-|---|---|---|
-| `example_signed_amount.yaml` | Single `amount` column (positive = credit, negative = debit) | Chase, most US credit cards |
-| `example_debit_credit.yaml` | Separate `debit` and `credit` columns | Many UK/EU banks |
+On subsequent imports from the same bank, the wizard recognises the file format and pre-fills all settings automatically.
 
-**Copy and edit the one that matches your bank:**
-
-```bash
-# from your install directory:
-cp config/mappings/example_signed_amount.yaml config/mappings/mybank.yaml
-# then edit config/mappings/mybank.yaml with your bank's actual column names
-```
-
-See [`docs/CONFIG.md`](docs/CONFIG.md) for the full mapping reference and all available options.
+> **Advanced users:** You can also create YAML mapping files manually in `config/mappings/`. See [`docs/CONFIG.md`](docs/CONFIG.md) for the full reference.
 
 ---
 
@@ -122,20 +115,48 @@ Open **http://localhost:8000** in any browser.
 
 | Tab | What you can do |
 |---|---|
-| **Import** | Upload a CSV, choose a bank mapping, preview rows, commit to ledger |
-| **History** | Browse all past runs, view staged rows, commit or discard pending imports |
-| **Reports** | View and download the 5 analytics reports as tables |
+| **Dashboard** | Monthly spend KPIs, top categories, budget tracker, savings goals, net worth, monthly summaries, year-in-review reports |
+| **Import** | Upload CSVs via the mapping wizard, preview rows, commit to ledger |
+| **History** | Browse past import runs, view staged rows, commit or discard pending imports |
+| **Credit Cards** | Filter, sort, search, tag, split, and categorise credit card transactions |
+| **Bank Transactions** | Same feature set for bank/debit transactions |
+| **Cash Flow** | Income vs spending charts, monthly breakdown, category drilldown |
+| **Reports** | View/download analytics reports, build custom reports with filters |
+| **Merchants** | Merchant intelligence analytics, normalization rules, auto-fill unmatched |
+| **Categories** | Category rule management, suggested mappings, apply normalization |
+| **Recurring** | Auto-detected recurring charges, annual fee suggestions, pause/edit/delete |
+| **Utilities** | Category list, merchant list, rule tester, duplicate review, data health |
+| **Settings** | App settings, backup/restore, tag management, logs |
 
 ### Import flow (step by step)
 
 1. Drag-and-drop your bank CSV onto the drop zone (or click to browse)
-2. Select the bank mapping from the dropdown
-3. Leave **Preview before committing** enabled (recommended)
-4. Click **Start import** — the pipeline runs in the background
-5. A progress indicator appears; when ready you'll see a table of parsed rows
-6. Review the rows, then click **Commit to ledger** to save permanently — or **Discard** to cancel
+2. The mapping wizard opens automatically — it detects headers, date format, and amount style
+3. Confirm the column mappings (auto-suggested) and statement type
+4. Review the summary, then start the import
+5. Preview the parsed rows in a table
+6. Click **Commit to ledger** to save permanently — or **Discard** to cancel
 
-For a detailed walkthrough with screenshots, see [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md).
+After committing, the system automatically runs duplicate detection and generates analytics reports.
+
+---
+
+## Key features
+
+- **Mapping Wizard** — auto-detects CSV columns, date formats, and amount styles; saves profiles per bank for instant re-import
+- **Budget Tracker** — set monthly budgets per category with spending alerts at 80% and 100% thresholds; rebalance suggestions based on actual spending
+- **Cash Flow Analysis** — income vs spending with monthly charts, category breakdown, and month-over-month deltas
+- **Merchant Intelligence** — per-merchant spend analytics, 3-month trends, accelerating spend flags
+- **Recurring Charge Detection** — auto-detects weekly/monthly/quarterly/annual patterns; annual fee keyword matching; pause/edit/delete
+- **Transaction Tagging** — custom tags with colors, filterable across all transaction views
+- **Split Transactions** — split one transaction into multiple categories
+- **Duplicate Detection** — fingerprint-based exact dedup plus fuzzy matching for description drift and amount variance
+- **Savings Goals** — track progress toward savings targets with suggested monthly amounts
+- **Net Worth Tracking** — manual account balances with point-in-time snapshots and trend charts
+- **Monthly Summaries & Year-in-Review** — auto-generated narrative reports with KPIs
+- **Dark Mode & Colorblind Palette** — accessibility toggles in the sidebar
+- **Keyboard Shortcuts** — `j`/`k` navigate, `r` review, `c` category edit, `/` search, `?` help
+- **Full Backup/Restore** — JSON export of all data with auto-backup on every import
 
 ---
 
@@ -151,7 +172,7 @@ Generated automatically after every successful import.
 | `totals_by_account.csv` | Net balance per account |
 | `top_merchants.csv` | Top 50 merchants by total spend |
 
-View them in the **Reports** tab, or download as CSV files.
+View them in the **Reports** tab, or download as CSV files. A custom report builder is also available for ad-hoc queries.
 
 ---
 
@@ -210,18 +231,25 @@ git pull && ./install.sh
 
 Interactive docs: **http://localhost:8000/docs**
 
-| Method | Path | Description |
+The API powers all web UI features. Key endpoint groups:
+
+| Group | Endpoints | Description |
 |---|---|---|
-| `POST` | `/upload` | Upload a CSV file |
-| `GET` | `/mappings` | List available bank mappings |
-| `GET` | `/runs` | List all import runs |
-| `POST` | `/runs` | Start an import run (async) |
-| `GET` | `/runs/{id}` | Poll run status + row counts |
-| `GET` | `/runs/{id}/preview` | Inspect staged rows before commit |
-| `POST` | `/runs/{id}/commit` | Commit staged run to ledger |
-| `GET` | `/reports` | List generated analytics reports |
-| `GET` | `/reports/{name}` | Download a report as CSV |
-| `GET` | `/charts/{name}` | Report data as JSON rows |
+| Import | `/upload`, `/wizard/*`, `/runs/*` | CSV upload, mapping wizard, run management |
+| Transactions | `/transactions/*` | Query, filter, search, edit, split, tag, review |
+| Merchants | `/merchant-rules/*`, `/merchant-categories/*`, `/merchant-analytics` | Rules CRUD, category mapping, intelligence |
+| Categories | `/category-rules/*` | Rules CRUD, suggestions, normalization |
+| Normalization | `/normalize/*` | Background merchant/category normalization jobs |
+| Reports | `/reports/*`, `/charts/*` | Analytics CSVs, custom queries, chart data |
+| Dashboard | `/dashboard/*`, `/cashflow/*` | Summary KPIs, weekly recap, cash flow |
+| Budgets | `/budgets/*` | Budget goals, rebalance suggestions |
+| Recurring | `/recurring/*` | Detection, overrides, annual fee suggestions |
+| Savings | `/savings-goals/*` | Goal CRUD, progress updates, suggestions |
+| Net Worth | `/net-worth/*` | Account management, snapshots |
+| Summaries | `/monthly-summaries/*`, `/annual-reports/*` | Generated narrative reports |
+| Backup | `/backup/*` | Export/restore/status |
+| Tags | `/tags/*`, `/transactions/tags` | Tag CRUD, assignment |
+| Utilities | `/utilities/*`, `/duplicates/*` | Health checks, rule testing, duplicate review |
 
 ### Programmatic usage
 
@@ -260,6 +288,6 @@ commit_run(result.run_id)
 |---|---|
 | [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | Step-by-step guide for new users (start here) |
 | [`docs/INSTALL.md`](docs/INSTALL.md) | All install methods, ports, troubleshooting |
-| [`docs/CONFIG.md`](docs/CONFIG.md) | Bank mapping YAML reference |
+| [`docs/CONFIG.md`](docs/CONFIG.md) | Bank mapping YAML reference (advanced) |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Tests, lint, local dev workflow |
 | [`docs/architecture.md`](docs/architecture.md) | Pipeline architecture |
