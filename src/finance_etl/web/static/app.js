@@ -61,7 +61,7 @@ function navigate(page) {
   if (page === 'settings')           loadSettings();
   if (page === 'credit-cards')       loadTxnTab('credit_card');
   if (page === 'bank-transactions')  loadTxnTab('bank');
-  if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); loadUncategorized(); _clearSuggestions(); }
+  if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); _clearSuggestions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
   if (page === 'utilities')          { loadUtilCategories(); loadUtilMerchants(); loadUtilDuplicates(); loadUtilHealth(); }
@@ -3973,15 +3973,28 @@ function _pollRenorm() {
   }, 1500);
 }
 
-// ── Merchant category panel ───────────────────────────────────
+// ── Merchant category panel (in Data Health card) ─────────────
 
-async function loadUncategorized() {
-  const container = document.getElementById('uncategorized-list');
+let _healthUncategorizedLoaded = false;
+
+function toggleHealthUncategorized() {
+  const panel = document.getElementById('health-uncategorized-panel');
+  if (!panel) return;
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : '';
+  if (!visible && !_healthUncategorizedLoaded) {
+    loadHealthUncategorized();
+    _healthUncategorizedLoaded = true;
+  }
+}
+
+async function loadHealthUncategorized() {
+  const container = document.getElementById('health-uncategorized-list');
   if (!container) return;
   container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Loading…</span>';
-  const showCategorized = document.getElementById('show-categorized-toggle')?.checked || false;
-  const catSection = document.getElementById('categorized-section');
-  const catList = document.getElementById('categorized-list');
+  const showCategorized = document.getElementById('health-show-categorized-toggle')?.checked || false;
+  const catSection = document.getElementById('health-categorized-section');
+  const catList = document.getElementById('health-categorized-list');
 
   try {
     // Load categorized merchants if toggle is on
@@ -4011,10 +4024,8 @@ async function loadUncategorized() {
     const data = await api('GET', '/merchant-categories/uncategorized');
     if (!data.merchants.length) {
       container.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">All merchants are categorized.</span>';
-      _updateBadge('uncategorized-count', 0);
       return;
     }
-    _updateBadge('uncategorized-count', data.merchants.length);
     // Ensure taxonomy is loaded for picker
     _ensureCategoryTaxonomy();
     container.innerHTML = data.merchants.map(m => {
@@ -4039,12 +4050,12 @@ async function loadUncategorized() {
   }
 }
 
-function filterUncategorized() {
-  const q = (document.getElementById('uncategorized-search')?.value || '').toLowerCase();
-  const clearBtn = document.getElementById('uncategorized-search-clear');
+function filterHealthUncategorized() {
+  const q = (document.getElementById('health-uncategorized-search')?.value || '').toLowerCase();
+  const clearBtn = document.getElementById('health-uncategorized-search-clear');
   if (clearBtn) clearBtn.style.display = q ? 'block' : 'none';
 
-  const listEl = document.getElementById('uncategorized-list');
+  const listEl = document.getElementById('health-uncategorized-list');
   if (!listEl) return;
   const rows = listEl.children;
   let shown = 0, total = rows.length;
@@ -4054,7 +4065,7 @@ function filterUncategorized() {
     row.style.display = match ? '' : 'none';
     if (match) shown++;
   }
-  const countEl = document.getElementById('uncategorized-search-count');
+  const countEl = document.getElementById('health-uncategorized-search-count');
   if (countEl) countEl.textContent = q ? `${shown} of ${total} merchants` : '';
 }
 
@@ -4071,7 +4082,7 @@ function _editCategorizedMerchant(el, merchant, currentCat) {
     onRemove: async () => {
       await api('DELETE', '/merchant-categories/' + encodeURIComponent(merchant));
       toast('Category removed from ' + merchant, 'info');
-      loadUncategorized(); // Refresh to move to uncategorized list
+      loadHealthUncategorized(); loadUtilHealth(); // Refresh to move to uncategorized list
     },
   });
 }
@@ -4099,7 +4110,8 @@ async function assignCategory(merchant) {
   try {
     await api('POST', '/merchant-categories', { merchant, category });
     toast(`Category "${category}" assigned to "${merchant}".`, 'success');
-    loadUncategorized();
+    loadHealthUncategorized();
+    loadUtilHealth();
   } catch (err) {
     toast(`Failed: ${err.message}`, 'error');
   }
@@ -4176,7 +4188,7 @@ async function autoNormalizeUnmatched() {
     const r = await api('POST', '/normalize/auto-fill');
     toast(`Auto-filled ${r.rows_updated} transaction${r.rows_updated !== 1 ? 's' : ''}`, 'success');
     loadMerchantAnalytics();
-    loadUncategorized();
+    loadHealthUncategorized(); loadUtilHealth();
   } catch (e) {
     toast('Auto-fill failed: ' + e.message, 'error');
   } finally {
@@ -4451,7 +4463,7 @@ async function acceptMerchantCatSuggestion(idx) {
     s._dismissed = true;
     toast(`"${s.merchant}" → ${category}`, 'success');
     _renderCategorySuggestions();
-    loadUncategorized();
+    loadHealthUncategorized(); loadUtilHealth();
   } catch (err) {
     toast(`Failed: ${err.message}`, 'error');
   }
@@ -4487,7 +4499,7 @@ async function acceptAllCategorySuggestions() {
   }
   toast(`${ok} categor${ok !== 1 ? 'ies' : 'y'} assigned${fail ? ` (${fail} failed)` : ''}.`, ok ? 'success' : 'error');
   _renderCategorySuggestions();
-  loadUncategorized();
+  loadHealthUncategorized(); loadUtilHealth();
 }
 
 // ── Dashboard ─────────────────────────────────────────────────
@@ -7718,7 +7730,7 @@ async function loadUtilHealth() {
           <span class="health-label">Unreviewed transactions</span>
           <span class="health-value${h.unreviewed_transactions > 0 ? ' health-warn' : ''}">${h.unreviewed_transactions}</span>
         </a>
-        <a class="health-metric" href="#" onclick="event.preventDefault(); navigate('merchant-rules');">
+        <a class="health-metric" href="#" onclick="event.preventDefault(); toggleHealthUncategorized();">
           <span class="health-label">Merchants without a category</span>
           <span class="health-value${h.merchants_without_category > 0 ? ' health-warn' : ''}">${h.merchants_without_category}</span>
         </a>
