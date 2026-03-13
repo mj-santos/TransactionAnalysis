@@ -38,6 +38,13 @@ OS="$(uname -s 2>/dev/null || echo unknown)"
 BASH_VER="${BASH_VERSION:-unknown}"
 info "System: ${OS} | bash ${BASH_VER} | arch: ${ARCH}"
 
+# ── Platform check ──────────────────────────────────────────
+case "${OS}" in
+  MINGW*|MSYS*|CYGWIN*)
+    fatal "This installer requires a native Unix shell (Linux, macOS, or WSL2).\n  You appear to be running Git Bash / MSYS2 / Cygwin on Windows.\n\n  Option 1 — Install WSL2 and re-run from a WSL2 terminal:\n    https://learn.microsoft.com/en-us/windows/wsl/install\n\n  Option 2 — Use Docker Desktop directly (see README.md Options C or D)."
+    ;;
+esac
+
 # ── Constants ───────────────────────────────────────────────
 REPO_OWNER="mj-santos"
 REPO_NAME="TransactionAnalysis"
