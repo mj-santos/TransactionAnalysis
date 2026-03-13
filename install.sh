@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
+# Wrapped in main() so the entire script is parsed before execution,
+# making it safe to run via: curl -fsSL <url> | bash
+main() {
 set -euo pipefail
-
-exec < /dev/null
 
 REPO_OWNER="mj-santos"
 REPO_NAME="TransactionAnalysis"
@@ -101,11 +102,11 @@ else
 fi
 
 set -o allexport
-source .env 2>/dev/null || true
+source .env < /dev/null 2>/dev/null || true
 set +o allexport
 API_PORT="${FINANCE_ETL_API_PORT:-8000}"
 
-for d in data/db data/raw data/uploads data/reports data/master data/profiles data/validation data/logs; do
+for d in data/db data/raw data/uploads data/reports data/master data/profiles data/validation data/logs data/auto_backups; do
   mkdir -p "${d}"
 done
 info "Data directories ready"
@@ -160,3 +161,6 @@ echo ""
 echo -e "  Add your bank mapping to:  ${INSTALL_DIR}/config/mappings/"
 echo -e "  Copy an example:  cp config/mappings/example_signed_amount.yaml config/mappings/mybank.yaml"
 echo ""
+}
+
+main "$@"

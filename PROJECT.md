@@ -64,7 +64,7 @@ TransactionAnalysis/
 ├── setup_wizard.py             ← standalone CLI wizard (legacy; duplicated by web wizard)
 ├── conftest.py                 ← pytest path fix: inserts src/ into sys.path so tests can find finance_etl without pip install
 ├── pytest.ini                  ← pytest config (duplicates pyproject.toml [tool.pytest.ini_options])
-├── install.sh                  ← bash installer for non-Docker usage
+├── install.sh                  ← bash installer (safe for curl|bash piped execution; wraps body in main())
 ├── .env / .env.example         ← API host/port overrides
 ├── .github/workflows/
 │   └── docker-publish.yml      ← publishes Docker image to registry on push
@@ -867,6 +867,11 @@ Single-row table seeded with `1` on first migration run.
 - Files: `table_controls.js`, `app.js`, `index.html`
 - Description: "Card Balance" (Spending − Payments − Adjustments) was misleading because payments often cover charges from previous billing periods, making the computed "balance" unrelated to the actual card balance.
 - Fixed: (1) Renamed "Card Balance" to "Net Activity" with tooltip explaining the calculation. (2) Added collapsible "Card Financial Summary" panel below CC totals showing Purchases, Payments to Card, Credits & Adjustments, and Net Activity as a clear breakdown.
+
+~~**BUG-37 (FIXED): `install.sh` fails when piped via `curl | bash`**~~
+- File: `install.sh`, Line: 4
+- Description: `exec < /dev/null` on line 4 redirected stdin to `/dev/null` to prevent commands like `source .env` from consuming piped input. However, when the script is run via `curl -fsSL <url> | bash`, bash reads the script itself from stdin. `exec < /dev/null` replaces stdin mid-execution, so bash can no longer read the remaining script content — execution silently stops after line 4.
+- Fixed: Wrapped the entire script body in a `main()` function (the industry-standard pattern used by Homebrew, Rust, Node.js installers). Bash parses the full function definition into memory before executing, making it immune to stdin changes. Removed `exec < /dev/null` and added `< /dev/null` to the specific `source .env` command that needed stdin protection. Also added `data/auto_backups` to the directory creation list.
 
 **BUG-20: Dark mode selectors for run-status badges will never match**
 - File: `style.css`, Lines: 1377-1379
