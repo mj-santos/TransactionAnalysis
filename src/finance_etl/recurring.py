@@ -185,7 +185,7 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
         try:
             ov_rows = conn.execute(
                 "SELECT merchant_key, is_recurring, label, amount, frequency, "
-                "       paused, last_date "
+                "       paused, last_date, next_estimated "
                 "FROM recurring_overrides"
             ).fetchall()
             for r in ov_rows:
@@ -194,6 +194,7 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                     "label": r[2], "amount": r[3], "frequency": r[4],
                     "paused": bool(r[5]) if r[5] is not None else False,
                     "last_date": r[6],
+                    "next_estimated": r[7],
                 }
         except Exception:
             pass
@@ -206,9 +207,16 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
     for merchant, pat in auto_results.items():
         if overrides.get(merchant) is False:
             continue
-        # Check if this auto-detected pattern has a pause override
+        # Apply user overrides for pause, dates
         details = override_details.get(merchant, {})
         pat.paused = details.get("paused", False)
+        if details.get("last_date"):
+            pat.last_date = details["last_date"]
+        if details.get("next_estimated"):
+            pat.next_estimated = details["next_estimated"]
+        elif details.get("last_date"):
+            # Recompute next_estimated from overridden last_date
+            pat.next_estimated = _estimate_next(details["last_date"], pat.avg_interval_days) or pat.next_estimated
         results.append(_pattern_to_dict(pat))
 
     # User-marked entries not in auto-detection
@@ -223,21 +231,24 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
         details = override_details.get(merchant, {})
         is_paused = details.get("paused", False)
 
+        user_next_est = details.get("next_estimated")
+
         if txns:
             dates = sorted(set(t[0] for t in txns))
             amounts = [t[1] for t in txns]
             med_amount = _median(amounts)
+            effective_last = details.get("last_date") or (dates[-1] if dates else "")
 
             if len(dates) >= 2:
                 date_objs = [datetime.date.fromisoformat(d) for d in dates]
                 intervals = [(date_objs[i + 1] - date_objs[i]).days for i in range(len(date_objs) - 1)]
                 avg_interval = sum(intervals) / len(intervals) if intervals else 30
                 freq = _classify_frequency(avg_interval)
-                next_est = _estimate_next(dates[-1], avg_interval)
+                next_est = user_next_est or _estimate_next(effective_last, avg_interval)
             else:
                 avg_interval = 30
                 freq = details.get("frequency") or "monthly"
-                next_est = _estimate_next(dates[-1], 30) if dates else None
+                next_est = user_next_est or (_estimate_next(effective_last, 30) if effective_last else None)
 
             results.append(_pattern_to_dict(RecurringPattern(
                 merchant=merchant,
@@ -245,7 +256,7 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 frequency=freq,
                 avg_interval_days=round(avg_interval, 1),
                 occurrences=len(dates),
-                last_date=dates[-1] if dates else "",
+                last_date=effective_last,
                 next_estimated=next_est,
                 is_auto=False,
                 confidence=1.0,
@@ -260,7 +271,7 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
             freq_days = {"annual": 365, "quarterly": 90, "monthly": 30,
                          "biweekly": 14, "weekly": 7}
             avg_interval = float(freq_days.get(stored_freq, 365))
-            next_est = _estimate_next(stored_last_date, avg_interval) if stored_last_date else None
+            next_est = user_next_est or (_estimate_next(stored_last_date, avg_interval) if stored_last_date else None)
 
             results.append(_pattern_to_dict(RecurringPattern(
                 merchant=merchant,
