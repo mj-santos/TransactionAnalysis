@@ -310,7 +310,7 @@ function renderTxnTotals(tfootEl, totals, type, numCols, warnEl) {
 
   let cells;
   if (type === 'credit_card') {
-    // Subtype model — spending / payments / adjustments / card balance
+    // Subtype model — spending / payments / adjustments / net activity
     const balance = Number(totals.cc_balance || 0);
     const balanceColor = balance > 0 ? 'var(--danger)' : balance < 0 ? '#16a34a' : 'inherit';
     cells = [
@@ -319,8 +319,8 @@ function renderTxnTotals(tfootEl, totals, type, numCols, warnEl) {
       { label: 'Payments',     value: f2(totals.cc_payments) },
       { label: 'Adjustments',  value: f2(totals.cc_adjustments) },
       {
-        label: 'Card Balance',
-        value: `<span style="color:${balanceColor}">${f2(balance)}</span>`,
+        label: 'Net Activity',
+        value: `<span style="color:${balanceColor}" title="Net of all card activity in the filtered period. Spending minus payments minus adjustments. Not the actual card balance.">${f2(balance)}</span>`,
         raw: true,
       },
     ];

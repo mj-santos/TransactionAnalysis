@@ -260,7 +260,8 @@ TransactionAnalysis/
 - "Show Unreviewed Only" toggle filter
 - Sortable columns
 - Infinite scroll / "Load more" (100 rows per page)
-- Totals footer row
+- Totals footer row (CC: Spending, Payments, Adjustments, Net Activity; Bank: Total Income, Total Outflow, Net)
+- **Card Financial Summary** panel (CC tab only): collapsible breakdown below totals showing Purchases, Payments to Card, Credits & Adjustments, and Net Activity with tooltip
 - Per-transaction "Mark as Reviewed" button with unreviewed dot indicator
 - "Mark All Reviewed" bulk action (respects current filters)
 - Tag filter dropdown — filters transactions by assigned tag
@@ -851,6 +852,21 @@ Single-row table seeded with `1` on first migration run.
 - Description: `bulkAssignCategory()` PATCHed `category_normalized` and `category_parent` but did not send `category_override: true`. Without the override flag, any subsequent normalization (batch renormalize, orphaned fix, category apply) overwrites the manual assignments because normalization only skips rows where `category_override = TRUE`. The inline single-transaction edit correctly set `category_override: true`, but the bulk path did not.
 - Impact: High — bulk category assignments appeared to vanish after any normalization run. Users would assign categories to transactions, then find them uncategorized again after visiting Data Health or running any normalization.
 - Fixed in v2.35.2. Added `category_override: true` to the PATCH body in `bulkAssignCategory()` onSave. 1 new test verifying override survives renormalization.
+
+~~**BUG-34 (FIXED): `_toggleTag()` sends wrong field names — tag assignment fails with 400**~~
+- File: `app.js`, `_toggleTag()` function
+- Description: `_toggleTag()` sent `{ transaction_fingerprint, tag_id }` but `POST /transactions/tags` expects `{ fingerprint, tag_ids[] }`. The field name mismatch caused the API to reject every per-row tag toggle with "fingerprint and tag_ids required."
+- Fixed: Changed payload to `{ fingerprint: fingerprint, tag_ids: [tagId] }` to match the API contract.
+
+~~**BUG-35 (FIXED): Year filter in CC/Bank Transactions only shows current year**~~
+- Files: `app.js` (`_loadTxnYears`), `api.py` (`get_transaction_years`)
+- Description: `_loadTxnYears()` was called only once at boot. If the API call failed (e.g. DuckDB read_only connection timing), the fallback was `[currentYear]` only, hiding historical years (2024, 2025). The API endpoint also lacked a `type` parameter.
+- Fixed: (1) `loadTxnTab()` now calls `_loadTxnYears()` to refresh the dropdown on every tab visit. (2) Added `type` query parameter to `GET /transactions/years` to filter by statement_type. (3) Dropdown preserves previous selection when refreshing.
+
+~~**BUG-36 (FIXED): CC "Card Balance" total is misleading when payments cover prior balances**~~
+- Files: `table_controls.js`, `app.js`, `index.html`
+- Description: "Card Balance" (Spending − Payments − Adjustments) was misleading because payments often cover charges from previous billing periods, making the computed "balance" unrelated to the actual card balance.
+- Fixed: (1) Renamed "Card Balance" to "Net Activity" with tooltip explaining the calculation. (2) Added collapsible "Card Financial Summary" panel below CC totals showing Purchases, Payments to Card, Credits & Adjustments, and Net Activity as a clear breakdown.
 
 **BUG-20: Dark mode selectors for run-status badges will never match**
 - File: `style.css`, Lines: 1377-1379

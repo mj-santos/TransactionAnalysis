@@ -1950,9 +1950,9 @@ async function _loadTagPopupState(fingerprint) {
 async function _toggleTag(fingerprint, tagId, add) {
   try {
     if (add) {
-      await api('POST', '/transactions/tags', { transaction_fingerprint: fingerprint, tag_id: tagId });
+      await api('POST', '/transactions/tags', { fingerprint: fingerprint, tag_ids: [tagId] });
     } else {
-      await api('DELETE', `/transactions/tags?transaction_fingerprint=${encodeURIComponent(fingerprint)}&tag_id=${tagId}`);
+      await api('DELETE', `/transactions/tags?fingerprint=${encodeURIComponent(fingerprint)}&tag_id=${tagId}`);
     }
     _loadTagChips(fingerprint);
   } catch (err) {
@@ -2880,6 +2880,9 @@ function _txnFilters(type) {
  * Feature 1: `type` is hard-passed to every API call — never merged across types.
  */
 async function loadTxnTab(type, reset = true) {
+  // Refresh year dropdown to ensure historical years are visible
+  await _loadTxnYears();
+
   const p    = _pfx(type);
   const st   = _txnState[type];
   const PAGE = 50;
@@ -2956,6 +2959,9 @@ async function loadTxnTab(type, reset = true) {
       document.getElementById(`${p}-tfoot`), totals, type, cols.length || 10,
       document.getElementById(`${p}-totals-warn`),
     );
+
+    // Render Card Financial Summary panel for credit card tab
+    if (type === 'credit_card') _renderCcFinancialSummary(totals);
 
     // Advance pagination cursor and update meta / Load more visibility
     st.offset += rows.length;
@@ -3201,6 +3207,43 @@ async function refreshUnreviewedBadge() {
 
 // _renderTxnTfoot has been extracted to table_controls.js as renderTxnTotals().
 // See table_controls.js for the implementation with proper labeled column cells.
+
+/**
+ * Render the Card Financial Summary collapsible panel below CC totals.
+ * Breaks down card activity into Purchases, Payments, Credits & Adjustments, Net Activity.
+ */
+function _renderCcFinancialSummary(totals) {
+  const panel = document.getElementById('cc-financial-summary');
+  const body  = document.getElementById('cc-financial-summary-body');
+  if (!panel || !body) return;
+
+  if (!totals || !totals.row_count) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  const f2 = v => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const spending    = Number(totals.cc_spending    || 0);
+  const payments    = Number(totals.cc_payments    || 0);
+  const adjustments = Number(totals.cc_adjustments || 0);
+  const netActivity = Number(totals.cc_balance     || 0);
+  const netColor    = netActivity > 0 ? 'var(--danger)' : netActivity < 0 ? '#16a34a' : 'inherit';
+
+  const row = (label, amount, color, bold, tooltip) =>
+    `<div style="display:flex; justify-content:space-between; padding:5px 12px; ${bold ? 'font-weight:600; border-top:1px solid var(--border); margin-top:4px; padding-top:8px;' : ''}" ${tooltip ? `title="${tooltip}"` : ''}>
+      <span style="color:var(--text-muted); font-size:13px;">${label}</span>
+      <span class="mono" style="font-size:13px;${color ? ' color:' + color : ''}">${amount}</span>
+    </div>`;
+
+  body.innerHTML =
+    row('Purchases (actual charges)', '$' + f2(spending), null, false) +
+    row('Payments to Card',           '$' + f2(payments), null, false) +
+    row('Credits & Adjustments',      '$' + f2(adjustments), null, false) +
+    row('Net Activity This Period',   '$' + f2(netActivity), netColor, true,
+        'Spending minus payments minus adjustments for the filtered period. Not the actual card balance.');
+
+  panel.style.display = '';
+}
 
 // ── Transaction Notes ─────────────────────────────────────────
 
@@ -5856,11 +5899,14 @@ function _pollCatNorm() {
 
 // ── Year filter logic ──────────────────────────────────────────
 let _txnYears = [];
+let _txnYearsLoaded = false;
 
-async function _loadTxnYears() {
+async function _loadTxnYears(forceRefresh) {
+  if (_txnYearsLoaded && !forceRefresh) return;
   try {
     const data = await api('GET', '/transactions/years');
     _txnYears = data.years || [];
+    _txnYearsLoaded = true;
   } catch { _txnYears = []; }
   _populateYearDropdowns();
 }
@@ -5871,6 +5917,8 @@ function _populateYearDropdowns() {
   ['cc-year', 'bk-year'].forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
+    // Preserve current selection when refreshing
+    const prev = sel.value;
     sel.innerHTML = '';
     // Add year options — default to current year, fallback to most recent with data
     const years = _txnYears.length ? _txnYears : [currentYear];
@@ -5882,8 +5930,10 @@ function _populateYearDropdowns() {
     const allOpt = document.createElement('option');
     allOpt.value = 'all'; allOpt.textContent = 'All Years';
     sel.appendChild(allOpt);
-    // Default: current year if it has data, else most recent
-    if (years.includes(currentYear)) {
+    // Restore previous selection if still valid, otherwise default
+    if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+      sel.value = prev;
+    } else if (years.includes(currentYear)) {
       sel.value = String(currentYear);
     } else {
       sel.value = String(years[0]);
