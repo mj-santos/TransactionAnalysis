@@ -1952,7 +1952,7 @@ async function _toggleTag(fingerprint, tagId, add) {
     if (add) {
       await api('POST', '/transactions/tags', { fingerprint: fingerprint, tag_ids: [tagId] });
     } else {
-      await api('DELETE', `/transactions/tags?transaction_fingerprint=${encodeURIComponent(fingerprint)}&tag_id=${tagId}`);
+      await api('DELETE', `/transactions/tags?fingerprint=${encodeURIComponent(fingerprint)}&tag_id=${tagId}`);
     }
     _loadTagChips(fingerprint);
   } catch (err) {
