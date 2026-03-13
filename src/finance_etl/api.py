@@ -1618,16 +1618,24 @@ No cloud services, no external dependencies — all data stays on your machine.
 
     @app.get("/transactions/years", tags=["transactions"],
              summary="Distinct years from transaction data")
-    def get_transaction_years():
+    def get_transaction_years(
+        type: Optional[str] = Query(None, description="'credit_card' or 'bank' — omit for all"),
+    ):
         """Return distinct years present in transactions_norm, ordered DESC."""
         conn = None
         try:
             conn = get_connection(db_path, read_only=True)
+            where = "WHERE transaction_date IS NOT NULL"
+            params = []
+            if type in ("credit_card", "bank"):
+                where += " AND statement_type = ?"
+                params.append(type)
             rows = conn.execute(
                 "SELECT DISTINCT YEAR(transaction_date) AS yr "
                 "FROM transactions_norm "
-                "WHERE transaction_date IS NOT NULL "
-                "ORDER BY yr DESC"
+                f"{where} "
+                "ORDER BY yr DESC",
+                params,
             ).fetchall()
         except Exception:
             return {"years": []}

@@ -571,6 +571,13 @@
     </div>
     <!-- CC legacy/conflict warning banners — populated by renderTxnTotals() -->
     <div id="cc-totals-warn" style="margin-top:8px;"></div>
+    <!-- Card Financial Summary — collapsible breakdown of CC activity -->
+    <div id="cc-financial-summary" class="card" style="margin-top:12px; display:none;">
+      <div class="card-title" style="cursor:pointer; user-select:none;" onclick="this.nextElementSibling.classList.toggle('collapsed'); this.querySelector('.chevron').textContent = this.nextElementSibling.classList.contains('collapsed') ? '\u25B6' : '\u25BC';">
+        Card Financial Summary <span class="chevron" style="font-size:11px; color:var(--text-muted);">\u25BC</span>
+      </div>
+      <div id="cc-financial-summary-body" style="padding:4px 0;"></div>
+    </div>
   </section>
 
   <!-- ─── BANK TRANSACTIONS PAGE ─── -->
