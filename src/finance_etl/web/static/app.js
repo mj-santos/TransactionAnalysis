@@ -3022,7 +3022,7 @@ function _renderTxnHeaders(p, cols, type) {
   if (!thead) return;
   const st = _txnState[type];
   // Hide metadata columns used only for review logic; append a Review header instead
-  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed', 'notes', 'is_split', 'split_parent_fingerprint']);
+  const HIDDEN_COLS = new Set(['transaction_fingerprint', 'unreviewed', 'notes', 'is_split', 'split_parent_fingerprint', 'category_override']);
   const selectAllCb = `<th style="width:30px;"><input type="checkbox" class="bulk-check" onchange="bulkToggleAll('${type}', this.checked)" title="Select all" /></th>`;
   thead.innerHTML = selectAllCb + cols.filter(c => !HIDDEN_COLS.has(c)).map(c => {
     const isSorted = c === st.sortBy;

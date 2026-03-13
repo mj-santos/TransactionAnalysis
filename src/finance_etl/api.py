@@ -1595,6 +1595,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             else:
                 col_names = [
                     "transaction_date", "description", "merchant", "category",
+                    "category_normalized", "category_parent", "category_override",
                     "amount", "currency", "bank_name", "account_name", "account_id",
                     "statement_type", "transaction_fingerprint",
                     "unreviewed", "notes",
