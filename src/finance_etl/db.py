@@ -404,6 +404,10 @@ CREATE TABLE IF NOT EXISTS annual_reports (
         dismissed_at   TEXT NOT NULL
     )""",
 ]
+
+# ── Accounts & Liabilities module migrations ─────────────────────────────
+from finance_etl.accounts.db_migrations import ACCOUNT_MIGRATIONS  # noqa: E402
+_MIGRATIONS.extend(ACCOUNT_MIGRATIONS)
 # ---------------------------------------------------------------------------
 
 def get_connection(db_path: str | Path, read_only: bool = False) -> duckdb.DuckDBPyConnection:

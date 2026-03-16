@@ -97,6 +97,12 @@ TransactionAnalysis/
 │
 ├── src/finance_etl/            ← main Python package
 │   ├── __init__.py
+│   ├── accounts/               ← Accounts & Liabilities subpackage
+│   │   ├── __init__.py         ← FastAPI sub-router
+│   │   ├── crud.py             ← Account CRUD + CoA auto-assignment
+│   │   ├── db_migrations.py    ← ALTER TABLE + CREATE TABLE migrations
+│   │   ├── routes.py           ← API route handlers
+│   │   └── schemas.py          ← Pydantic models (request/response)
 │   ├── api.py                  ← FastAPI app factory; ALL endpoints
 │   ├── analytics.py            ← Stage 9: SQL analytics → CSV reports
 │   ├── backup_migrations.py    ← Backup payload migration chain (v1→v2)
@@ -139,6 +145,7 @@ TransactionAnalysis/
 │   └── web/
 │       ├── index.html          ← Single-page UI; all pages as hidden sections
 │       └── static/
+│           ├── accounts.js     ← Accounts & Liabilities UI logic
 │           ├── app.js          ← All UI logic; no bundler/framework
 │           ├── style.css       ← All styles
 │           └── table_controls.js ← Reusable widgets: makeSourceDropdown(), renderTxnTotals()
@@ -171,6 +178,7 @@ TransactionAnalysis/
 | Merchants | `#page-merchant-rules` | `loadMerchantRules()` | ✅ |
 | Categories | `#page-category-rules` | `loadCategoryRules()` | ✅ |
 | Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ |
+| Accounts | `#page-accounts` | `loadAccounts()` | ✅ Phase 1 |
 | Utilities | `#page-utilities` | `loadUtilCategories()` + others | ✅ |
 | Settings | `#page-settings` | `loadSettings()` | ✅ |
 
@@ -267,10 +275,17 @@ All tables live in `data/db/finance.duckdb`. Schema bootstrapped and migrated in
 | `transaction_tags` | Many-to-many tag assignments |
 | `savings_goals` | Savings targets with progress |
 | `monthly_summaries` | Stored monthly reports |
-| `nw_accounts` | Net worth account balances |
+| `nw_accounts` | Net worth account balances (extended with CoA, Plaid-aligned fields) |
 | `nw_snapshots` | Point-in-time net worth snapshots |
 | `annual_reports` | Stored annual reports |
 | `schema_version` | Schema version tracking |
+| `ap_balance_ledger` | Immutable balance history (append-only) |
+| `ap_billing_cycles` | Statement tracking per account |
+| `ap_payments` | Double-entry payment log |
+| `ap_payment_plan` | Monthly payment assignment matrix |
+| `ap_payment_source_tags` | Short code → account lookup |
+| `ap_card_benefits` | Credit card perks tracking |
+| `ap_apr_terms` | APR tracking per account |
 
 ---
 
@@ -383,13 +398,14 @@ No npm, no package.json, no build step. Vanilla browser JS/CSS only. No third-pa
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.35.2
+**Current Version:** v2.36.0
 **App Name:** Spendly
 
 ### Changelog
 
 | Version | Date | Description |
 |---|---|---|
+| v2.36.0 | 2026-03-16 | feat: Accounts & Liabilities module Phase 1 (schema + CRUD + UI) |
 | v2.35.2 | 2026-03-13 | fix: bulk category override + remove dead health metric |
 | v2.35.1 | 2026-03-13 | fix: bulk category assignment DOM cleanup + missing SELECT columns |
 | v2.35.0 | 2026-03-13 | feat: recurring charges date editing + suggestion dismissal |
@@ -583,3 +599,10 @@ All endpoints in `src/finance_etl/api.py` inside `create_app()`. Interactive doc
 | `GET` | `/utilities/merchants` | Merchant list | 🟢 |
 | `POST` | `/utilities/test-rule` | Rule tester | 🟢 |
 | `GET` | `/utilities/health` | Data health | 🟢 |
+| `GET` | `/accounts/` | List accounts with filters | 🟢 |
+| `GET` | `/accounts/{id}` | Single account detail | 🟢 |
+| `POST` | `/accounts/` | Create account | 🟢 |
+| `PUT` | `/accounts/{id}` | Update account | 🟢 |
+| `PATCH` | `/accounts/{id}/status` | Change status | 🟢 |
+| `GET` | `/accounts/taxonomy` | CoA tree structure | 🟢 |
+| `GET/POST/DELETE` | `/accounts/tags` | Payment source tags | 🟢 |

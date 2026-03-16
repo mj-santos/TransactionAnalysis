@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 *.pyc
 .Python
+.pytest_cache/
 
 # Distribution / packaging
 *.egg-info/
@@ -45,5 +46,5 @@ config/wizard_profiles/
 # OS
 .DS_Store
 Thumbs.db
-.venv/
-#.github/workflows/
+docs
+docs/*

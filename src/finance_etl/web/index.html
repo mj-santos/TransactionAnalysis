@@ -46,6 +46,9 @@
     <a href="#" data-page="recurring-transactions">
       <span class="icon">🔄</span> Recurring
     </a>
+    <a href="#" data-page="accounts">
+      <span class="icon">🏦</span> Accounts
+    </a>
     <a href="#" data-page="utilities">
       <span class="icon">🔧</span> Utilities
       <span id="nav-dup-badge" class="nav-badge"></span>
@@ -1494,6 +1497,284 @@
 
   </section>
 
+  <!-- ─── ACCOUNTS PAGE ─── -->
+  <section id="page-accounts" class="page">
+
+    <!-- Sub-navigation tabs -->
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex; gap:0; border-bottom:1px solid var(--border);">
+        <button class="btn accounts-subtab active" data-subtab="manage" onclick="switchAccountsSubtab('manage')" style="border-radius:0; border-bottom:2px solid var(--primary); flex:1;">Manage Accounts</button>
+        <button class="btn accounts-subtab" data-subtab="overview" onclick="switchAccountsSubtab('overview')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 2">Overview</button>
+        <button class="btn accounts-subtab" data-subtab="planner" onclick="switchAccountsSubtab('planner')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 3">Payment Planner</button>
+        <button class="btn accounts-subtab" data-subtab="trends" onclick="switchAccountsSubtab('trends')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 4">History &amp; Trends</button>
+      </div>
+    </div>
+
+    <!-- Manage Accounts sub-view -->
+    <div id="accounts-manage-view">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3 style="margin:0;">Accounts</h3>
+        <button class="btn btn-primary" onclick="openAddAccountModal()">+ Add New Account</button>
+      </div>
+
+      <!-- Accounts table -->
+      <div class="card">
+        <div class="card-body" style="overflow-x:auto;">
+          <table id="accounts-table" style="width:100%;">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Institution</th>
+                <th>Type</th>
+                <th style="text-align:right;">Balance</th>
+                <th>Status</th>
+                <th>Last Updated</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="accounts-table-body">
+              <tr><td colspan="7" style="text-align:center; padding:32px; color:var(--text-muted);">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Payment Source Tags -->
+      <div class="card" style="margin-top:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Payment Source Tags</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body">
+            <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px;">
+              Short codes (e.g., "sofid", "ch") that map to bank accounts for quick payment source assignment.
+            </p>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+              <input type="text" id="tag-short-code" placeholder="Short code" style="width:120px; font-size:13px; padding:6px 10px; border:1px solid var(--border); border-radius:4px;" />
+              <select id="tag-account-id" style="font-size:13px; padding:6px 10px; border:1px solid var(--border); border-radius:4px;">
+                <option value="">Select account...</option>
+              </select>
+              <button class="btn btn-primary btn-sm" onclick="createPaymentSourceTag()">Add Tag</button>
+            </div>
+            <table id="tags-table" style="width:100%;">
+              <thead><tr><th>Short Code</th><th>Account</th><th>Created</th><th>Actions</th></tr></thead>
+              <tbody id="tags-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Account Modal -->
+    <div id="add-account-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+      <div style="background:var(--card-bg); border-radius:12px; padding:24px; max-width:600px; width:90%; max-height:85vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 id="add-account-modal-title" style="margin:0;">Add New Account</h3>
+          <button onclick="closeAddAccountModal()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted);">&times;</button>
+        </div>
+
+        <!-- Step indicators -->
+        <div id="account-steps" style="display:flex; gap:8px; margin-bottom:20px;">
+          <div class="account-step active" data-step="1" style="flex:1; text-align:center; padding:8px; border-radius:4px; background:var(--primary); color:white; font-size:13px;">1. Classification</div>
+          <div class="account-step" data-step="2" style="flex:1; text-align:center; padding:8px; border-radius:4px; background:var(--bg-secondary); color:var(--text-muted); font-size:13px;">2. Details</div>
+          <div class="account-step" data-step="3" style="flex:1; text-align:center; padding:8px; border-radius:4px; background:var(--bg-secondary); color:var(--text-muted); font-size:13px;">3. Balance</div>
+        </div>
+
+        <!-- Step 1: Classification -->
+        <div id="account-step-1">
+          <label style="display:block; font-weight:600; margin-bottom:8px;">Account Class</label>
+          <div style="display:flex; gap:12px; margin-bottom:16px;">
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; padding:12px; border:2px solid var(--border); border-radius:8px; flex:1;">
+              <input type="radio" name="account-class" value="liability" checked /> Liability
+              <span style="font-size:12px; color:var(--text-muted);">(Credit cards, loans, bills)</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:6px; cursor:pointer; padding:12px; border:2px solid var(--border); border-radius:8px; flex:1;">
+              <input type="radio" name="account-class" value="asset" /> Asset
+              <span style="font-size:12px; color:var(--text-muted);">(Bank accounts, investments)</span>
+            </label>
+          </div>
+
+          <label style="display:block; font-weight:600; margin-bottom:8px;">Account Type</label>
+          <div id="liability-types" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
+            <label class="type-radio"><input type="radio" name="account-subtype" value="credit_card" checked /> Credit Card</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="mortgage" /> Mortgage</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="auto_loan" /> Auto Loan</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="student_loan" /> Student Loan</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="utility" /> Utility</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="personal_debt" /> Personal Debt</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="other" /> Other</label>
+          </div>
+          <div id="asset-types" style="display:none; flex-wrap:wrap; gap:8px; margin-bottom:16px;">
+            <label class="type-radio"><input type="radio" name="account-subtype" value="checking" /> Checking</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="savings" /> Savings</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="investment" /> Investment</label>
+            <label class="type-radio"><input type="radio" name="account-subtype" value="digital_wallet" /> Digital Wallet</label>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="closeAddAccountModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="accountStepNext(1)">Next &rarr;</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Details -->
+        <div id="account-step-2" style="display:none;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div style="grid-column:1/-1;">
+              <label>Display Name *</label>
+              <input type="text" id="acct-name" required style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Institution</label>
+              <input type="text" id="acct-institution" placeholder="e.g., Chase, Amex" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Last Four Digits</label>
+              <input type="text" id="acct-last-four" maxlength="4" placeholder="e.g., 4428" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Open Date</label>
+              <input type="date" id="acct-open-date" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Responsibility</label>
+              <select id="acct-responsibility" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;">
+                <option value="individual">Individual</option>
+                <option value="authorized_user">Authorized User</option>
+                <option value="joint">Joint</option>
+              </select>
+            </div>
+
+            <!-- Credit Card fields -->
+            <div id="field-credit-limit" class="acct-field-cc" style="display:none;">
+              <label>Credit Limit</label>
+              <input type="number" id="acct-credit-limit" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-due-day" class="acct-field-cc acct-field-utility" style="display:none;">
+              <label>Due Day of Month</label>
+              <input type="number" id="acct-due-day" min="1" max="31" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-annual-fee" class="acct-field-cc" style="display:none;">
+              <label>Annual Fee</label>
+              <input type="number" id="acct-annual-fee" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-annual-fee-month" class="acct-field-cc" style="display:none;">
+              <label>Annual Fee Month</label>
+              <select id="acct-annual-fee-month" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;">
+                <option value="">N/A</option>
+                <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+                <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+              </select>
+            </div>
+            <div id="field-interest-rate" class="acct-field-cc acct-field-loan" style="display:none;">
+              <label>Interest Rate (%)</label>
+              <input type="number" id="acct-interest-rate" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+
+            <!-- Loan fields -->
+            <div id="field-origination-principal" class="acct-field-loan" style="display:none;">
+              <label>Original Principal</label>
+              <input type="number" id="acct-origination-principal" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-origination-date" class="acct-field-loan" style="display:none;">
+              <label>Origination Date</label>
+              <input type="date" id="acct-origination-date" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-loan-term" class="acct-field-loan" style="display:none;">
+              <label>Loan Term (months)</label>
+              <input type="number" id="acct-loan-term" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-escrow" class="acct-field-mortgage" style="display:none;">
+              <label>Escrow Balance</label>
+              <input type="number" id="acct-escrow-balance" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+
+            <!-- Asset fields -->
+            <div id="field-payment-source-tag" class="acct-field-asset" style="display:none;">
+              <label>Payment Source Tag</label>
+              <input type="text" id="acct-payment-source-tag" placeholder="e.g., sofid, ch" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="accountStepBack(2)">&larr; Back</button>
+            <button class="btn btn-primary" onclick="accountStepNext(2)">Next &rarr;</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Initial Balance -->
+        <div id="account-step-3" style="display:none;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div style="grid-column:1/-1;">
+              <label>Current Balance *</label>
+              <input type="number" id="acct-balance" step="0.01" required style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px; font-size:16px;" />
+            </div>
+            <div id="field-stmt-balance" class="acct-field-cc" style="display:none;">
+              <label>Statement Balance</label>
+              <input type="number" id="acct-statement-balance" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-avail-balance" class="acct-field-asset" style="display:none;">
+              <label>Available Balance</label>
+              <input type="number" id="acct-available-balance" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="accountStepBack(3)">&larr; Back</button>
+            <button class="btn btn-primary" onclick="submitNewAccount()">Create Account</button>
+          </div>
+        </div>
+
+        <!-- Edit mode (reuses the same modal) -->
+        <div id="account-edit-form" style="display:none;">
+          <input type="hidden" id="edit-account-id" />
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div style="grid-column:1/-1;">
+              <label>Display Name *</label>
+              <input type="text" id="edit-acct-name" required style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Institution</label>
+              <input type="text" id="edit-acct-institution" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Last Four</label>
+              <input type="text" id="edit-acct-last-four" maxlength="4" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Due Day</label>
+              <input type="number" id="edit-acct-due-day" min="1" max="31" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Balance</label>
+              <input type="number" id="edit-acct-balance" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Credit Limit</label>
+              <input type="number" id="edit-acct-credit-limit" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Interest Rate (%)</label>
+              <input type="number" id="edit-acct-interest-rate" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div>
+              <label>Payment Source Tag</label>
+              <input type="text" id="edit-acct-payment-source-tag" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="closeAddAccountModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="submitEditAccount()">Save Changes</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
   <!-- ─── UTILITIES PAGE ─── -->
   <section id="page-utilities" class="page">
 
@@ -1988,6 +2269,7 @@
 </div>
 
 <script src="/static/table_controls.js"></script>
+<script src="/static/accounts.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

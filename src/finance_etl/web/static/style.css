@@ -209,6 +209,17 @@ select:focus, input[type="text"]:focus { outline: none; border-color: var(--prim
 .btn-danger:hover  { background: #dc2626; }
 .btn-sm { padding: 5px 12px; font-size: 12px; }
 
+/* ── Account type radio buttons ──────────────────────────── */
+.type-radio {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: 13px; transition: border-color .15s, background .15s;
+}
+.type-radio:has(input:checked) {
+  border-color: var(--primary); background: rgba(59,130,246,.08);
+}
+.type-radio input { margin: 0; }
+
 /* ── Status area ─────────────────────────────────────────── */
 .run-status {
   border-radius: var(--radius);

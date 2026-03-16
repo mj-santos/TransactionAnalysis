@@ -6373,6 +6373,12 @@ No cloud services, no external dependencies — all data stays on your machine.
         return _dt.datetime.utcfromtimestamp(path.stat().st_mtime).isoformat() + "Z"
 
     # -----------------------------------------------------------------------
+    # Accounts & Liabilities sub-router
+    # -----------------------------------------------------------------------
+    from finance_etl.accounts import router as accounts_router
+    app.include_router(accounts_router, prefix="/accounts", tags=["Accounts & Payments"])
+
+    # -----------------------------------------------------------------------
     # Web UI — always registered last so all API routes take precedence
     # -----------------------------------------------------------------------
 

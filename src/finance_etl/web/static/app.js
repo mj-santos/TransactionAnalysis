@@ -50,6 +50,7 @@ function navigate(page) {
     'merchant-rules':   'Merchant Rules & Categories',
     'category-rules':   'Category Rules',
     'recurring-transactions': 'Recurring Transactions',
+    accounts:           'Accounts & Liabilities',
     utilities:          'Utilities',
     settings:           'Settings & Logs',
   };
@@ -64,6 +65,7 @@ function navigate(page) {
   if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); _clearSuggestions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
+  if (page === 'accounts')           { loadAccounts(); }
   if (page === 'utilities')          { loadUtilCategories(); loadUtilMerchants(); loadUtilDuplicates(); loadUtilHealth(); }
 }
 
