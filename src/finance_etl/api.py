@@ -4753,6 +4753,14 @@ No cloud services, no external dependencies — all data stays on your machine.
             except Exception:
                 pass  # table may not exist yet
 
+            # Credit utilization alerts (> 30% FICO threshold)
+            utilization_alerts = []
+            try:
+                from finance_etl.accounts.cross_module import get_utilization_alerts
+                utilization_alerts = get_utilization_alerts(conn)
+            except Exception:
+                pass
+
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Dashboard query failed: {exc}") from exc
@@ -4772,6 +4780,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             "unreviewed_count": unreviewed_count,
             "savings_goals": savings_goals_summary,
             "net_worth": nw_summary,
+            "utilization_alerts": utilization_alerts,
         }
 
     # -----------------------------------------------------------------------

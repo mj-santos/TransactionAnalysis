@@ -38,6 +38,13 @@ from .payment_plan import (
     rollforward_plan,
     upsert_plan_assignment,
 )
+from .cross_module import (
+    annual_fee_cross_reference,
+    get_utilization_alerts,
+    spending_vs_statement,
+    suggested_liabilities,
+    verify_payment,
+)
 from .analytics import (
     get_aggregate_debt_trend,
     get_annual_fees,
@@ -392,6 +399,61 @@ def route_payment_summary(months: int = Query(6, ge=1, le=24)):
     conn = _get_conn()
     try:
         return get_payment_history_summary(conn, months)
+    finally:
+        conn.close()
+
+
+# ── Cross-Module Integration ──────────────────────────────────────────
+
+@router.get("/integration/spending-vs-statement/{account_id}/{cycle_label}",
+            summary="Compare CC spending vs statement balance")
+def route_spending_vs_statement(account_id: int, cycle_label: str):
+    conn = _get_conn()
+    try:
+        result = spending_vs_statement(conn, account_id, cycle_label)
+        if not result:
+            raise HTTPException(status_code=404, detail="Billing cycle not found")
+        return result
+    finally:
+        conn.close()
+
+
+@router.post("/integration/verify-payment/{payment_id}",
+             summary="Cross-reference payment against bank transactions")
+def route_verify_payment(payment_id: int):
+    conn = _get_conn()
+    try:
+        return verify_payment(conn, payment_id)
+    finally:
+        conn.close()
+
+
+@router.get("/integration/suggested-liabilities",
+            summary="Recurring charges that could be liability accounts")
+def route_suggested_liabilities(min_amount: float = Query(20.0, ge=0)):
+    conn = _get_conn()
+    try:
+        return suggested_liabilities(conn, min_amount)
+    finally:
+        conn.close()
+
+
+@router.get("/integration/utilization-alerts",
+            summary="Credit cards above FICO utilization threshold")
+def route_utilization_alerts(threshold: float = Query(30.0, ge=0, le=100)):
+    conn = _get_conn()
+    try:
+        return get_utilization_alerts(conn, threshold)
+    finally:
+        conn.close()
+
+
+@router.get("/integration/annual-fee-xref",
+            summary="Cross-reference annual fees with transaction data")
+def route_annual_fee_xref():
+    conn = _get_conn()
+    try:
+        return annual_fee_cross_reference(conn)
     finally:
         conn.close()
 

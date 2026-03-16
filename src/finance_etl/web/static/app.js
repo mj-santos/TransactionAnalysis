@@ -4563,6 +4563,9 @@ function _renderDashboard(data) {
   // Spending alerts — banners + status overview
   _renderSpendingAlerts(data.spending_alerts || [], data.budgets_vs_actual || []);
 
+  // Credit utilization alerts
+  _renderUtilizationAlerts(data.utilization_alerts || []);
+
   // Savings goals
   _renderSavingsGoals(data.savings_goals || []);
 
@@ -5205,6 +5208,25 @@ function _renderSpendingAlerts(alerts, budgets) {
       gridEl.innerHTML = '';
     }
   }
+}
+
+// ── Credit Utilization Alerts (from Accounts module) ────────────
+
+function _renderUtilizationAlerts(alerts) {
+  const bannerEl = document.getElementById('spending-alerts-banner');
+  if (!bannerEl || !alerts.length) return;
+  // Append utilization alerts after any spending alerts
+  const html = alerts.map(a => {
+    const cls = a.severity === 'critical' ? 'sa-banner sa-banner-red' : 'sa-banner sa-banner-yellow';
+    const icon = a.severity === 'critical' ? '🚨' : '⚠️';
+    const msg = `${esc(a.name)}: ${a.utilization_pct}% credit utilization (${_fmt$(a.balance)} / ${_fmt$(a.credit_limit)})`;
+    return `<div class="${cls}">
+      <span>${icon} ${msg}</span>
+      <button class="sa-banner-dismiss" onclick="this.parentElement.remove()" title="Dismiss">✕</button>
+    </div>`;
+  }).join('');
+  bannerEl.style.display = '';
+  bannerEl.innerHTML += html;
 }
 
 // ── Budget form ────────────────────────────────────────────────

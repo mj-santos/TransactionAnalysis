@@ -1,4 +1,4 @@
-"""Tests for the Accounts & Liabilities module — Phases 1–4."""
+"""Tests for the Accounts & Liabilities module — Phases 1–5."""
 from __future__ import annotations
 
 import tempfile
@@ -7,6 +7,13 @@ from pathlib import Path
 import pytest
 
 from finance_etl.db import get_connection
+from finance_etl.accounts.cross_module import (
+    annual_fee_cross_reference,
+    get_utilization_alerts,
+    spending_vs_statement,
+    suggested_liabilities,
+    verify_payment,
+)
 from finance_etl.accounts.analytics import (
     get_aggregate_debt_trend,
     get_annual_fees,
@@ -981,3 +988,214 @@ class TestPaymentHistorySummary:
         assert result[0]["month"] == "2026-03"
         assert result[0]["count"] == 2
         assert result[0]["total"] == 800.0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 5: Cross-Module Integration
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _insert_txn(conn, date, desc, amount, account_id, bank_name, stmt_type="credit_card", subtype="spending"):
+    """Helper: insert a transaction_norm row for cross-module testing."""
+    import hashlib
+    fp = hashlib.sha256(f"{date}{desc}{amount}{account_id}".encode()).hexdigest()
+    conn.execute(
+        """INSERT INTO transactions_norm (
+            transaction_date, description, amount, bank_name, account_name,
+            account_id, source_file, source_row, file_hash, transaction_fingerprint,
+            statement_type, transaction_subtype, merchant
+        ) VALUES (?, ?, ?, ?, ?, ?, 'test.csv', 1, 'testhash', ?, ?, ?, ?)""",
+        [date, desc, amount, bank_name, "Test Account",
+         account_id, fp, stmt_type, subtype, desc],
+    )
+
+
+class TestUtilizationAlerts:
+    def test_no_alerts_below_threshold(self, conn):
+        create_account(conn, AccountCreate(
+            name="Low CC", account_class="liability", liability_type="credit_card",
+            balance=1000, credit_limit=10000,
+        ))
+        alerts = get_utilization_alerts(conn, threshold=30.0)
+        assert len(alerts) == 0
+
+    def test_alerts_above_threshold(self, conn):
+        create_account(conn, AccountCreate(
+            name="High CC", account_class="liability", liability_type="credit_card",
+            balance=5000, credit_limit=10000,
+        ))
+        alerts = get_utilization_alerts(conn, threshold=30.0)
+        assert len(alerts) == 1
+        assert alerts[0]["utilization_pct"] == 50.0
+        assert alerts[0]["severity"] == "warning"
+
+    def test_critical_severity(self, conn):
+        create_account(conn, AccountCreate(
+            name="Maxed CC", account_class="liability", liability_type="credit_card",
+            balance=9000, credit_limit=10000,
+        ))
+        alerts = get_utilization_alerts(conn, threshold=30.0)
+        assert len(alerts) == 1
+        assert alerts[0]["severity"] == "critical"
+
+    def test_excludes_closed_accounts(self, conn):
+        cc = create_account(conn, AccountCreate(
+            name="Closed CC", account_class="liability", liability_type="credit_card",
+            balance=8000, credit_limit=10000,
+        ))
+        soft_delete_account(conn, cc["id"], "closed")
+        alerts = get_utilization_alerts(conn, threshold=30.0)
+        assert len(alerts) == 0
+
+
+class TestSpendingVsStatement:
+    def test_no_cycle(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        result = spending_vs_statement(conn, cc["id"], "2026-03")
+        assert result is None
+
+    def test_no_linked_account(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 1000,
+            "payment_due_date": "2026-04-15",
+            "statement_open_date": "2026-02-10",
+            "statement_close_date": "2026-03-10",
+        })
+        result = spending_vs_statement(conn, cc["id"], "2026-03")
+        assert result["error"] == "Account not linked to transaction data"
+
+    def test_with_linked_account_and_transactions(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        # Link the account
+        conn.execute("UPDATE nw_accounts SET linked_account_id = 'cc-4428', linked_bank_name = 'Chase' WHERE id = ?", [cc["id"]])
+        create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 1000,
+            "payment_due_date": "2026-04-15",
+            "statement_open_date": "2026-02-10",
+            "statement_close_date": "2026-03-10",
+        })
+        # Add some transactions
+        _insert_txn(conn, "2026-02-15", "Amazon", -50.00, "cc-4428", "Chase")
+        _insert_txn(conn, "2026-03-01", "Walmart", -120.00, "cc-4428", "Chase")
+        _insert_txn(conn, "2026-03-05", "Target", -80.00, "cc-4428", "Chase")
+
+        result = spending_vs_statement(conn, cc["id"], "2026-03")
+        assert result["statement_balance"] == 1000.0
+        assert result["transaction_total"] == 250.0  # 50+120+80
+        assert result["flagged"] is True  # 75% discrepancy
+
+
+class TestPaymentVerification:
+    def test_no_payment(self, conn):
+        result = verify_payment(conn, 99999)
+        assert result["verified"] is False
+        assert "not found" in result["error"].lower()
+
+    def test_no_linked_account(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        payment = record_payment(conn, {
+            "from_account_id": checking["id"],
+            "to_account_id": cc["id"],
+            "payment_date": "2026-03-10",
+            "amount": 500,
+        })
+        result = verify_payment(conn, payment["id"])
+        assert result["verified"] is False
+        assert "not linked" in result["error"].lower()
+
+    def test_verified_with_match(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        conn.execute("UPDATE nw_accounts SET linked_account_id = 'chk-1234', linked_bank_name = 'Chase' WHERE id = ?", [checking["id"]])
+        payment = record_payment(conn, {
+            "from_account_id": checking["id"],
+            "to_account_id": cc["id"],
+            "payment_date": "2026-03-10",
+            "amount": 500.00,
+        })
+        # Insert matching bank transaction
+        _insert_txn(conn, "2026-03-11", "CHASE CREDIT CARD PAYMENT", -500.00, "chk-1234", "Chase", stmt_type="bank", subtype=None)
+
+        result = verify_payment(conn, payment["id"])
+        assert result["verified"] is True
+        assert result["candidates"] >= 1
+
+    def test_no_match_different_amount(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        conn.execute("UPDATE nw_accounts SET linked_account_id = 'chk-1234' WHERE id = ?", [checking["id"]])
+        payment = record_payment(conn, {
+            "from_account_id": checking["id"],
+            "to_account_id": cc["id"],
+            "payment_date": "2026-03-10",
+            "amount": 500.00,
+        })
+        _insert_txn(conn, "2026-03-10", "Some Payment", -100.00, "chk-1234", "Chase", stmt_type="bank", subtype=None)
+        result = verify_payment(conn, payment["id"])
+        assert result["verified"] is False
+
+
+class TestSuggestedLiabilities:
+    def test_empty_transactions(self, conn):
+        result = suggested_liabilities(conn)
+        assert result == []
+
+    def test_recurring_charges_suggested(self, conn):
+        # Insert 4 monthly charges from the same merchant
+        for i in range(4):
+            _insert_txn(conn, f"2026-0{i+1}-15", "Toyota Financial", -549.75,
+                        "cc-1234", "Chase")
+        result = suggested_liabilities(conn, min_amount=100)
+        assert len(result) >= 1
+        assert any("Toyota Financial" in s["merchant"] for s in result)
+
+    def test_excludes_existing_accounts(self, conn):
+        create_account(conn, AccountCreate(
+            name="Toyota Financial", account_class="liability",
+            liability_type="auto_loan", balance=20000,
+        ))
+        for i in range(4):
+            _insert_txn(conn, f"2026-0{i+1}-15", "Toyota Financial", -549.75,
+                        "cc-1234", "Chase")
+        result = suggested_liabilities(conn, min_amount=100)
+        assert not any("Toyota Financial" in s["merchant"] for s in result)
+
+
+class TestAnnualFeeXref:
+    def test_no_fees(self, conn):
+        result = annual_fee_cross_reference(conn)
+        assert result == []
+
+    def test_no_link(self, conn):
+        create_account(conn, AccountCreate(
+            name="Amex Gold", account_class="liability", liability_type="credit_card",
+            balance=0, annual_fee=250, annual_fee_month=3,
+        ))
+        result = annual_fee_cross_reference(conn)
+        assert len(result) == 1
+        assert result[0]["status"] == "no_link"
+
+    def test_with_link_no_match(self, conn):
+        cc = create_account(conn, AccountCreate(
+            name="Amex Gold", account_class="liability", liability_type="credit_card",
+            balance=0, annual_fee=250, annual_fee_month=3,
+        ))
+        conn.execute("UPDATE nw_accounts SET linked_account_id = 'amex-gold' WHERE id = ?", [cc["id"]])
+        result = annual_fee_cross_reference(conn)
+        assert len(result) == 1
+        assert result[0]["status"] == "no_match"
+
+    def test_with_link_and_match(self, conn):
+        cc = create_account(conn, AccountCreate(
+            name="Amex Gold", account_class="liability", liability_type="credit_card",
+            balance=0, annual_fee=250, annual_fee_month=3,
+        ))
+        conn.execute("UPDATE nw_accounts SET linked_account_id = 'amex-gold' WHERE id = ?", [cc["id"]])
+        _insert_txn(conn, "2026-03-01", "ANNUAL MEMBERSHIP FEE", -250.00, "amex-gold", "Amex")
+        result = annual_fee_cross_reference(conn)
+        assert len(result) == 1
+        assert result[0]["status"] == "matched"
+        assert result[0]["detected_fee"] == 250.0
