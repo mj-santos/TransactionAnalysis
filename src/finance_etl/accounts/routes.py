@@ -38,6 +38,17 @@ from .payment_plan import (
     rollforward_plan,
     upsert_plan_assignment,
 )
+from .analytics import (
+    get_aggregate_debt_trend,
+    get_annual_fees,
+    get_balance_trends,
+    get_benefits_value,
+    get_interest_cost,
+    get_payoff_projection,
+    get_payment_history_summary,
+    get_upcoming_due,
+    get_utilization_breakdown,
+)
 from .payments import (
     get_payment_history,
     record_payment,
@@ -298,6 +309,89 @@ def route_payment_history(
     conn = _get_conn()
     try:
         return get_payment_history(conn, account_id, limit)
+    finally:
+        conn.close()
+
+
+# ── Analytics (static paths before /{account_id}) ────────────────────────
+
+@router.get("/analytics/trends/aggregate", summary="Aggregate debt/asset trend")
+def route_aggregate_trends(months: int = Query(12, ge=1, le=60)):
+    conn = _get_conn()
+    try:
+        return get_aggregate_debt_trend(conn, months)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/trends/{account_id}", summary="Balance trend for one account")
+def route_balance_trends(account_id: int, limit: int = Query(24, ge=1, le=120)):
+    conn = _get_conn()
+    try:
+        return get_balance_trends(conn, account_id, limit)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/utilization", summary="Credit utilization per card and aggregate")
+def route_utilization():
+    conn = _get_conn()
+    try:
+        return get_utilization_breakdown(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/interest-cost", summary="Estimated monthly interest from APRs")
+def route_interest_cost():
+    conn = _get_conn()
+    try:
+        return get_interest_cost(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/payoff-projection", summary="Debt payoff timeline by strategy")
+def route_payoff_projection(strategy: str = Query("minimum", pattern="^(minimum|statement|aggressive)$")):
+    conn = _get_conn()
+    try:
+        return get_payoff_projection(conn, strategy)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/annual-fees", summary="Annual fee calendar and totals")
+def route_annual_fees():
+    conn = _get_conn()
+    try:
+        return get_annual_fees(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/benefits-value", summary="Card benefits total value and ROI")
+def route_benefits_value():
+    conn = _get_conn()
+    try:
+        return get_benefits_value(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/upcoming", summary="Accounts due in next N days")
+def route_upcoming_due(days: int = Query(14, ge=1, le=90)):
+    conn = _get_conn()
+    try:
+        return get_upcoming_due(conn, days)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/payment-summary", summary="Payment history aggregated by month")
+def route_payment_summary(months: int = Query(6, ge=1, le=24)):
+    conn = _get_conn()
+    try:
+        return get_payment_history_summary(conn, months)
     finally:
         conn.close()
 

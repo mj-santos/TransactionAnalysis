@@ -1,0 +1,380 @@
+"""Analytics: trends, projections, utilization, interest cost, annual fees, benefits."""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def get_balance_trends(conn, account_id: int, limit: int = 24) -> list[dict]:
+    """
+    Balance trend for one account from ap_balance_ledger.
+    Returns one point per effective_date (most recent N entries).
+    """
+    rows = conn.execute(
+        """SELECT effective_date, current_balance, statement_balance, data_source
+        FROM ap_balance_ledger
+        WHERE account_id = ?
+        ORDER BY effective_date DESC, id DESC
+        LIMIT ?""",
+        [account_id, limit],
+    ).fetchall()
+    return [
+        {
+            "date": r[0],
+            "balance": float(r[1]) if r[1] is not None else 0,
+            "statement_balance": float(r[2]) if r[2] is not None else None,
+            "data_source": r[3],
+        }
+        for r in reversed(rows)  # chronological order
+    ]
+
+
+def get_aggregate_debt_trend(conn, months: int = 12) -> list[dict]:
+    """
+    Aggregate debt trend from nw_snapshots — total liabilities over time.
+    Falls back to ap_balance_ledger if snapshots are sparse.
+    """
+    rows = conn.execute(
+        """SELECT snapshot_date, total_assets, total_liab, net_worth
+        FROM nw_snapshots
+        ORDER BY snapshot_date DESC
+        LIMIT ?""",
+        [months],
+    ).fetchall()
+    return [
+        {
+            "date": r[0],
+            "total_assets": float(r[1]) if r[1] is not None else 0,
+            "total_liabilities": float(r[2]) if r[2] is not None else 0,
+            "net_worth": float(r[3]) if r[3] is not None else 0,
+        }
+        for r in reversed(rows)
+    ]
+
+
+def get_utilization_breakdown(conn) -> list[dict]:
+    """
+    Credit utilization per card and aggregate.
+    Only includes credit cards with a positive credit limit.
+    """
+    rows = conn.execute("""
+        SELECT id, name, institution, last_four, balance, credit_limit
+        FROM nw_accounts
+        WHERE (status = 'active' OR status IS NULL)
+        AND liability_type = 'credit_card'
+        AND credit_limit > 0
+        ORDER BY name
+    """).fetchall()
+
+    total_balance = 0.0
+    total_limit = 0.0
+    cards = []
+
+    for r in rows:
+        bal = abs(float(r[4])) if r[4] else 0
+        limit_val = float(r[5])
+        util = round(bal / limit_val * 100, 1) if limit_val > 0 else 0
+        total_balance += bal
+        total_limit += limit_val
+        cards.append({
+            "id": r[0], "name": r[1], "institution": r[2], "last_four": r[3],
+            "balance": round(bal, 2), "credit_limit": round(limit_val, 2),
+            "utilization_pct": util,
+            "available_credit": round(limit_val - bal, 2),
+        })
+
+    agg_util = round(total_balance / total_limit * 100, 1) if total_limit > 0 else 0
+    return {
+        "cards": cards,
+        "aggregate": {
+            "total_balance": round(total_balance, 2),
+            "total_limit": round(total_limit, 2),
+            "utilization_pct": agg_util,
+            "available_credit": round(total_limit - total_balance, 2),
+        },
+    }
+
+
+def get_interest_cost(conn) -> dict:
+    """
+    Estimated monthly interest cost from APRs on each account.
+    Uses nw_accounts.interest_rate (annual %) and current balance.
+    """
+    rows = conn.execute("""
+        SELECT id, name, institution, last_four, liability_type,
+               balance, interest_rate
+        FROM nw_accounts
+        WHERE (status = 'active' OR status IS NULL)
+        AND is_asset = FALSE
+        AND interest_rate IS NOT NULL AND interest_rate > 0
+        ORDER BY interest_rate DESC
+    """).fetchall()
+
+    total_monthly = 0.0
+    accounts = []
+    for r in rows:
+        bal = abs(float(r[5])) if r[5] else 0
+        apr = float(r[6])
+        monthly_interest = round(bal * apr / 100.0 / 12.0, 2)
+        total_monthly += monthly_interest
+        accounts.append({
+            "id": r[0], "name": r[1], "institution": r[2], "last_four": r[3],
+            "liability_type": r[4], "balance": round(bal, 2),
+            "apr": apr, "monthly_interest": monthly_interest,
+            "annual_interest": round(monthly_interest * 12, 2),
+        })
+
+    return {
+        "accounts": accounts,
+        "total_monthly_interest": round(total_monthly, 2),
+        "total_annual_interest": round(total_monthly * 12, 2),
+    }
+
+
+def get_payoff_projection(conn, strategy: str = "minimum") -> list[dict]:
+    """
+    Simplified payoff projection for each liability.
+    Strategies: 'minimum' (min payment), 'statement' (statement balance),
+    'aggressive' (2x minimum or statement, whichever is higher).
+
+    Returns estimated months to payoff and total interest (simplified).
+    """
+    rows = conn.execute("""
+        SELECT id, name, institution, liability_type,
+               balance, interest_rate, minimum_payment_amount,
+               last_statement_balance
+        FROM nw_accounts
+        WHERE (status = 'active' OR status IS NULL)
+        AND is_asset = FALSE
+        AND ABS(balance) > 0
+        ORDER BY name
+    """).fetchall()
+
+    results = []
+    for r in rows:
+        bal = abs(float(r[4])) if r[4] else 0
+        apr = float(r[5]) if r[5] else 0
+        min_pay = float(r[6]) if r[6] else 0
+        stmt_bal = abs(float(r[7])) if r[7] else 0
+
+        if strategy == "minimum":
+            payment = min_pay if min_pay > 0 else (stmt_bal if stmt_bal > 0 else bal)
+        elif strategy == "statement":
+            payment = stmt_bal if stmt_bal > 0 else bal
+        elif strategy == "aggressive":
+            payment = max(min_pay * 2, stmt_bal, bal * 0.1)
+        else:
+            payment = min_pay if min_pay > 0 else bal
+
+        if payment <= 0:
+            payment = bal  # pay off in one shot
+
+        # Simple amortization: iterate monthly
+        remaining = bal
+        monthly_rate = apr / 100.0 / 12.0
+        months = 0
+        total_interest = 0.0
+        max_months = 360  # 30 year cap
+
+        while remaining > 0.01 and months < max_months:
+            interest = remaining * monthly_rate
+            total_interest += interest
+            principal = min(payment - interest, remaining)
+            if principal <= 0:
+                # Payment doesn't cover interest — will never pay off
+                months = max_months
+                break
+            remaining -= principal
+            months += 1
+
+        results.append({
+            "id": r[0], "name": r[1], "institution": r[2],
+            "liability_type": r[3], "balance": round(bal, 2),
+            "apr": apr, "monthly_payment": round(payment, 2),
+            "months_to_payoff": months if months < max_months else None,
+            "total_interest": round(total_interest, 2),
+            "total_cost": round(bal + total_interest, 2),
+        })
+
+    return results
+
+
+def get_annual_fees(conn) -> dict:
+    """
+    Annual fee calendar: which accounts have fees and when.
+    Returns per-account and total annual cost.
+    """
+    rows = conn.execute("""
+        SELECT id, name, institution, last_four, liability_type,
+               annual_fee, annual_fee_month
+        FROM nw_accounts
+        WHERE (status = 'active' OR status IS NULL)
+        AND annual_fee IS NOT NULL AND annual_fee > 0
+        ORDER BY annual_fee_month NULLS LAST, name
+    """).fetchall()
+
+    month_names = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    total = 0.0
+    accounts = []
+    by_month = {i + 1: [] for i in range(12)}
+
+    for r in rows:
+        fee = float(r[5])
+        month = int(r[6]) if r[6] else None
+        total += fee
+        entry = {
+            "id": r[0], "name": r[1], "institution": r[2],
+            "last_four": r[3], "liability_type": r[4],
+            "annual_fee": round(fee, 2),
+            "fee_month": month,
+            "fee_month_name": month_names[month - 1] if month else "Unknown",
+        }
+        accounts.append(entry)
+        if month:
+            by_month[month].append(entry)
+
+    # Summarize by month
+    monthly_totals = []
+    for m in range(1, 13):
+        month_total = sum(e["annual_fee"] for e in by_month[m])
+        monthly_totals.append({
+            "month": m,
+            "month_name": month_names[m - 1],
+            "total": round(month_total, 2),
+            "count": len(by_month[m]),
+        })
+
+    return {
+        "accounts": accounts,
+        "total_annual_fees": round(total, 2),
+        "by_month": monthly_totals,
+    }
+
+
+def get_benefits_value(conn) -> dict:
+    """
+    Total annual value of card benefits from ap_card_benefits.
+    Returns per-account benefit breakdown and ROI vs annual fees.
+    Amount is stored per-occurrence; frequency determines annualization:
+      monthly=x12, quarterly=x4, annual=x1 (default).
+    """
+    rows = conn.execute("""
+        SELECT b.account_id, a.name, a.institution, a.last_four,
+               a.annual_fee,
+               b.benefit_name, b.amount, b.frequency, b.benefit_type
+        FROM ap_card_benefits b
+        JOIN nw_accounts a ON b.account_id = a.id
+        WHERE (a.status = 'active' OR a.status IS NULL)
+        ORDER BY a.name, b.benefit_name
+    """).fetchall()
+
+    freq_mult = {"monthly": 12, "quarterly": 4, "annual": 1}
+    acct_map = {}
+    for r in rows:
+        aid = r[0]
+        if aid not in acct_map:
+            acct_map[aid] = {
+                "id": aid, "name": r[1], "institution": r[2],
+                "last_four": r[3],
+                "annual_fee": float(r[4]) if r[4] else 0,
+                "benefits": [], "total_benefit_value": 0,
+            }
+        per_occurrence = float(r[6]) if r[6] else 0
+        freq = r[7] or "annual"
+        annual_val = per_occurrence * freq_mult.get(freq, 1)
+        acct_map[aid]["benefits"].append({
+            "name": r[5], "annual_value": round(annual_val, 2),
+            "benefit_type": r[8], "frequency": freq,
+        })
+        acct_map[aid]["total_benefit_value"] += annual_val
+
+    accounts = []
+    total_benefits = 0.0
+    total_fees = 0.0
+    for a in acct_map.values():
+        a["total_benefit_value"] = round(a["total_benefit_value"], 2)
+        a["roi"] = round(
+            a["total_benefit_value"] / a["annual_fee"], 2
+        ) if a["annual_fee"] > 0 else None
+        total_benefits += a["total_benefit_value"]
+        total_fees += a["annual_fee"]
+        accounts.append(a)
+
+    return {
+        "accounts": accounts,
+        "total_benefit_value": round(total_benefits, 2),
+        "total_annual_fees": round(total_fees, 2),
+        "aggregate_roi": round(total_benefits / total_fees, 2) if total_fees > 0 else None,
+    }
+
+
+def get_upcoming_due(conn, days: int = 14) -> list[dict]:
+    """
+    Accounts with payments due in the next N days.
+    Uses next_payment_due_date or computes from due_day.
+    """
+    today = _today()
+    rows = conn.execute(f"""
+        SELECT id, name, institution, last_four, liability_type,
+               balance, last_statement_balance, minimum_payment_amount,
+               due_day, next_payment_due_date, autopay_enabled
+        FROM nw_accounts
+        WHERE (status = 'active' OR status IS NULL)
+        AND is_asset = FALSE
+        AND (
+            (next_payment_due_date IS NOT NULL
+             AND CAST(next_payment_due_date AS DATE) >= CAST(? AS DATE)
+             AND CAST(next_payment_due_date AS DATE) <= CAST(? AS DATE) + INTERVAL '{int(days)} days')
+            OR (next_payment_due_date IS NULL AND due_day IS NOT NULL)
+        )
+        ORDER BY next_payment_due_date ASC NULLS LAST, due_day ASC
+    """, [today, today]).fetchall()
+
+    results = []
+    for r in rows:
+        results.append({
+            "id": r[0], "name": r[1], "institution": r[2], "last_four": r[3],
+            "liability_type": r[4],
+            "balance": float(r[5]) if r[5] else 0,
+            "statement_balance": float(r[6]) if r[6] else None,
+            "minimum_payment": float(r[7]) if r[7] else None,
+            "due_day": r[8],
+            "next_payment_due_date": r[9],
+            "autopay_enabled": r[10],
+        })
+    return results
+
+
+def get_payment_history_summary(conn, months: int = 6) -> dict:
+    """
+    Payment history aggregated by month for charts.
+    """
+    rows = conn.execute("""
+        SELECT
+            STRFTIME(CAST(payment_date AS DATE), '%Y-%m') AS month,
+            COUNT(*) AS payment_count,
+            SUM(amount) AS total_amount
+        FROM ap_payments
+        GROUP BY STRFTIME(CAST(payment_date AS DATE), '%Y-%m')
+        ORDER BY month DESC
+        LIMIT ?
+    """, [months]).fetchall()
+
+    return [
+        {
+            "month": r[0],
+            "count": r[1],
+            "total": round(float(r[2]), 2) if r[2] else 0,
+        }
+        for r in reversed(rows)
+    ]

@@ -1506,7 +1506,7 @@
         <button class="btn accounts-subtab" data-subtab="overview" onclick="switchAccountsSubtab('overview')" style="border-radius:0; flex:1;">Overview</button>
         <button class="btn accounts-subtab active" data-subtab="manage" onclick="switchAccountsSubtab('manage')" style="border-radius:0; border-bottom:2px solid var(--primary); flex:1;">Manage Accounts</button>
         <button class="btn accounts-subtab" data-subtab="planner" onclick="switchAccountsSubtab('planner')" style="border-radius:0; flex:1;">Payment Planner</button>
-        <button class="btn accounts-subtab" data-subtab="trends" onclick="switchAccountsSubtab('trends')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 4">History &amp; Trends</button>
+        <button class="btn accounts-subtab" data-subtab="trends" onclick="switchAccountsSubtab('trends')" style="border-radius:0; flex:1;">History &amp; Trends</button>
       </div>
     </div>
 
@@ -1782,6 +1782,151 @@
                 <tr><td colspan="7" style="text-align:center; padding:16px; color:var(--text-muted);">No payments recorded.</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- History & Trends sub-view -->
+    <div id="accounts-trends-view" style="display:none;">
+
+      <!-- Debt vs Assets Net Worth Trend -->
+      <div class="card" style="margin-bottom:16px;">
+        <div style="padding:12px 16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+          <div class="card-title" style="margin:0;">Net Worth Trend</div>
+        </div>
+        <div class="card-body">
+          <div id="trends-networth-chart" style="display:flex; align-items:flex-end; gap:2px; height:200px; padding-top:8px;"></div>
+          <div id="trends-networth-legend" style="display:flex; gap:16px; justify-content:center; margin-top:8px; font-size:12px;"></div>
+        </div>
+      </div>
+
+      <!-- Credit Utilization Breakdown -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Credit Utilization</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body">
+            <div id="trends-utilization-aggregate" style="margin-bottom:16px;"></div>
+            <div id="trends-utilization-cards" style="overflow-x:auto;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interest Cost -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Interest Cost Estimator</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body" style="overflow-x:auto;">
+            <div id="trends-interest-summary" style="margin-bottom:12px;"></div>
+            <table style="width:100%;">
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th style="text-align:right;">Balance</th>
+                  <th style="text-align:right;">APR</th>
+                  <th style="text-align:right;">Monthly Interest</th>
+                  <th style="text-align:right;">Annual Interest</th>
+                </tr>
+              </thead>
+              <tbody id="trends-interest-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Payoff Projection -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Payoff Projection</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body">
+            <div style="margin-bottom:12px;">
+              <label style="font-weight:600; margin-right:8px;">Strategy:</label>
+              <select id="trends-payoff-strategy" onchange="loadPayoffProjection()" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
+                <option value="minimum">Minimum Payment</option>
+                <option value="statement" selected>Statement Balance</option>
+                <option value="aggressive">Aggressive (2x)</option>
+              </select>
+            </div>
+            <div style="overflow-x:auto;">
+              <table style="width:100%;">
+                <thead>
+                  <tr>
+                    <th>Account</th>
+                    <th style="text-align:right;">Balance</th>
+                    <th style="text-align:right;">APR</th>
+                    <th style="text-align:right;">Monthly Payment</th>
+                    <th style="text-align:right;">Months to Payoff</th>
+                    <th style="text-align:right;">Total Interest</th>
+                    <th style="text-align:right;">Total Cost</th>
+                  </tr>
+                </thead>
+                <tbody id="trends-payoff-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Annual Fees -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Annual Fee Calendar</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body">
+            <div id="trends-fees-total" style="margin-bottom:12px;"></div>
+            <div id="trends-fees-chart" style="display:flex; align-items:flex-end; gap:4px; height:120px; margin-bottom:12px;"></div>
+            <div style="overflow-x:auto;">
+              <table style="width:100%;">
+                <thead>
+                  <tr><th>Account</th><th>Institution</th><th style="text-align:right;">Annual Fee</th><th>Month</th></tr>
+                </thead>
+                <tbody id="trends-fees-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Payment History Chart -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Payment History</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body">
+            <div id="trends-payment-chart" style="display:flex; align-items:flex-end; gap:4px; height:140px; margin-bottom:8px;"></div>
+            <div id="trends-payment-legend" style="display:flex; gap:16px; justify-content:center; font-size:12px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Account Balance History (per-account) -->
+      <div class="card">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Account Balance History</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body" style="display:none;">
+          <div class="card-body">
+            <div style="margin-bottom:12px;">
+              <select id="trends-account-select" onchange="loadAccountBalanceTrend()" style="padding:6px 10px; border:1px solid var(--border); border-radius:4px; min-width:250px;">
+                <option value="">Select an account...</option>
+              </select>
+            </div>
+            <div id="trends-account-chart" style="display:flex; align-items:flex-end; gap:2px; height:160px;"></div>
+            <div id="trends-account-labels" style="display:flex; justify-content:space-between; font-size:10px; color:var(--text-muted); margin-top:4px;"></div>
           </div>
         </div>
       </div>

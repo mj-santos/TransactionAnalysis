@@ -69,7 +69,7 @@ function _statusBadge(status) {
 
 // ── Sub-tab switching ────────────────────────────────────────────────
 function switchAccountsSubtab(tab) {
-  const validTabs = ['overview', 'manage', 'planner'];
+  const validTabs = ['overview', 'manage', 'planner', 'trends'];
   if (!validTabs.includes(tab)) return;
 
   _currentAccountsSubtab = tab;
@@ -88,12 +88,15 @@ function switchAccountsSubtab(tab) {
   const overviewView = document.getElementById('accounts-overview-view');
   const manageView = document.getElementById('accounts-manage-view');
   const plannerView = document.getElementById('accounts-planner-view');
+  const trendsView = document.getElementById('accounts-trends-view');
   if (overviewView) overviewView.style.display = tab === 'overview' ? '' : 'none';
   if (manageView) manageView.style.display = tab === 'manage' ? '' : 'none';
   if (plannerView) plannerView.style.display = tab === 'planner' ? '' : 'none';
+  if (trendsView) trendsView.style.display = tab === 'trends' ? '' : 'none';
 
   if (tab === 'overview') _loadOverviewData();
   if (tab === 'planner') _initPlanner();
+  if (tab === 'trends') _loadTrendsData();
 }
 
 // ── Add Account Modal ────────────────────────────────────────────────
@@ -918,6 +921,286 @@ function _renderPaymentHistory(payments) {
       <td style="font-size:12px; color:var(--text-muted);">${p.confirmation_ref ? esc(p.confirmation_ref) : '-'}</td>
     </tr>`;
   }).join('');
+}
+
+// ── History & Trends ────────────────────────────────────────────────
+
+async function _loadTrendsData() {
+  try {
+    const [utilization, interest, fees, paymentSummary] = await Promise.all([
+      api('GET', '/accounts/analytics/utilization'),
+      api('GET', '/accounts/analytics/interest-cost'),
+      api('GET', '/accounts/analytics/annual-fees'),
+      api('GET', '/accounts/analytics/payment-summary?months=12'),
+    ]);
+    _renderUtilization(utilization);
+    _renderInterestCost(interest);
+    _renderAnnualFees(fees);
+    _renderPaymentSummaryChart(paymentSummary);
+    _populateAccountTrendSelect();
+    loadPayoffProjection();
+    _loadNetWorthTrend();
+  } catch (e) {
+    toast('Failed to load trends data: ' + e.message, 'error');
+  }
+}
+
+async function _loadNetWorthTrend() {
+  try {
+    const data = await api('GET', '/accounts/analytics/trends/aggregate?months=24');
+    _renderNetWorthChart(data);
+  } catch (e) {
+    // Silently degrade — no snapshots yet
+    const el = document.getElementById('trends-networth-chart');
+    if (el) el.innerHTML = '<span style="color:var(--text-muted); font-size:13px; padding:20px;">No snapshot data yet. Update balances to generate snapshots.</span>';
+  }
+}
+
+function _renderNetWorthChart(data) {
+  const el = document.getElementById('trends-networth-chart');
+  const legendEl = document.getElementById('trends-networth-legend');
+  if (!el) return;
+
+  if (!data.length) {
+    el.innerHTML = '<span style="color:var(--text-muted); font-size:13px; padding:20px;">No snapshot data yet. Update balances to generate snapshots.</span>';
+    if (legendEl) legendEl.innerHTML = '';
+    return;
+  }
+
+  const chartH = 180;
+  const maxVal = Math.max(...data.flatMap(d => [d.total_assets, d.total_liabilities]), 1);
+
+  el.innerHTML = data.map(d => {
+    const assH = Math.max(Math.round(d.total_assets / maxVal * chartH), 2);
+    const liabH = Math.max(Math.round(d.total_liabilities / maxVal * chartH), 2);
+    const label = d.date ? String(d.date).slice(0, 7) : '?';
+    return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; min-width:24px;" title="${label}\nAssets: ${_fmt(d.total_assets)}\nLiabilities: ${_fmt(d.total_liabilities)}\nNet: ${_fmt(d.net_worth)}">
+      <div style="display:flex; gap:1px; align-items:flex-end; height:${chartH}px;">
+        <div style="width:10px; height:${assH}px; background:#22c55e; border-radius:2px 2px 0 0;"></div>
+        <div style="width:10px; height:${liabH}px; background:#ef4444; border-radius:2px 2px 0 0;"></div>
+      </div>
+      <div style="font-size:9px; color:var(--text-muted); margin-top:2px; white-space:nowrap;">${label.slice(5)}</div>
+    </div>`;
+  }).join('');
+
+  if (legendEl) {
+    legendEl.innerHTML = `
+      <span><span style="display:inline-block; width:10px; height:10px; border-radius:2px; background:#22c55e; vertical-align:middle; margin-right:4px;"></span> Assets</span>
+      <span><span style="display:inline-block; width:10px; height:10px; border-radius:2px; background:#ef4444; vertical-align:middle; margin-right:4px;"></span> Liabilities</span>
+    `;
+  }
+}
+
+function _renderUtilization(data) {
+  const aggEl = document.getElementById('trends-utilization-aggregate');
+  const cardsEl = document.getElementById('trends-utilization-cards');
+  if (!aggEl) return;
+
+  const agg = data.aggregate;
+  const pct = agg.utilization_pct;
+  const barColor = pct > 80 ? 'var(--danger)' : pct > 30 ? 'var(--warning, #f59e0b)' : 'var(--primary)';
+
+  aggEl.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+      <span style="font-weight:700; font-size:16px;">Aggregate: ${pct}%</span>
+      <span style="color:var(--text-muted); font-size:13px;">${_fmt(agg.total_balance)} / ${_fmt(agg.total_limit)} &mdash; ${_fmt(agg.available_credit)} available</span>
+    </div>
+    <div style="background:var(--bg-secondary); border-radius:6px; height:12px; overflow:hidden;">
+      <div style="width:${Math.min(pct, 100)}%; height:100%; background:${barColor}; border-radius:6px; transition:width 0.3s;"></div>
+    </div>
+    ${pct > 30 ? '<div style="color:var(--danger); font-size:12px; margin-top:4px;">Above 30% FICO threshold</div>' : '<div style="color:var(--success); font-size:12px; margin-top:4px;">Below 30% FICO threshold</div>'}
+  `;
+
+  if (!data.cards.length) {
+    cardsEl.innerHTML = '<p style="color:var(--text-muted);">No credit cards with limits found.</p>';
+    return;
+  }
+
+  cardsEl.innerHTML = `<table style="width:100%;">
+    <thead><tr>
+      <th>Card</th><th>Institution</th>
+      <th style="text-align:right;">Balance</th>
+      <th style="text-align:right;">Limit</th>
+      <th style="text-align:right;">Utilization</th>
+      <th style="text-align:right;">Available</th>
+      <th style="width:120px;">Bar</th>
+    </tr></thead>
+    <tbody>${data.cards.map(c => {
+      const u = c.utilization_pct;
+      const bc = u > 80 ? 'var(--danger)' : u > 30 ? 'var(--warning, #f59e0b)' : 'var(--primary)';
+      return `<tr>
+        <td>${esc(c.name)}${c.last_four ? ` <span style="color:var(--text-muted);">(${esc(c.last_four)})</span>` : ''}</td>
+        <td>${esc(c.institution || '-')}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(c.balance)}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(c.credit_limit)}</td>
+        <td style="text-align:right; font-weight:600; color:${bc};">${u}%</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(c.available_credit)}</td>
+        <td><div style="background:var(--bg-secondary); border-radius:4px; height:6px;"><div style="width:${Math.min(u, 100)}%; height:100%; background:${bc}; border-radius:4px;"></div></div></td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+function _renderInterestCost(data) {
+  const summaryEl = document.getElementById('trends-interest-summary');
+  const tbody = document.getElementById('trends-interest-body');
+  if (!summaryEl) return;
+
+  summaryEl.innerHTML = `
+    <div style="display:flex; gap:24px; flex-wrap:wrap;">
+      <div><span style="color:var(--text-muted); font-size:12px; text-transform:uppercase;">Monthly Interest</span><div style="font-size:20px; font-weight:700; color:var(--danger);">${_fmt(data.total_monthly_interest)}</div></div>
+      <div><span style="color:var(--text-muted); font-size:12px; text-transform:uppercase;">Annual Interest</span><div style="font-size:20px; font-weight:700; color:var(--danger);">${_fmt(data.total_annual_interest)}</div></div>
+    </div>
+  `;
+
+  if (!data.accounts.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">No accounts with interest rates.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = data.accounts.map(a => `<tr>
+    <td>${esc(a.name)}${a.last_four ? ` <span style="color:var(--text-muted);">(${esc(a.last_four)})</span>` : ''}</td>
+    <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.balance)}</td>
+    <td style="text-align:right;">${a.apr}%</td>
+    <td style="text-align:right; font-variant-numeric:tabular-nums; color:var(--danger);">${_fmt(a.monthly_interest)}</td>
+    <td style="text-align:right; font-variant-numeric:tabular-nums; color:var(--danger);">${_fmt(a.annual_interest)}</td>
+  </tr>`).join('');
+}
+
+async function loadPayoffProjection() {
+  const strategy = document.getElementById('trends-payoff-strategy')?.value || 'statement';
+  try {
+    const data = await api('GET', `/accounts/analytics/payoff-projection?strategy=${strategy}`);
+    _renderPayoffProjection(data);
+  } catch (e) {
+    toast('Failed to load payoff projection: ' + e.message, 'error');
+  }
+}
+
+function _renderPayoffProjection(data) {
+  const tbody = document.getElementById('trends-payoff-body');
+  if (!tbody) return;
+
+  if (!data.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No liabilities with balances.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = data.map(a => {
+    const monthsLabel = a.months_to_payoff != null ? `${a.months_to_payoff} mo` : '<span style="color:var(--danger);">Never</span>';
+    return `<tr>
+      <td>${esc(a.name)}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.balance)}</td>
+      <td style="text-align:right;">${a.apr}%</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.monthly_payment)}</td>
+      <td style="text-align:right; font-weight:600;">${monthsLabel}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums; color:var(--danger);">${_fmt(a.total_interest)}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.total_cost)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _renderAnnualFees(data) {
+  const totalEl = document.getElementById('trends-fees-total');
+  const chartEl = document.getElementById('trends-fees-chart');
+  const tbody = document.getElementById('trends-fees-body');
+  if (!totalEl) return;
+
+  totalEl.innerHTML = `<span style="font-size:18px; font-weight:700;">Total Annual Fees: ${_fmt(data.total_annual_fees)}</span>`;
+
+  // Bar chart by month
+  const maxMonthly = Math.max(...data.by_month.map(m => m.total), 1);
+  const chartH = 100;
+  chartEl.innerHTML = data.by_month.map(m => {
+    const h = m.total > 0 ? Math.max(Math.round(m.total / maxMonthly * chartH), 4) : 0;
+    return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; min-width:24px;" title="${m.month_name}: ${_fmt(m.total)} (${m.count} card${m.count !== 1 ? 's' : ''})">
+      <div style="width:80%; height:${h}px; background:${m.total > 0 ? 'var(--primary)' : 'transparent'}; border-radius:2px 2px 0 0; margin-top:auto;"></div>
+      <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">${m.month_name.slice(0, 3)}</div>
+    </div>`;
+  }).join('');
+
+  if (!data.accounts.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">No accounts with annual fees.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.accounts.map(a => `<tr>
+    <td>${esc(a.name)}${a.last_four ? ` <span style="color:var(--text-muted);">(${esc(a.last_four)})</span>` : ''}</td>
+    <td>${esc(a.institution || '-')}</td>
+    <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.annual_fee)}</td>
+    <td>${a.fee_month_name}</td>
+  </tr>`).join('');
+}
+
+function _renderPaymentSummaryChart(data) {
+  const el = document.getElementById('trends-payment-chart');
+  const legendEl = document.getElementById('trends-payment-legend');
+  if (!el) return;
+
+  if (!data.length) {
+    el.innerHTML = '<span style="color:var(--text-muted); font-size:13px; padding:20px;">No payment data yet.</span>';
+    if (legendEl) legendEl.innerHTML = '';
+    return;
+  }
+
+  const chartH = 120;
+  const maxVal = Math.max(...data.map(d => d.total), 1);
+
+  el.innerHTML = data.map(d => {
+    const h = Math.max(Math.round(d.total / maxVal * chartH), 4);
+    return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; min-width:30px;" title="${d.month}: ${_fmt(d.total)} (${d.count} payments)">
+      <div style="font-size:10px; color:var(--text-muted); margin-bottom:2px;">${_fmt(d.total)}</div>
+      <div style="width:70%; height:${h}px; background:var(--primary); border-radius:2px 2px 0 0; margin-top:auto;"></div>
+      <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">${d.month.slice(5)}</div>
+    </div>`;
+  }).join('');
+
+  if (legendEl) {
+    const totalAll = data.reduce((s, d) => s + d.total, 0);
+    legendEl.innerHTML = `<span style="color:var(--text-muted);">Total: ${_fmt(totalAll)} across ${data.reduce((s, d) => s + d.count, 0)} payments</span>`;
+  }
+}
+
+function _populateAccountTrendSelect() {
+  const sel = document.getElementById('trends-account-select');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">Select an account...</option>' +
+    _accountsCache.map(a => `<option value="${a.id}">${esc(a.name)} (${a.account_class})</option>`).join('');
+  if (current) sel.value = current;
+}
+
+async function loadAccountBalanceTrend() {
+  const acctId = document.getElementById('trends-account-select')?.value;
+  const chartEl = document.getElementById('trends-account-chart');
+  const labelsEl = document.getElementById('trends-account-labels');
+  if (!acctId || !chartEl) return;
+
+  try {
+    const data = await api('GET', `/accounts/analytics/trends/${acctId}?limit=24`);
+    if (!data.length) {
+      chartEl.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No balance history for this account.</span>';
+      if (labelsEl) labelsEl.innerHTML = '';
+      return;
+    }
+
+    const chartH = 140;
+    const balances = data.map(d => Math.abs(d.balance));
+    const maxVal = Math.max(...balances, 1);
+
+    chartEl.innerHTML = data.map(d => {
+      const bal = Math.abs(d.balance);
+      const h = Math.max(Math.round(bal / maxVal * chartH), 2);
+      return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; min-width:12px;" title="${d.date}: ${_fmt(d.balance)}">
+        <div style="width:80%; height:${h}px; background:var(--primary); border-radius:2px 2px 0 0; margin-top:auto;"></div>
+      </div>`;
+    }).join('');
+
+    if (labelsEl && data.length > 0) {
+      labelsEl.innerHTML = `<span>${data[0].date}</span><span>${data[data.length - 1].date}</span>`;
+    }
+  } catch (e) {
+    chartEl.innerHTML = '<span style="color:var(--text-muted);">Failed to load trend.</span>';
+  }
 }
 
 // ── Bulk Balance Update ─────────────────────────────────────────────

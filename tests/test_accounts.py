@@ -1,4 +1,4 @@
-"""Tests for the Accounts & Liabilities module — Phase 1, 2 & 3."""
+"""Tests for the Accounts & Liabilities module — Phases 1–4."""
 from __future__ import annotations
 
 import tempfile
@@ -7,6 +7,17 @@ from pathlib import Path
 import pytest
 
 from finance_etl.db import get_connection
+from finance_etl.accounts.analytics import (
+    get_aggregate_debt_trend,
+    get_annual_fees,
+    get_balance_trends,
+    get_benefits_value,
+    get_interest_cost,
+    get_payoff_projection,
+    get_payment_history_summary,
+    get_upcoming_due,
+    get_utilization_breakdown,
+)
 from finance_etl.accounts.balance_ops import (
     bulk_balance_update,
     generate_snapshot,
@@ -770,3 +781,203 @@ class TestPaymentHistory:
         history = get_payment_history(conn, account_id=cc["id"])
         assert len(history) == 1
         assert history[0]["to_account_id"] == cc["id"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 4: Analytics & Trends
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestUtilizationBreakdown:
+    def test_empty_db(self, conn):
+        result = get_utilization_breakdown(conn)
+        assert result["cards"] == []
+        assert result["aggregate"]["utilization_pct"] == 0
+
+    def test_single_card(self, conn):
+        create_account(conn, AccountCreate(
+            name="CC", account_class="liability", liability_type="credit_card",
+            balance=2000, credit_limit=10000,
+        ))
+        result = get_utilization_breakdown(conn)
+        assert len(result["cards"]) == 1
+        assert result["cards"][0]["utilization_pct"] == 20.0
+        assert result["aggregate"]["utilization_pct"] == 20.0
+        assert result["aggregate"]["available_credit"] == 8000.0
+
+    def test_multiple_cards(self, conn):
+        create_account(conn, AccountCreate(name="CC1", account_class="liability", liability_type="credit_card", balance=3000, credit_limit=10000))
+        create_account(conn, AccountCreate(name="CC2", account_class="liability", liability_type="credit_card", balance=7000, credit_limit=10000))
+        result = get_utilization_breakdown(conn)
+        assert len(result["cards"]) == 2
+        assert result["aggregate"]["utilization_pct"] == 50.0
+
+    def test_excludes_closed(self, conn):
+        cc = create_account(conn, AccountCreate(name="CC", account_class="liability", liability_type="credit_card", balance=5000, credit_limit=10000))
+        soft_delete_account(conn, cc["id"], "closed")
+        result = get_utilization_breakdown(conn)
+        assert len(result["cards"]) == 0
+
+
+class TestInterestCost:
+    def test_empty_db(self, conn):
+        result = get_interest_cost(conn)
+        assert result["accounts"] == []
+        assert result["total_monthly_interest"] == 0
+
+    def test_with_apr(self, conn):
+        create_account(conn, AccountCreate(
+            name="CC", account_class="liability", liability_type="credit_card",
+            balance=12000, interest_rate=24,
+        ))
+        result = get_interest_cost(conn)
+        assert len(result["accounts"]) == 1
+        # 12000 * 24% / 12 = 240
+        assert result["total_monthly_interest"] == 240.0
+        assert result["total_annual_interest"] == 2880.0
+
+    def test_excludes_zero_rate(self, conn):
+        create_account(conn, AccountCreate(name="CC", account_class="liability", liability_type="credit_card", balance=5000))
+        result = get_interest_cost(conn)
+        assert len(result["accounts"]) == 0
+
+
+class TestPayoffProjection:
+    def test_empty_db(self, conn):
+        result = get_payoff_projection(conn, "minimum")
+        assert result == []
+
+    def test_zero_interest_payoff(self, conn):
+        create_account(conn, AccountCreate(
+            name="Loan", account_class="liability", liability_type="personal_debt",
+            balance=1000, minimum_payment_amount=None,
+        ))
+        # With 0 APR and no min payment, pays off in 1 month
+        result = get_payoff_projection(conn, "minimum")
+        assert len(result) == 1
+        assert result[0]["months_to_payoff"] == 1
+        assert result[0]["total_interest"] == 0
+
+    def test_with_interest(self, conn):
+        create_account(conn, AccountCreate(
+            name="CC", account_class="liability", liability_type="credit_card",
+            balance=1000, interest_rate=24,
+        ))
+        conn.execute("UPDATE nw_accounts SET minimum_payment_amount = 50 WHERE name = 'CC'")
+        result = get_payoff_projection(conn, "minimum")
+        assert len(result) == 1
+        assert result[0]["months_to_payoff"] is not None
+        assert result[0]["months_to_payoff"] > 12  # Takes more than a year with min payment
+        assert result[0]["total_interest"] > 0
+
+    def test_strategies(self, conn):
+        create_account(conn, AccountCreate(
+            name="CC", account_class="liability", liability_type="credit_card",
+            balance=5000, interest_rate=20, credit_limit=10000,
+        ))
+        conn.execute("UPDATE nw_accounts SET minimum_payment_amount = 100, last_statement_balance = 5000 WHERE name = 'CC'")
+        min_result = get_payoff_projection(conn, "minimum")
+        stmt_result = get_payoff_projection(conn, "statement")
+        agg_result = get_payoff_projection(conn, "aggressive")
+        # Statement pays more than minimum, aggressive even more
+        assert min_result[0]["monthly_payment"] < stmt_result[0]["monthly_payment"]
+        assert stmt_result[0]["monthly_payment"] <= agg_result[0]["monthly_payment"]
+
+
+class TestAnnualFees:
+    def test_empty_db(self, conn):
+        result = get_annual_fees(conn)
+        assert result["accounts"] == []
+        assert result["total_annual_fees"] == 0
+
+    def test_with_fees(self, conn):
+        create_account(conn, AccountCreate(
+            name="Amex Gold", account_class="liability", liability_type="credit_card",
+            balance=0, annual_fee=250, annual_fee_month=3,
+        ))
+        create_account(conn, AccountCreate(
+            name="CSP", account_class="liability", liability_type="credit_card",
+            balance=0, annual_fee=95, annual_fee_month=9,
+        ))
+        result = get_annual_fees(conn)
+        assert len(result["accounts"]) == 2
+        assert result["total_annual_fees"] == 345.0
+        # Check by_month: March has 250, September has 95
+        assert result["by_month"][2]["total"] == 250.0  # March (index 2)
+        assert result["by_month"][8]["total"] == 95.0   # September (index 8)
+
+
+class TestBenefitsValue:
+    def test_empty_db(self, conn):
+        result = get_benefits_value(conn)
+        assert result["accounts"] == []
+        assert result["total_benefit_value"] == 0
+
+    def test_with_benefits(self, conn):
+        cc = create_account(conn, AccountCreate(
+            name="Amex Gold", account_class="liability", liability_type="credit_card",
+            balance=0, annual_fee=250, annual_fee_month=3,
+        ))
+        conn.execute(
+            "INSERT INTO ap_card_benefits (account_id, benefit_name, benefit_type, amount, frequency, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [cc["id"], "Dining Credit", "credit", 10, "monthly", "2026-01-01"],
+        )
+        conn.execute(
+            "INSERT INTO ap_card_benefits (account_id, benefit_name, benefit_type, amount, frequency, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [cc["id"], "Uber Credit", "credit", 10, "monthly", "2026-01-01"],
+        )
+        result = get_benefits_value(conn)
+        assert len(result["accounts"]) == 1
+        # 10/mo * 12 = 120 each, 240 total
+        assert result["total_benefit_value"] == 240.0
+        assert result["total_annual_fees"] == 250.0
+        assert result["aggregate_roi"] == 0.96
+
+
+class TestBalanceTrends:
+    def test_empty_history(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        trends = get_balance_trends(conn, cc["id"])
+        # Should have at least the initial ledger entry from create_account
+        assert len(trends) >= 1
+
+    def test_multiple_entries(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        bulk_balance_update(conn, [{"account_id": cc["id"], "current_balance": 1200}])
+        bulk_balance_update(conn, [{"account_id": cc["id"], "current_balance": 900}])
+        trends = get_balance_trends(conn, cc["id"])
+        assert len(trends) >= 3
+        # Chronological order
+        assert trends[-1]["balance"] == 900.0
+
+
+class TestAggregateTrend:
+    def test_empty_snapshots(self, conn):
+        result = get_aggregate_debt_trend(conn)
+        assert result == []
+
+    def test_with_snapshots(self, conn):
+        create_account(conn, AccountCreate(name="A", account_class="asset", asset_type="checking", balance=10000))
+        create_account(conn, AccountCreate(name="CC", account_class="liability", liability_type="credit_card", balance=3000))
+        generate_snapshot(conn)
+        result = get_aggregate_debt_trend(conn)
+        assert len(result) == 1
+        assert result[0]["total_assets"] == 10000.0
+        assert result[0]["total_liabilities"] == 3000.0
+        assert result[0]["net_worth"] == 7000.0
+
+
+class TestPaymentHistorySummary:
+    def test_empty(self, conn):
+        result = get_payment_history_summary(conn)
+        assert result == []
+
+    def test_with_payments(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        record_payment(conn, {"from_account_id": checking["id"], "to_account_id": cc["id"], "payment_date": "2026-03-01", "amount": 500})
+        record_payment(conn, {"from_account_id": checking["id"], "to_account_id": cc["id"], "payment_date": "2026-03-15", "amount": 300})
+        result = get_payment_history_summary(conn)
+        assert len(result) == 1
+        assert result[0]["month"] == "2026-03"
+        assert result[0]["count"] == 2
+        assert result[0]["total"] == 800.0
