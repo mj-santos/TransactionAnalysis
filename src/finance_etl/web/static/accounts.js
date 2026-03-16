@@ -27,7 +27,7 @@ function _renderAccountsTable(accounts) {
   // Reset select-all checkbox
   const selectAll = document.getElementById('accounts-select-all');
   if (selectAll) selectAll.checked = false;
-  _updateBulkBar();
+  _updateAcctBulkBar();
 
   if (!accounts.length) {
     tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:32px; color:var(--text-muted);">No accounts yet. Click "+ Add New Account" to get started.</td></tr>';
@@ -39,7 +39,7 @@ function _renderAccountsTable(accounts) {
     const statusBadge = _statusBadge(a.status || 'active');
     const updatedAt = a.updated_at ? new Date(a.updated_at).toLocaleDateString() : '-';
     return `<tr>
-      <td><input type="checkbox" class="acct-select-cb" data-account-id="${a.id}" onchange="_updateBulkBar()" /></td>
+      <td><input type="checkbox" class="acct-select-cb" data-account-id="${a.id}" onchange="_updateAcctBulkBar()" /></td>
       <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
       <td>${esc(a.institution || '-')}</td>
       <td>${typeLabel}</td>
@@ -514,7 +514,7 @@ function _getSelectedAccountIds() {
     .map(cb => parseInt(cb.dataset.accountId));
 }
 
-function _updateBulkBar() {
+function _updateAcctBulkBar() {
   const ids = _getSelectedAccountIds();
   const bar = document.getElementById('accounts-bulk-bar');
   const countEl = document.getElementById('accounts-bulk-count');
@@ -529,14 +529,14 @@ function _updateBulkBar() {
 
 function _toggleSelectAllAccounts(checked) {
   document.querySelectorAll('.acct-select-cb').forEach(cb => { cb.checked = checked; });
-  _updateBulkBar();
+  _updateAcctBulkBar();
 }
 
 function _clearAccountSelection() {
   const selectAll = document.getElementById('accounts-select-all');
   if (selectAll) selectAll.checked = false;
   document.querySelectorAll('.acct-select-cb').forEach(cb => { cb.checked = false; });
-  _updateBulkBar();
+  _updateAcctBulkBar();
 }
 
 async function _bulkCloseAccounts() {
