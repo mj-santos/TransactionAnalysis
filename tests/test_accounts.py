@@ -1,12 +1,21 @@
-"""Tests for the Accounts & Liabilities module — Phases 1–5."""
+"""Tests for the Accounts & Liabilities module — Phases 1–6."""
 from __future__ import annotations
 
+import csv
+import io
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from finance_etl.db import get_connection
+from finance_etl.accounts.import_wizard import (
+    _parse_number,
+    commit_import,
+    infer_account_type,
+    preview_import,
+    suggest_account_mappings,
+)
 from finance_etl.accounts.cross_module import (
     annual_fee_cross_reference,
     get_utilization_alerts,
@@ -1199,3 +1208,243 @@ class TestAnnualFeeXref:
         assert len(result) == 1
         assert result[0]["status"] == "matched"
         assert result[0]["detected_fee"] == 250.0
+
+
+# ── Import Wizard (Phase 6) ──────────────────────────────────────────
+
+
+class TestParseNumber:
+    def test_simple_integer(self):
+        assert _parse_number("100") == 100.0
+
+    def test_currency_symbol(self):
+        assert _parse_number("$1,234.56") == 1234.56
+
+    def test_negative_parentheses(self):
+        assert _parse_number("($500.00)") == -500.0
+
+    def test_euro_symbol(self):
+        assert _parse_number("\u20ac99.99") == 99.99
+
+    def test_none_input(self):
+        assert _parse_number(None) is None
+
+    def test_empty_string(self):
+        assert _parse_number("") is None
+
+    def test_non_numeric(self):
+        assert _parse_number("N/A") is None
+
+
+class TestInferAccountType:
+    def test_mortgage(self):
+        assert infer_account_type("5390 Mortgage FlagStar") == ("liability", "mortgage")
+
+    def test_auto_loan(self):
+        assert infer_account_type("Ascent - Subaru") == ("liability", "auto_loan")
+
+    def test_student_loan(self):
+        assert infer_account_type("School-Loans-Day") == ("liability", "student_loan")
+
+    def test_utility(self):
+        assert infer_account_type("We-Energies") == ("liability", "utility")
+
+    def test_checking(self):
+        assert infer_account_type("Chase Checking", "asset") == ("asset", "checking")
+
+    def test_savings(self):
+        assert infer_account_type("SoFi Savings", "asset") == ("asset", "savings")
+
+    def test_investment(self):
+        assert infer_account_type("Day-Investment", "asset") == ("asset", "investment")
+
+    def test_digital_wallet(self):
+        assert infer_account_type("PayPal Balance", "asset") == ("asset", "digital_wallet")
+
+    def test_default_liability(self):
+        assert infer_account_type("Chase Freedom 4428") == ("liability", "credit_card")
+
+    def test_default_asset(self):
+        assert infer_account_type("My Account", "asset") == ("asset", "checking")
+
+
+class TestSuggestMappings:
+    def test_liability_auto_match(self):
+        headers = ["Account", "Current Balance", "Statement Balance", "Due Date", "APR"]
+        result = suggest_account_mappings(headers, "liability")
+        assert result["account_name"] == "Account"
+        assert result["current_balance"] == "Current Balance"
+        assert result["statement_balance"] == "Statement Balance"
+        assert result["due_date"] == "Due Date"
+        assert result["interest_rate"] == "APR"
+
+    def test_asset_auto_match(self):
+        headers = ["Bank Name", "Balance", "Account Type"]
+        result = suggest_account_mappings(headers, "asset")
+        assert result["account_name"] == "Bank Name"
+        assert result["current_balance"] == "Balance"
+        assert result["account_type"] == "Account Type"
+
+    def test_no_match_returns_none(self):
+        headers = ["Column1", "Column2", "Column3"]
+        result = suggest_account_mappings(headers, "liability")
+        # At minimum, required fields should be None
+        assert result["account_name"] is None
+        assert result["current_balance"] is None
+
+    def test_headers_not_reused(self):
+        # "Balance" should only match one field, not two
+        headers = ["Account", "Balance"]
+        result = suggest_account_mappings(headers, "liability")
+        matched_headers = [v for v in result.values() if v is not None]
+        assert len(matched_headers) == len(set(matched_headers))
+
+
+class TestPreviewImport:
+    def test_basic_preview(self, conn):
+        headers = ["Name", "Balance", "Limit"]
+        rows = [
+            ["Chase Freedom 4428", "$3,015.41", "$12,500"],
+            ["5390 Mortgage FlagStar", "$1,317.00", ""],
+        ]
+        mapping = {
+            "account_name": "Name",
+            "current_balance": "Balance",
+            "credit_limit": "Limit",
+        }
+        result = preview_import(rows, headers, mapping, "liability", conn)
+        assert result["total"] == 2
+        accts = result["accounts"]
+        assert accts[0]["account_name"] == "Chase Freedom 4428"
+        assert accts[0]["current_balance"] == 3015.41
+        assert accts[0]["credit_limit"] == 12500.0
+        assert accts[0]["inferred_type"] == "credit_card"
+        assert accts[1]["inferred_type"] == "mortgage"
+
+    def test_duplicate_detection(self, conn):
+        create_account(conn, AccountCreate(
+            name="Chase Freedom 4428", account_class="liability",
+            liability_type="credit_card", balance=3000,
+        ))
+        headers = ["Name", "Balance"]
+        rows = [["Chase Freedom 4428", "$3,100"]]
+        mapping = {"account_name": "Name", "current_balance": "Balance"}
+        result = preview_import(rows, headers, mapping, "liability", conn)
+        assert result["duplicates"] == 1
+        assert result["accounts"][0]["is_duplicate"] is True
+
+    def test_skips_empty_name_rows(self, conn):
+        headers = ["Name", "Balance"]
+        rows = [["", "$100"], ["Amex Gold", "$500"]]
+        mapping = {"account_name": "Name", "current_balance": "Balance"}
+        result = preview_import(rows, headers, mapping, "liability", conn)
+        assert result["total"] == 1
+
+
+class TestCommitImport:
+    def test_create_accounts(self, conn):
+        accounts = [
+            {
+                "account_name": "Chase Freedom 4428",
+                "current_balance": 3015.41,
+                "account_class": "liability",
+                "inferred_type": "credit_card",
+                "credit_limit": 12500,
+                "interest_rate": 24.99,
+                "institution": "Chase",
+            },
+            {
+                "account_name": "SoFi Checking",
+                "current_balance": 5000,
+                "account_class": "asset",
+                "inferred_type": "checking",
+            },
+        ]
+        result = commit_import(conn, accounts, "skip")
+        assert result["created"] == 2
+        assert result["skipped"] == 0
+        all_accts = list_accounts(conn)
+        names = [a["name"] for a in all_accts]
+        assert "Chase Freedom 4428" in names
+        assert "SoFi Checking" in names
+
+    def test_skip_duplicates(self, conn):
+        create_account(conn, AccountCreate(
+            name="Chase Freedom", account_class="liability",
+            liability_type="credit_card", balance=1000,
+        ))
+        accounts = [{"account_name": "Chase Freedom", "current_balance": 2000,
+                      "account_class": "liability", "inferred_type": "credit_card"}]
+        result = commit_import(conn, accounts, "skip")
+        assert result["skipped"] == 1
+        assert result["created"] == 0
+
+    def test_update_duplicates(self, conn):
+        acct = create_account(conn, AccountCreate(
+            name="Chase Freedom", account_class="liability",
+            liability_type="credit_card", balance=1000,
+        ))
+        accounts = [{
+            "account_name": "Chase Freedom", "current_balance": 2000,
+            "account_class": "liability", "inferred_type": "credit_card",
+            "credit_limit": 15000,
+        }]
+        result = commit_import(conn, accounts, "update")
+        assert result["updated"] == 1
+        updated = get_account(conn, acct["id"])
+        assert float(updated["balance"]) == 2000.0
+        assert float(updated["credit_limit"]) == 15000.0
+
+    def test_create_even_with_duplicate_name(self, conn):
+        create_account(conn, AccountCreate(
+            name="Chase Freedom", account_class="liability",
+            liability_type="credit_card", balance=1000,
+        ))
+        accounts = [{"account_name": "Chase Freedom", "current_balance": 2000,
+                      "account_class": "liability", "inferred_type": "credit_card"}]
+        result = commit_import(conn, accounts, "create")
+        assert result["created"] == 1
+
+    def test_due_date_parsing(self, conn):
+        accounts = [{
+            "account_name": "Test Card", "current_balance": 100,
+            "account_class": "liability", "inferred_type": "credit_card",
+            "due_date": "15",
+        }]
+        result = commit_import(conn, accounts, "skip")
+        assert result["created"] == 1
+        all_accts = list_accounts(conn)
+        test_acct = [a for a in all_accts if a["name"] == "Test Card"][0]
+        assert test_acct["due_day"] == 15
+
+
+class TestAccountLinking:
+    """Phase 6c: Account linking for transaction tab integration."""
+
+    def test_update_linked_account(self, conn):
+        cc = create_account(conn, AccountCreate(
+            name="Chase Freedom", account_class="liability",
+            liability_type="credit_card", balance=3000,
+        ))
+        update_account(conn, cc["id"], AccountUpdate(
+            linked_account_id="cc-4428",
+            linked_bank_name="Chase",
+        ))
+        updated = get_account(conn, cc["id"])
+        assert updated["linked_account_id"] == "cc-4428"
+        assert updated["linked_bank_name"] == "Chase"
+
+    def test_balance_card_data(self, conn):
+        """Test that account detail returns all fields needed for balance card."""
+        cc = create_account(conn, AccountCreate(
+            name="Chase Freedom", account_class="liability",
+            liability_type="credit_card", balance=3015.41,
+            credit_limit=12500, interest_rate=24.99,
+            statement_balance=2800,
+        ))
+        acct = get_account(conn, cc["id"])
+        assert acct["name"] == "Chase Freedom"
+        assert float(acct["balance"]) == 3015.41
+        assert float(acct["credit_limit"]) == 12500
+        assert acct["data_source"] == "manual"
+        assert acct["last_verified_at"] is not None

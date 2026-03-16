@@ -38,8 +38,19 @@ from .payment_plan import (
     rollforward_plan,
     upsert_plan_assignment,
 )
+from .import_wizard import (
+    commit_import,
+    detect_file,
+    infer_account_type,
+    preview_import,
+    read_csv_rows,
+    read_xlsx_sheet,
+    suggest_account_mappings,
+)
 from .cross_module import (
     annual_fee_cross_reference,
+    get_balance_card_data,
+    get_linkable_sources,
     get_utilization_alerts,
     spending_vs_statement,
     suggested_liabilities,
@@ -403,6 +414,73 @@ def route_payment_summary(months: int = Query(6, ge=1, le=24)):
         conn.close()
 
 
+# ── Import Wizard ─────────────────────────────────────────────────────
+
+@router.post("/import/detect", summary="Upload CSV/XLSX and detect file structure")
+def route_import_detect(file_path: str = Query(...)):
+    try:
+        return detect_file(file_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/import/suggest-mappings", summary="Suggest column mappings for a section")
+def route_import_suggest(
+    headers: list[str] = Query(...),
+    section_type: str = Query("liability", pattern="^(liability|asset)$"),
+):
+    return suggest_account_mappings(headers, section_type)
+
+
+@router.post("/import/preview", summary="Preview import before committing")
+def route_import_preview(payload: dict):
+    """
+    Expects: { rows, headers, mapping, section_type, file_path?, start_row?, end_row?, sheet_name? }
+    If file_path is provided with start_row/end_row or sheet_name, reads rows from file.
+    Otherwise uses rows/headers from the payload directly.
+    """
+    conn = _get_conn()
+    try:
+        file_path = payload.get("file_path")
+        headers = payload.get("headers", [])
+        rows = payload.get("rows", [])
+
+        if file_path and payload.get("sheet_name"):
+            headers, rows = read_xlsx_sheet(file_path, payload["sheet_name"])
+        elif file_path and payload.get("start_row") is not None:
+            headers, rows = read_csv_rows(
+                file_path,
+                payload.get("start_row"),
+                payload.get("end_row"),
+            )
+
+        mapping = payload.get("mapping", {})
+        section_type = payload.get("section_type", "liability")
+
+        return preview_import(rows, headers, mapping, section_type, conn)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
+@router.post("/import/commit", summary="Commit the import")
+def route_import_commit(payload: dict):
+    """
+    Expects: { accounts: [...], duplicate_action: 'skip'|'update'|'create' }
+    """
+    conn = _get_conn()
+    try:
+        accounts = payload.get("accounts", [])
+        duplicate_action = payload.get("duplicate_action", "skip")
+        result = commit_import(conn, accounts, duplicate_action)
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
 # ── Cross-Module Integration ──────────────────────────────────────────
 
 @router.get("/integration/spending-vs-statement/{account_id}/{cycle_label}",
@@ -454,6 +532,32 @@ def route_annual_fee_xref():
     conn = _get_conn()
     try:
         return annual_fee_cross_reference(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/integration/balance-card",
+            summary="Balance card data for a linked transaction account")
+def route_balance_card(
+    linked_account_id: str = Query(...),
+    linked_bank_name: Optional[str] = Query(None),
+):
+    conn = _get_conn()
+    try:
+        data = get_balance_card_data(conn, linked_account_id, linked_bank_name)
+        if not data:
+            raise HTTPException(status_code=404, detail="No linked account found")
+        return data
+    finally:
+        conn.close()
+
+
+@router.get("/integration/linkable-sources",
+            summary="Transaction sources available for account linking")
+def route_linkable_sources():
+    conn = _get_conn()
+    try:
+        return get_linkable_sources(conn)
     finally:
         conn.close()
 

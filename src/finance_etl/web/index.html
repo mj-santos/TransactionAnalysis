@@ -434,6 +434,8 @@
 
   <!-- ─── CREDIT CARDS PAGE ─── -->
   <section id="page-credit-cards" class="page">
+    <!-- Balance Card (populated from Accounts module when a linked account exists) -->
+    <div id="cc-balance-card" style="display:none; margin-bottom:14px;"></div>
     <!-- Filter controls (shared pattern with Reports tab) -->
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
@@ -585,6 +587,8 @@
 
   <!-- ─── BANK TRANSACTIONS PAGE ─── -->
   <section id="page-bank-transactions" class="page">
+    <!-- Balance Card (populated from Accounts module when a linked account exists) -->
+    <div id="bk-balance-card" style="display:none; margin-bottom:14px;"></div>
     <!-- Filter controls -->
     <div class="card" style="margin-bottom:14px;">
       <div class="card-title" style="margin-bottom:10px;">Filters</div>
@@ -1619,7 +1623,10 @@
     <div id="accounts-manage-view">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
         <h3 style="margin:0;">Accounts</h3>
-        <button class="btn btn-primary" onclick="openAddAccountModal()">+ Add New Account</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary" onclick="openImportWizard()">Import from CSV</button>
+          <button class="btn btn-primary" onclick="openAddAccountModal()">+ Add New Account</button>
+        </div>
       </div>
 
       <!-- Accounts table -->
@@ -1972,6 +1979,85 @@
       </div>
     </div>
 
+    <!-- Import Wizard Modal -->
+    <div id="import-wizard-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+      <div style="background:var(--card-bg); border-radius:12px; padding:24px; max-width:800px; width:95%; max-height:90vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 style="margin:0;">Import Accounts from CSV</h3>
+          <button onclick="closeImportWizard()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted);">&times;</button>
+        </div>
+
+        <!-- Step 0: File Upload -->
+        <div id="import-step-0">
+          <p style="color:var(--text-muted); margin-bottom:12px;">Upload a CSV file with your account balances. The wizard will detect the layout and help you map columns.</p>
+          <div style="border:2px dashed var(--border); border-radius:8px; padding:32px; text-align:center; margin-bottom:16px;">
+            <input type="file" id="import-file-input" accept=".csv,.xlsx,.xls" onchange="handleImportFileSelect(this)" style="display:none;" />
+            <button class="btn btn-primary" onclick="document.getElementById('import-file-input').click()">Choose File</button>
+            <p id="import-file-name" style="margin-top:8px; color:var(--text-muted); font-size:13px;"></p>
+          </div>
+
+          <div style="margin-bottom:16px;">
+            <label style="font-weight:600; display:block; margin-bottom:8px;">How is your data organized?</label>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+              <label style="display:flex; align-items:flex-start; gap:8px; padding:10px; border:2px solid var(--border); border-radius:8px; cursor:pointer;">
+                <input type="radio" name="import-scenario" value="single" checked style="margin-top:3px;" />
+                <div>
+                  <strong>Everything in one file</strong>
+                  <div style="font-size:12px; color:var(--text-muted);">Credit card/loan balances and bank balances are in different rows of the same file.</div>
+                </div>
+              </label>
+              <label style="display:flex; align-items:flex-start; gap:8px; padding:10px; border:2px solid var(--border); border-radius:8px; cursor:pointer;">
+                <input type="radio" name="import-scenario" value="two_files" style="margin-top:3px;" />
+                <div>
+                  <strong>Two separate files</strong>
+                  <div style="font-size:12px; color:var(--text-muted);">One file for liabilities and a separate file for assets.</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:flex-end;">
+            <button class="btn btn-primary" onclick="importWizardStep1()" id="import-next-0" disabled>Next</button>
+          </div>
+        </div>
+
+        <!-- Step 1: Row Range / Section Assignment -->
+        <div id="import-step-1" style="display:none;">
+          <div id="import-preview-container"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="importWizardBack(0)">Back</button>
+            <button class="btn btn-primary" onclick="importWizardStep2()">Next: Map Columns</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Column Mapping -->
+        <div id="import-step-2" style="display:none;">
+          <div id="import-mapping-container"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="importWizardBack(1)">Back</button>
+            <button class="btn btn-primary" onclick="importWizardStep3()">Preview Import</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Preview & Commit -->
+        <div id="import-step-3" style="display:none;">
+          <div id="import-commit-preview"></div>
+          <div style="margin-top:12px;">
+            <label style="font-weight:600; margin-right:8px;">If accounts already exist:</label>
+            <select id="import-dup-action" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
+              <option value="skip">Skip duplicates</option>
+              <option value="update">Update balances</option>
+              <option value="create">Create new</option>
+            </select>
+          </div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:16px;">
+            <button class="btn btn-secondary" onclick="importWizardBack(2)">Back</button>
+            <button class="btn btn-primary" onclick="commitAccountImport()">Import Accounts</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Add Account Modal -->
     <div id="add-account-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
       <div style="background:var(--card-bg); border-radius:12px; padding:24px; max-width:600px; width:90%; max-height:85vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
@@ -2169,6 +2255,13 @@
             <div>
               <label>Payment Source Tag</label>
               <input type="text" id="edit-acct-payment-source-tag" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div style="grid-column: 1 / -1;">
+              <label>Link to Transaction Source</label>
+              <select id="edit-acct-linked-source" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;">
+                <option value="">-- Not linked --</option>
+              </select>
+              <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">Links this account to imported transaction data for cross-module features.</div>
             </div>
           </div>
           <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">

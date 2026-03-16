@@ -251,6 +251,110 @@ def get_utilization_alerts(conn, threshold: float = 30.0) -> list[dict]:
     ]
 
 
+def get_balance_card_data(conn, linked_account_id: str, linked_bank_name: str | None = None) -> dict | None:
+    """
+    Get balance card data for a transaction account by its linked IDs.
+    Returns the nw_accounts data needed for the balance card display
+    in the Credit Cards / Bank Transactions tabs.
+    """
+    query = """
+        SELECT id, name, institution, last_four, balance,
+               credit_limit, interest_rate, liability_type, asset_type,
+               account_class, last_verified_at, data_source,
+               last_statement_balance, minimum_payment_amount,
+               last_statement_issue_date, status
+        FROM nw_accounts
+        WHERE linked_account_id = ?
+        AND (status = 'active' OR status IS NULL)
+    """
+    params = [linked_account_id]
+    if linked_bank_name:
+        query += " AND linked_bank_name = ?"
+        params.append(linked_bank_name)
+    query += " LIMIT 1"
+
+    row = conn.execute(query, params).fetchone()
+    if not row:
+        return None
+
+    last_verified = row[10]
+    staleness = None
+    staleness_level = "fresh"
+    if last_verified:
+        from datetime import datetime, timezone
+        try:
+            verified_dt = datetime.fromisoformat(last_verified)
+            now = datetime.now(timezone.utc)
+            days_ago = (now - verified_dt).days
+            staleness = days_ago
+            if days_ago > 14:
+                staleness_level = "stale"
+            elif days_ago > 7:
+                staleness_level = "aging"
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "id": row[0],
+        "name": row[1],
+        "institution": row[2],
+        "last_four": row[3],
+        "balance": round(float(row[4]), 2) if row[4] else 0,
+        "credit_limit": round(float(row[5]), 2) if row[5] else None,
+        "interest_rate": round(float(row[6]), 4) if row[6] else None,
+        "liability_type": row[7],
+        "asset_type": row[8],
+        "account_class": row[9],
+        "last_verified_at": last_verified,
+        "data_source": row[11] or "manual",
+        "statement_balance": round(float(row[12]), 2) if row[12] else None,
+        "minimum_payment": round(float(row[13]), 2) if row[13] else None,
+        "last_statement_date": row[14],
+        "status": row[15] or "active",
+        "staleness_days": staleness,
+        "staleness_level": staleness_level,
+    }
+
+
+def get_linkable_sources(conn) -> list[dict]:
+    """
+    Return distinct transaction sources (account_id + bank_name pairs)
+    from transactions_norm that could be linked to nw_accounts.
+    Also indicates which are already linked.
+    """
+    try:
+        rows = conn.execute("""
+            SELECT DISTINCT t.account_id, t.bank_name, t.statement_type,
+                   COUNT(*) AS txn_count
+            FROM transactions_norm t
+            WHERE t.account_id IS NOT NULL
+            GROUP BY t.account_id, t.bank_name, t.statement_type
+            ORDER BY t.bank_name, t.account_id
+        """).fetchall()
+    except Exception:
+        return []
+
+    # Get existing links
+    linked = conn.execute(
+        "SELECT linked_account_id, linked_bank_name, id, name FROM nw_accounts WHERE linked_account_id IS NOT NULL"
+    ).fetchall()
+    linked_map = {(r[0], r[1]): {"nw_id": r[2], "nw_name": r[3]} for r in linked}
+
+    sources = []
+    for r in rows:
+        acct_id, bank_name, stmt_type, count = r[0], r[1], r[2], r[3]
+        link_info = linked_map.get((acct_id, bank_name))
+        sources.append({
+            "account_id": acct_id,
+            "bank_name": bank_name,
+            "statement_type": stmt_type,
+            "txn_count": count,
+            "linked_to": link_info,
+        })
+
+    return sources
+
+
 def annual_fee_cross_reference(conn) -> list[dict]:
     """
     Cross-reference annual fees in nw_accounts with detected annual fee

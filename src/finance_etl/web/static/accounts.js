@@ -338,6 +338,9 @@ function openEditAccount(id) {
   document.getElementById('edit-acct-credit-limit').value = acct.credit_limit || '';
   document.getElementById('edit-acct-interest-rate').value = acct.interest_rate || '';
   document.getElementById('edit-acct-payment-source-tag').value = acct.payment_source_tag || '';
+
+  // Populate linked transaction source dropdown
+  _populateLinkedSourceDropdown(acct);
 }
 
 async function submitEditAccount() {
@@ -360,6 +363,20 @@ async function submitEditAccount() {
   const tag = document.getElementById('edit-acct-payment-source-tag').value.trim();
   if (tag) payload.payment_source_tag = tag;
 
+  // Handle linked transaction source
+  const linkedSelect = document.getElementById('edit-acct-linked-source');
+  if (linkedSelect) {
+    const linkedVal = linkedSelect.value;
+    if (linkedVal) {
+      const [acctId, bankName] = linkedVal.split('||');
+      payload.linked_account_id = acctId;
+      payload.linked_bank_name = bankName || null;
+    } else {
+      payload.linked_account_id = null;
+      payload.linked_bank_name = null;
+    }
+  }
+
   try {
     await api('PUT', `/accounts/${id}`, payload);
     toast('Account updated', 'success');
@@ -367,6 +384,32 @@ async function submitEditAccount() {
     loadAccounts();
   } catch (e) {
     toast('Failed to update account: ' + e.message, 'error');
+  }
+}
+
+async function _populateLinkedSourceDropdown(acct) {
+  const select = document.getElementById('edit-acct-linked-source');
+  if (!select) return;
+
+  select.innerHTML = '<option value="">-- Not linked --</option>';
+  try {
+    const sources = await api('GET', '/accounts/integration/linkable-sources');
+    for (const s of sources) {
+      const val = `${s.account_id}||${s.bank_name || ''}`;
+      const label = `${s.bank_name || 'Unknown'} - ${s.account_id} (${s.statement_type || 'unknown'}, ${s.txn_count} txns)`;
+      const linked = s.linked_to ? ` [linked to: ${esc(s.linked_to.nw_name)}]` : '';
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = label + linked;
+      select.appendChild(opt);
+    }
+    // Pre-select current linked source
+    if (acct.linked_account_id) {
+      const curVal = `${acct.linked_account_id}||${acct.linked_bank_name || ''}`;
+      select.value = curVal;
+    }
+  } catch (e) {
+    // Silently fail — sources may not exist yet
   }
 }
 
@@ -1200,6 +1243,362 @@ async function loadAccountBalanceTrend() {
     }
   } catch (e) {
     chartEl.innerHTML = '<span style="color:var(--text-muted);">Failed to load trend.</span>';
+  }
+}
+
+// ── Import Wizard ───────────────────────────────────────────────────
+
+let _importState = { fileData: null, scenario: 'single', mapping: {}, sections: {}, preview: null };
+
+function openImportWizard() {
+  _importState = { fileData: null, scenario: 'single', mapping: {}, sections: {}, preview: null };
+  document.getElementById('import-wizard-modal').style.display = 'flex';
+  document.getElementById('import-step-0').style.display = '';
+  document.getElementById('import-step-1').style.display = 'none';
+  document.getElementById('import-step-2').style.display = 'none';
+  document.getElementById('import-step-3').style.display = 'none';
+  document.getElementById('import-file-input').value = '';
+  document.getElementById('import-file-name').textContent = '';
+  document.getElementById('import-next-0').disabled = true;
+}
+
+function closeImportWizard() {
+  document.getElementById('import-wizard-modal').style.display = 'none';
+}
+
+function importWizardBack(step) {
+  document.getElementById(`import-step-${step}`).style.display = 'none';
+  document.getElementById(`import-step-${step + 1}`).style.display = 'none';
+  document.getElementById(`import-step-${step}`).style.display = '';
+}
+
+async function handleImportFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('import-file-name').textContent = file.name;
+
+  // Upload to temp and detect
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const uploadRes = await fetch('/upload-temp', { method: 'POST', body: formData });
+    if (!uploadRes.ok) throw new Error('Upload failed');
+    const { path } = await uploadRes.json();
+
+    const data = await api('POST', `/accounts/import/detect?file_path=${encodeURIComponent(path)}`);
+    _importState.fileData = data;
+    _importState.fileData.uploaded_path = path;
+    document.getElementById('import-next-0').disabled = false;
+  } catch (e) {
+    // Fallback: read file client-side for CSV
+    if (file.name.endsWith('.csv')) {
+      const text = await file.text();
+      const lines = text.split('\n').filter(l => l.trim());
+      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+      const rows = lines.slice(1).map(l => l.split(',').map(c => c.trim().replace(/^"|"$/g, '')));
+      _importState.fileData = {
+        file_type: 'csv', headers, row_count: rows.length,
+        preview_rows: rows.slice(0, 10), all_rows: rows, boundaries: [],
+      };
+      document.getElementById('import-next-0').disabled = false;
+    } else {
+      toast('Failed to process file: ' + e.message, 'error');
+    }
+  }
+}
+
+function importWizardStep1() {
+  _importState.scenario = document.querySelector('input[name="import-scenario"]:checked')?.value || 'single';
+  document.getElementById('import-step-0').style.display = 'none';
+  document.getElementById('import-step-1').style.display = '';
+
+  const container = document.getElementById('import-preview-container');
+  const fd = _importState.fileData;
+  if (!fd) return;
+
+  if (_importState.scenario === 'single') {
+    // Show row range selector
+    const boundaries = fd.boundaries || [];
+    const suggestedSplit = boundaries.find(b => b.type === 'blank' || b.type === 'total');
+    const splitRow = suggestedSplit ? suggestedSplit.row : Math.floor(fd.row_count / 2);
+
+    container.innerHTML = `
+      <h4 style="margin-bottom:8px;">Assign Row Ranges</h4>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px;">
+        Tell us which rows contain liabilities (credit cards, loans) and which contain assets (bank accounts).
+        ${boundaries.length ? `<br>We detected ${boundaries.length} section boundary(s).` : ''}
+      </p>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+        <div style="padding:12px; border:2px solid var(--danger); border-radius:8px;">
+          <strong style="color:var(--danger);">Liabilities</strong>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <label style="font-size:12px;">Start: <input type="number" id="import-liab-start" value="1" min="1" style="width:60px; padding:4px; border:1px solid var(--border); border-radius:4px;" /></label>
+            <label style="font-size:12px;">End: <input type="number" id="import-liab-end" value="${splitRow > 1 ? splitRow - 1 : fd.row_count}" min="1" style="width:60px; padding:4px; border:1px solid var(--border); border-radius:4px;" /></label>
+          </div>
+        </div>
+        <div style="padding:12px; border:2px solid var(--success); border-radius:8px;">
+          <strong style="color:var(--success);">Assets</strong>
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <label style="font-size:12px;">Start: <input type="number" id="import-asset-start" value="${splitRow > 1 ? splitRow + 1 : 1}" min="1" style="width:60px; padding:4px; border:1px solid var(--border); border-radius:4px;" /></label>
+            <label style="font-size:12px;">End: <input type="number" id="import-asset-end" value="${fd.row_count}" min="1" style="width:60px; padding:4px; border:1px solid var(--border); border-radius:4px;" /></label>
+          </div>
+        </div>
+      </div>
+      <div style="max-height:300px; overflow:auto; border:1px solid var(--border); border-radius:4px;">
+        <table style="width:100%; font-size:12px;">
+          <thead><tr><th style="width:30px;">#</th>${fd.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${(fd.preview_rows || []).map((r, i) => `<tr style="background:${i < 5 ? 'rgba(239,68,68,0.05)' : 'rgba(34,197,94,0.05)'};">
+            <td style="color:var(--text-muted);">${i + 1}</td>${r.map(c => `<td>${esc(String(c))}</td>`).join('')}
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  } else {
+    // Two files scenario - just use all rows as liabilities for first file
+    container.innerHTML = `
+      <h4 style="margin-bottom:8px;">File Detected</h4>
+      <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px;">
+        This file will be imported as <strong>liability</strong> accounts. You can import asset accounts separately after.
+      </p>
+      <div style="margin-bottom:8px;">
+        <label style="font-weight:600;">Import as:</label>
+        <select id="import-section-type" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; margin-left:8px;">
+          <option value="liability">Liabilities (credit cards, loans)</option>
+          <option value="asset">Assets (bank accounts)</option>
+        </select>
+      </div>
+      <div style="max-height:200px; overflow:auto; border:1px solid var(--border); border-radius:4px;">
+        <table style="width:100%; font-size:12px;">
+          <thead><tr>${fd.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+          <tbody>${(fd.preview_rows || []).slice(0, 5).map(r => `<tr>${r.map(c => `<td>${esc(String(c))}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  }
+}
+
+function importWizardStep2() {
+  document.getElementById('import-step-1').style.display = 'none';
+  document.getElementById('import-step-2').style.display = '';
+
+  const fd = _importState.fileData;
+  const container = document.getElementById('import-mapping-container');
+
+  // Determine sections to map
+  const sections = [];
+  if (_importState.scenario === 'single') {
+    sections.push({
+      type: 'liability', label: 'Liabilities',
+      start: parseInt(document.getElementById('import-liab-start')?.value) || 1,
+      end: parseInt(document.getElementById('import-liab-end')?.value) || fd.row_count,
+    });
+    sections.push({
+      type: 'asset', label: 'Assets',
+      start: parseInt(document.getElementById('import-asset-start')?.value) || 1,
+      end: parseInt(document.getElementById('import-asset-end')?.value) || fd.row_count,
+    });
+  } else {
+    const sectionType = document.getElementById('import-section-type')?.value || 'liability';
+    sections.push({ type: sectionType, label: sectionType === 'liability' ? 'Liabilities' : 'Assets', start: 1, end: fd.row_count });
+  }
+  _importState.sections = sections;
+
+  // Build mapping UI for each section (using same headers for single-file)
+  const headers = fd.headers;
+  const fields_liab = ['account_name', 'current_balance', 'statement_balance', 'minimum_payment', 'due_date', 'credit_limit', 'interest_rate', 'payment_source', 'institution', 'last_four', 'notes'];
+  const fields_asset = ['account_name', 'current_balance', 'institution', 'payment_source_tag', 'notes'];
+
+  const headerOpts = '<option value="">-- skip --</option>' + headers.map(h => `<option value="${esc(h)}">${esc(h)}</option>`).join('');
+
+  // Auto-suggest
+  const suggestions = {};
+  for (const s of sections) {
+    suggestions[s.type] = _autoSuggestMappings(headers, s.type);
+  }
+
+  container.innerHTML = sections.map(s => {
+    const fields = s.type === 'liability' ? fields_liab : fields_asset;
+    const sugg = suggestions[s.type] || {};
+    return `<div style="margin-bottom:20px;">
+      <h4 style="margin-bottom:8px;">${esc(s.label)} (rows ${s.start}–${s.end})</h4>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        ${fields.map(f => {
+          const label = f.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          const req = (f === 'account_name' || f === 'current_balance') ? ' *' : '';
+          return `<div>
+            <label style="font-size:12px; font-weight:${req ? '700' : '400'};">${label}${req}</label>
+            <select class="import-mapping" data-section="${s.type}" data-field="${f}" style="width:100%; padding:4px 8px; border:1px solid var(--border); border-radius:4px; font-size:12px;">
+              ${headerOpts}
+            </select>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Set auto-suggested values
+  for (const s of sections) {
+    const sugg = suggestions[s.type];
+    for (const [field, header] of Object.entries(sugg)) {
+      if (header) {
+        const sel = document.querySelector(`.import-mapping[data-section="${s.type}"][data-field="${field}"]`);
+        if (sel) sel.value = header;
+      }
+    }
+  }
+}
+
+function _autoSuggestMappings(headers, sectionType) {
+  const keywords = {
+    account_name: ['account', 'name', 'vendor', 'payee', 'creditor', 'card', 'description'],
+    current_balance: ['balance', 'current', 'owed', 'outstanding', 'amount'],
+    statement_balance: ['statement', 'amountdue', 'billed'],
+    minimum_payment: ['minimum', 'minpayment', 'min'],
+    due_date: ['due', 'duedate', 'paymentdue', 'day'],
+    credit_limit: ['limit', 'creditlimit'],
+    interest_rate: ['apr', 'rate', 'interest'],
+    payment_source: ['source', 'payfrom', 'pay from'],
+    institution: ['bank', 'issuer', 'institution', 'provider'],
+    last_four: ['last4', 'lastfour', 'ending'],
+    notes: ['notes', 'memo', 'comment'],
+    payment_source_tag: ['tag', 'code', 'shortcode'],
+  };
+  const result = {};
+  const used = new Set();
+  const fields = sectionType === 'liability'
+    ? ['account_name', 'current_balance', 'statement_balance', 'minimum_payment', 'due_date', 'credit_limit', 'interest_rate', 'payment_source', 'institution', 'last_four', 'notes']
+    : ['account_name', 'current_balance', 'institution', 'payment_source_tag', 'notes'];
+
+  for (const field of fields) {
+    const kws = keywords[field] || [];
+    for (const h of headers) {
+      if (used.has(h)) continue;
+      const norm = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (kws.some(kw => norm.includes(kw))) {
+        result[field] = h;
+        used.add(h);
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+async function importWizardStep3() {
+  document.getElementById('import-step-2').style.display = 'none';
+  document.getElementById('import-step-3').style.display = '';
+
+  const fd = _importState.fileData;
+  const allRows = fd.all_rows || fd.preview_rows || [];
+  let allAccounts = [];
+
+  for (const section of _importState.sections) {
+    // Collect mapping
+    const mapping = {};
+    document.querySelectorAll(`.import-mapping[data-section="${section.type}"]`).forEach(sel => {
+      if (sel.value) mapping[sel.dataset.field] = sel.value;
+    });
+
+    // Get rows for this section
+    const sectionRows = allRows.slice(section.start - 1, section.end);
+
+    // Build preview locally
+    const headers = fd.headers;
+    const headerIdx = {};
+    headers.forEach((h, i) => { headerIdx[h] = i; });
+
+    for (const row of sectionRows) {
+      const getName = (field) => {
+        const col = mapping[field];
+        if (!col || !(col in headerIdx)) return null;
+        const idx = headerIdx[col];
+        return idx < row.length ? String(row[idx]).trim() : null;
+      };
+      const name = getName('account_name');
+      if (!name) continue;
+
+      const parseNum = (v) => {
+        if (!v) return null;
+        const cleaned = v.replace(/[$€£,\s]/g, '').replace(/^\((.+)\)$/, '-$1');
+        const n = parseFloat(cleaned);
+        return isNaN(n) ? null : Math.round(n * 100) / 100;
+      };
+
+      allAccounts.push({
+        account_name: name,
+        current_balance: parseNum(getName('current_balance')) || 0,
+        account_class: section.type,
+        inferred_type: _inferType(name, section.type),
+        statement_balance: parseNum(getName('statement_balance')),
+        minimum_payment: parseNum(getName('minimum_payment')),
+        due_date: getName('due_date'),
+        credit_limit: parseNum(getName('credit_limit')),
+        interest_rate: parseNum(getName('interest_rate')),
+        payment_source: getName('payment_source') || getName('payment_source_tag'),
+        institution: getName('institution'),
+        last_four: getName('last_four'),
+        notes: getName('notes'),
+      });
+    }
+  }
+
+  _importState.preview = allAccounts;
+
+  // Render preview
+  const container = document.getElementById('import-commit-preview');
+  if (!allAccounts.length) {
+    container.innerHTML = '<p style="color:var(--text-muted);">No accounts found. Check your column mappings and row ranges.</p>';
+    return;
+  }
+
+  container.innerHTML = `
+    <h4 style="margin-bottom:8px;">Ready to import ${allAccounts.length} account(s)</h4>
+    <div style="max-height:400px; overflow:auto; border:1px solid var(--border); border-radius:4px;">
+      <table style="width:100%; font-size:12px;">
+        <thead><tr><th>Account</th><th>Type</th><th style="text-align:right;">Balance</th><th>Institution</th><th>Source</th></tr></thead>
+        <tbody>${allAccounts.map(a => `<tr>
+          <td><strong>${esc(a.account_name)}</strong>${a.last_four ? ` (${esc(a.last_four)})` : ''}</td>
+          <td>${esc(a.inferred_type || a.account_class)}</td>
+          <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.current_balance)}</td>
+          <td>${esc(a.institution || '-')}</td>
+          <td>${esc(a.payment_source || '-')}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function _inferType(name, defaultClass) {
+  const n = name.toLowerCase();
+  const patterns = [
+    [/mortgage|home\s*loan/, 'mortgage'], [/auto|car|truck|bronco|subaru|toyota|honda|ford/, 'auto_loan'],
+    [/student|school|navient|mohela/, 'student_loan'], [/energy|electric|water|gas|verizon|phone|utility|power|cable|internet/, 'utility'],
+    [/checking|chk/, 'checking'], [/savings|sav/, 'savings'], [/invest|brokerage|401k|ira/, 'investment'],
+    [/venmo|paypal|zelle|cashapp/, 'digital_wallet'],
+  ];
+  for (const [re, type] of patterns) {
+    if (re.test(n)) return type;
+  }
+  return defaultClass === 'liability' ? 'credit_card' : 'checking';
+}
+
+async function commitAccountImport() {
+  const accounts = _importState.preview;
+  if (!accounts || !accounts.length) {
+    toast('No accounts to import', 'info');
+    return;
+  }
+  const dupAction = document.getElementById('import-dup-action').value;
+
+  try {
+    const result = await api('POST', '/accounts/import/commit', {
+      accounts, duplicate_action: dupAction,
+    });
+    toast(`Import complete: ${result.created} created, ${result.updated} updated, ${result.skipped} skipped`, 'success');
+    closeImportWizard();
+    loadAccounts();
+  } catch (e) {
+    toast('Import failed: ' + e.message, 'error');
   }
 }
 

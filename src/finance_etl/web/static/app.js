@@ -2933,6 +2933,8 @@ async function loadTxnTab(type, reset = true) {
     await _srcCtrl[type].load();
     // Ensure tag filter dropdown is populated
     _populateTagDropdowns();
+    // Load balance card from Accounts module if account filter is active
+    _loadBalanceCard(type, f.account);
   }
 
   try {
@@ -5227,6 +5229,133 @@ function _renderUtilizationAlerts(alerts) {
   }).join('');
   bannerEl.style.display = '';
   bannerEl.innerHTML += html;
+}
+
+// ── Balance Card (Transaction Tab Integration — Phase 6c) ─────
+
+async function _loadBalanceCard(type, accountFilter) {
+  const prefix = type === 'credit_card' ? 'cc' : 'bk';
+  const container = document.getElementById(`${prefix}-balance-card`);
+  if (!container) return;
+
+  // Hide by default
+  container.style.display = 'none';
+  container.innerHTML = '';
+
+  // Only show when a specific account is selected
+  if (!accountFilter) return;
+
+  try {
+    const data = await api('GET', `/accounts/integration/balance-card?linked_account_id=${encodeURIComponent(accountFilter)}`);
+    if (!data || !data.id) return;
+    _renderBalanceCard(container, data);
+  } catch (e) {
+    // 404 = no linked account, silently hide
+  }
+}
+
+function _renderBalanceCard(container, data) {
+  const bal = _fmt$(data.balance);
+  const stmtBal = data.statement_balance != null ? _fmt$(data.statement_balance) : '--';
+  const limit = data.credit_limit != null ? _fmt$(data.credit_limit) : '--';
+  const minPay = data.minimum_payment != null ? _fmt$(data.minimum_payment) : '--';
+
+  // Staleness display
+  let staleBadge = '';
+  if (data.staleness_days != null) {
+    const days = data.staleness_days;
+    const label = days === 0 ? 'today' : days === 1 ? '1 day ago' : `${days} days ago`;
+    const color = data.staleness_level === 'stale' ? 'var(--danger, #e74c3c)' :
+                  data.staleness_level === 'aging' ? 'var(--warning, #f39c12)' :
+                  'var(--success, #27ae60)';
+    staleBadge = `<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:${color}20; color:${color}; font-weight:600;">${label}</span>`;
+  }
+
+  const verifiedAt = data.last_verified_at ? new Date(data.last_verified_at).toLocaleDateString() : 'never';
+  const isLiability = data.account_class === 'liability';
+
+  let metricsHtml = `
+    <div style="display:flex; gap:24px; flex-wrap:wrap; margin-bottom:8px;">
+      <div><div style="font-size:11px; color:var(--text-muted);">Current Balance</div><div style="font-size:18px; font-weight:700; font-variant-numeric:tabular-nums;">${bal}</div></div>`;
+  if (isLiability) {
+    metricsHtml += `
+      <div><div style="font-size:11px; color:var(--text-muted);">Statement Balance</div><div style="font-size:16px; font-variant-numeric:tabular-nums;">${stmtBal}</div></div>
+      <div><div style="font-size:11px; color:var(--text-muted);">Credit Limit</div><div style="font-size:16px; font-variant-numeric:tabular-nums;">${limit}</div></div>
+      <div><div style="font-size:11px; color:var(--text-muted);">Min Payment</div><div style="font-size:16px; font-variant-numeric:tabular-nums;">${minPay}</div></div>`;
+  }
+  metricsHtml += '</div>';
+
+  container.innerHTML = `
+    <div class="card" style="border-left:4px solid var(--primary, #3b82f6);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div>
+          <strong>${esc(data.name)}</strong>
+          ${data.institution ? `<span style="color:var(--text-muted); margin-left:8px;">${esc(data.institution)}</span>` : ''}
+          ${data.last_four ? `<span style="color:var(--text-muted);"> (${esc(data.last_four)})</span>` : ''}
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          ${staleBadge}
+          <span style="font-size:11px; color:var(--text-muted);">Last updated: ${verifiedAt}</span>
+        </div>
+      </div>
+      ${metricsHtml}
+      <div style="font-size:11px; color:var(--text-muted); padding:6px 10px; background:var(--bg-secondary, #f8f9fa); border-radius:6px; margin-bottom:8px;">
+        This balance was ${data.data_source === 'manual' ? 'manually entered' : 'imported via ' + esc(data.data_source)} and may not reflect recent transactions shown below.
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="_openInlineBalanceUpdate(${data.id})">Update Balance</button>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('accounts')">View in Accounts</button>
+      </div>
+      <div id="inline-balance-form-${data.id}" style="display:none; margin-top:10px; padding:10px; border:1px solid var(--border); border-radius:6px;">
+        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+          <div><label style="font-size:11px;">New Balance</label><input type="number" step="0.01" id="ibl-balance-${data.id}" style="padding:6px 8px; border:1px solid var(--border); border-radius:4px; width:120px;" value="${data.balance}" /></div>
+          ${isLiability ? `
+            <div><label style="font-size:11px;">Statement Bal</label><input type="number" step="0.01" id="ibl-stmt-${data.id}" style="padding:6px 8px; border:1px solid var(--border); border-radius:4px; width:120px;" value="${data.statement_balance || ''}" /></div>
+            <div><label style="font-size:11px;">Min Payment</label><input type="number" step="0.01" id="ibl-min-${data.id}" style="padding:6px 8px; border:1px solid var(--border); border-radius:4px; width:120px;" value="${data.minimum_payment || ''}" /></div>
+          ` : ''}
+          <button class="btn btn-primary btn-sm" onclick="_submitInlineBalance(${data.id})">Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('inline-balance-form-${data.id}').style.display='none'">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  container.style.display = '';
+}
+
+function _openInlineBalanceUpdate(accountId) {
+  const form = document.getElementById(`inline-balance-form-${accountId}`);
+  if (form) form.style.display = '';
+}
+
+async function _submitInlineBalance(accountId) {
+  const balInput = document.getElementById(`ibl-balance-${accountId}`);
+  if (!balInput) return;
+  const bal = parseFloat(balInput.value);
+  if (isNaN(bal)) { toast('Enter a valid balance', 'error'); return; }
+
+  const entry = { account_id: accountId, current_balance: bal };
+  const stmtInput = document.getElementById(`ibl-stmt-${accountId}`);
+  if (stmtInput && stmtInput.value) entry.statement_balance = parseFloat(stmtInput.value);
+  const minInput = document.getElementById(`ibl-min-${accountId}`);
+  if (minInput && minInput.value) entry.minimum_payment = parseFloat(minInput.value);
+
+  try {
+    await api('POST', '/accounts/balances/update', { updates: [entry] });
+    toast('Balance updated', 'success');
+    // Refresh the balance card
+    const type = _getActiveTxnType();
+    const prefix = type === 'credit_card' ? 'cc' : 'bk';
+    const container = document.getElementById(`${prefix}-balance-card`);
+    if (container) {
+      const data = await api('GET', `/accounts/${accountId}`);
+      if (data) _renderBalanceCard(container, {
+        ...data,
+        staleness_days: 0,
+        staleness_level: 'fresh',
+      });
+    }
+  } catch (e) {
+    toast('Failed to update balance: ' + e.message, 'error');
+  }
 }
 
 // ── Budget form ────────────────────────────────────────────────
