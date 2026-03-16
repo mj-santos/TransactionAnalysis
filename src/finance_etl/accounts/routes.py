@@ -23,10 +23,13 @@ from .billing_cycles import (
 )
 from .crud import (
     COA_TAXONOMY,
+    bulk_delete_accounts,
     create_account,
     create_payment_source_tag,
     delete_payment_source_tag,
     get_account,
+    get_delete_impact,
+    hard_delete_account,
     list_accounts,
     list_payment_source_tags,
     soft_delete_account,
@@ -76,6 +79,7 @@ from .schemas import (
     AccountStatusUpdate,
     AccountUpdate,
     BillingCycleCreate,
+    BulkDeleteRequest,
     BillingCycleUpdate,
     BulkBalanceUpdateRequest,
     PaymentCreate,
@@ -477,6 +481,45 @@ def route_import_commit(payload: dict):
         return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
+# ── Delete Operations (static paths before /{account_id}) ─────────────
+
+@router.get("/delete-impact/{account_id}", summary="Preview what will be deleted")
+def route_delete_impact(account_id: int):
+    conn = _get_conn()
+    try:
+        acct = get_account(conn, account_id)
+        if not acct:
+            raise HTTPException(status_code=404, detail="Account not found")
+        impact = get_delete_impact(conn, account_id)
+        impact["account_name"] = acct["name"]
+        return impact
+    finally:
+        conn.close()
+
+
+@router.delete("/delete/{account_id}", summary="Permanently delete an account")
+def route_hard_delete(account_id: int):
+    conn = _get_conn()
+    try:
+        acct = get_account(conn, account_id)
+        if not acct:
+            raise HTTPException(status_code=404, detail="Account not found")
+        impact = hard_delete_account(conn, account_id)
+        impact["account_name"] = acct["name"]
+        return {"ok": True, "impact": impact}
+    finally:
+        conn.close()
+
+
+@router.post("/bulk-delete", summary="Bulk delete accounts (soft or permanent)")
+def route_bulk_delete(payload: BulkDeleteRequest):
+    conn = _get_conn()
+    try:
+        return bulk_delete_accounts(conn, payload.account_ids, payload.permanent)
     finally:
         conn.close()
 

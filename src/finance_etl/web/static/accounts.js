@@ -24,8 +24,13 @@ async function loadAccounts() {
 
 function _renderAccountsTable(accounts) {
   const tbody = document.getElementById('accounts-table-body');
+  // Reset select-all checkbox
+  const selectAll = document.getElementById('accounts-select-all');
+  if (selectAll) selectAll.checked = false;
+  _updateBulkBar();
+
   if (!accounts.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:32px; color:var(--text-muted);">No accounts yet. Click "+ Add New Account" to get started.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:32px; color:var(--text-muted);">No accounts yet. Click "+ Add New Account" to get started.</td></tr>';
     return;
   }
   tbody.innerHTML = accounts.map(a => {
@@ -34,6 +39,7 @@ function _renderAccountsTable(accounts) {
     const statusBadge = _statusBadge(a.status || 'active');
     const updatedAt = a.updated_at ? new Date(a.updated_at).toLocaleDateString() : '-';
     return `<tr>
+      <td><input type="checkbox" class="acct-select-cb" data-account-id="${a.id}" onchange="_updateBulkBar()" /></td>
       <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
       <td>${esc(a.institution || '-')}</td>
       <td>${typeLabel}</td>
@@ -43,6 +49,7 @@ function _renderAccountsTable(accounts) {
       <td>
         <button class="btn btn-secondary btn-sm" onclick="openEditAccount(${a.id})" title="Edit">Edit</button>
         ${a.status !== 'closed' ? `<button class="btn btn-danger btn-sm" onclick="closeAccount(${a.id})" title="Close" style="margin-left:4px;">Close</button>` : ''}
+        <button class="btn btn-sm" onclick="deleteAccount(${a.id})" title="Delete" style="margin-left:4px; color:var(--danger); background:none; border:1px solid var(--danger);">Delete</button>
       </td>
     </tr>`;
   }).join('');
@@ -470,6 +477,92 @@ async function closeAccount(id) {
     loadAccounts();
   } catch (e) {
     toast('Failed to close account: ' + e.message, 'error');
+  }
+}
+
+// ── Delete & Bulk Operations ─────────────────────────────────────────
+
+async function deleteAccount(id) {
+  // Fetch impact summary first
+  try {
+    const impact = await api('GET', `/accounts/delete-impact/${id}`);
+    const name = impact.account_name || `Account #${id}`;
+    let msg = `Permanently delete "${name}"?\n\nThis will also remove:\n`;
+    msg += `  - ${impact.ap_balance_ledger} balance ledger entries\n`;
+    msg += `  - ${impact.ap_billing_cycles} billing cycles\n`;
+    msg += `  - ${impact.ap_payments} payments\n`;
+    msg += `  - ${impact.ap_payment_plan} payment plan entries\n`;
+    msg += `  - ${impact.ap_card_benefits} card benefits\n`;
+    msg += `  - ${impact.ap_apr_terms} APR terms\n`;
+    msg += `  - ${impact.ap_payment_source_tags} source tags\n`;
+    msg += `\nThis action cannot be undone.`;
+    if (!confirm(msg)) return;
+  } catch (e) {
+    if (!confirm(`Permanently delete this account and all related data? This cannot be undone.`)) return;
+  }
+  try {
+    await api('DELETE', `/accounts/delete/${id}`);
+    toast('Account permanently deleted', 'success');
+    loadAccounts();
+  } catch (e) {
+    toast('Failed to delete account: ' + e.message, 'error');
+  }
+}
+
+function _getSelectedAccountIds() {
+  return Array.from(document.querySelectorAll('.acct-select-cb:checked'))
+    .map(cb => parseInt(cb.dataset.accountId));
+}
+
+function _updateBulkBar() {
+  const ids = _getSelectedAccountIds();
+  const bar = document.getElementById('accounts-bulk-bar');
+  const countEl = document.getElementById('accounts-bulk-count');
+  if (!bar) return;
+  if (ids.length > 0) {
+    bar.style.display = 'flex';
+    countEl.textContent = `${ids.length} account${ids.length > 1 ? 's' : ''} selected`;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function _toggleSelectAllAccounts(checked) {
+  document.querySelectorAll('.acct-select-cb').forEach(cb => { cb.checked = checked; });
+  _updateBulkBar();
+}
+
+function _clearAccountSelection() {
+  const selectAll = document.getElementById('accounts-select-all');
+  if (selectAll) selectAll.checked = false;
+  document.querySelectorAll('.acct-select-cb').forEach(cb => { cb.checked = false; });
+  _updateBulkBar();
+}
+
+async function _bulkCloseAccounts() {
+  const ids = _getSelectedAccountIds();
+  if (!ids.length) return;
+  if (!confirm(`Close ${ids.length} account${ids.length > 1 ? 's' : ''}? They will be marked as closed but not deleted.`)) return;
+  try {
+    await api('POST', '/accounts/bulk-delete', { account_ids: ids, permanent: false });
+    toast(`${ids.length} account(s) closed`, 'success');
+    loadAccounts();
+  } catch (e) {
+    toast('Bulk close failed: ' + e.message, 'error');
+  }
+}
+
+async function _bulkDeleteAccounts() {
+  const ids = _getSelectedAccountIds();
+  if (!ids.length) return;
+  const msg = `Permanently delete ${ids.length} account${ids.length > 1 ? 's' : ''} and ALL related data?\n\nThis includes balance history, billing cycles, payments, payment plans, card benefits, APR terms, and source tags.\n\nThis action CANNOT be undone.`;
+  if (!confirm(msg)) return;
+  try {
+    await api('POST', '/accounts/bulk-delete', { account_ids: ids, permanent: true });
+    toast(`${ids.length} account(s) permanently deleted`, 'success');
+    loadAccounts();
+  } catch (e) {
+    toast('Bulk delete failed: ' + e.message, 'error');
   }
 }
 

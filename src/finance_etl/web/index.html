@@ -1633,12 +1633,21 @@
         </div>
       </div>
 
+      <!-- Bulk action bar (hidden until items selected) -->
+      <div id="accounts-bulk-bar" style="display:none; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:10px 16px; margin-bottom:12px; align-items:center; gap:12px;">
+        <span id="accounts-bulk-count" style="font-weight:600;"></span>
+        <button class="btn btn-danger btn-sm" onclick="_bulkCloseAccounts()">Close Selected</button>
+        <button class="btn btn-danger btn-sm" onclick="_bulkDeleteAccounts(false)" style="margin-left:4px;">Delete Selected</button>
+        <button class="btn btn-secondary btn-sm" onclick="_clearAccountSelection()" style="margin-left:auto;">Cancel</button>
+      </div>
+
       <!-- Accounts table -->
       <div class="card">
         <div class="card-body" style="overflow-x:auto;">
           <table id="accounts-table" style="width:100%;">
             <thead>
               <tr>
+                <th style="width:32px;"><input type="checkbox" id="accounts-select-all" onchange="_toggleSelectAllAccounts(this.checked)" title="Select all" /></th>
                 <th>Name</th>
                 <th>Institution</th>
                 <th>Type</th>
@@ -1649,7 +1658,7 @@
               </tr>
             </thead>
             <tbody id="accounts-table-body">
-              <tr><td colspan="7" style="text-align:center; padding:32px; color:var(--text-muted);">Loading...</td></tr>
+              <tr><td colspan="8" style="text-align:center; padding:32px; color:var(--text-muted);">Loading...</td></tr>
             </tbody>
           </table>
         </div>

@@ -86,6 +86,11 @@ class AccountStatusUpdate(BaseModel):
     status: str = Field(..., pattern="^(active|closed|paid_off|frozen)$")
 
 
+class BulkDeleteRequest(BaseModel):
+    account_ids: list[int]
+    permanent: bool = False
+
+
 class AccountResponse(BaseModel):
     id: int
     name: str

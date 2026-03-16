@@ -5825,6 +5825,13 @@ No cloud services, no external dependencies — all data stays on your machine.
         "nw_snapshots",
         "annual_reports",
         "duplicate_candidates",
+        "ap_balance_ledger",
+        "ap_billing_cycles",
+        "ap_payments",
+        "ap_payment_plan",
+        "ap_payment_source_tags",
+        "ap_card_benefits",
+        "ap_apr_terms",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
@@ -6225,16 +6232,67 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("narrative", ""), r.get("created_at", now)],
                 )
 
-            # 14. nw_accounts
+            # 14. nw_accounts (all columns including Phases 1-7 extensions)
             conn.execute("DELETE FROM nw_accounts")
             for r in data.get("nw_accounts", []):
                 conn.execute(
-                    """INSERT INTO nw_accounts
-                       (name, acct_type, balance, is_asset, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?)""",
-                    [r["name"], r["acct_type"], r.get("balance", 0),
-                     r.get("is_asset", True),
-                     r.get("created_at", now), r.get("updated_at", now)],
+                    """INSERT INTO nw_accounts (
+                        name, acct_type, balance, is_asset, created_at, updated_at,
+                        account_code, account_class, liability_type, asset_type,
+                        institution, last_four, responsibility, open_date,
+                        due_day, next_payment_due_date,
+                        last_payment_date, last_payment_amount,
+                        last_statement_balance, last_statement_issue_date,
+                        minimum_payment_amount, credit_limit,
+                        origination_date, origination_principal, interest_rate,
+                        loan_term, escrow_balance,
+                        ytd_interest_paid, ytd_principal_paid,
+                        autopay_enabled, autopay_source_id, default_payment_source_id,
+                        annual_fee, annual_fee_month,
+                        payment_source_tag, last_verified_at, data_source,
+                        plaid_account_id, status,
+                        linked_account_id, linked_bank_name
+                    ) VALUES (
+                        ?,?,?,?,?,?,
+                        ?,?,?,?,
+                        ?,?,?,?,
+                        ?,?,
+                        ?,?,
+                        ?,?,
+                        ?,?,
+                        ?,?,?,
+                        ?,?,
+                        ?,?,
+                        ?,?,?,
+                        ?,?,
+                        ?,?,?,
+                        ?,?,
+                        ?,?
+                    )""",
+                    [
+                        r["name"], r.get("acct_type", "other"),
+                        r.get("balance", 0), r.get("is_asset", True),
+                        r.get("created_at", now), r.get("updated_at", now),
+                        r.get("account_code"), r.get("account_class"),
+                        r.get("liability_type"), r.get("asset_type"),
+                        r.get("institution"), r.get("last_four"),
+                        r.get("responsibility"), r.get("open_date"),
+                        r.get("due_day"), r.get("next_payment_due_date"),
+                        r.get("last_payment_date"), r.get("last_payment_amount"),
+                        r.get("last_statement_balance"), r.get("last_statement_issue_date"),
+                        r.get("minimum_payment_amount"), r.get("credit_limit"),
+                        r.get("origination_date"), r.get("origination_principal"),
+                        r.get("interest_rate"), r.get("loan_term"),
+                        r.get("escrow_balance"),
+                        r.get("ytd_interest_paid"), r.get("ytd_principal_paid"),
+                        r.get("autopay_enabled", False), r.get("autopay_source_id"),
+                        r.get("default_payment_source_id"),
+                        r.get("annual_fee"), r.get("annual_fee_month"),
+                        r.get("payment_source_tag"), r.get("last_verified_at"),
+                        r.get("data_source", "manual"),
+                        r.get("plaid_account_id"), r.get("status", "active"),
+                        r.get("linked_account_id"), r.get("linked_bank_name"),
+                    ],
                 )
 
             # 15. nw_snapshots
@@ -6273,6 +6331,130 @@ No cloud services, no external dependencies — all data stays on your machine.
                      r.get("similarity_score"), r.get("reason"),
                      r.get("status", "pending"), r.get("detected_at", now),
                      r.get("resolved_at")],
+                )
+
+            # 18. ap_balance_ledger
+            conn.execute("DELETE FROM ap_balance_ledger")
+            for r in data.get("ap_balance_ledger", []):
+                conn.execute(
+                    """INSERT INTO ap_balance_ledger (
+                        account_id, observed_at, effective_date, current_balance,
+                        statement_balance, minimum_payment, credit_limit,
+                        principal_balance, escrow_balance, interest_rate,
+                        available_balance, data_source, notes, created_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        r["account_id"], r["observed_at"], r["effective_date"],
+                        r["current_balance"],
+                        r.get("statement_balance"), r.get("minimum_payment"),
+                        r.get("credit_limit"), r.get("principal_balance"),
+                        r.get("escrow_balance"), r.get("interest_rate"),
+                        r.get("available_balance"), r.get("data_source", "manual"),
+                        r.get("notes"), r.get("created_at", now),
+                    ],
+                )
+
+            # 19. ap_billing_cycles
+            conn.execute("DELETE FROM ap_billing_cycles")
+            for r in data.get("ap_billing_cycles", []):
+                conn.execute(
+                    """INSERT INTO ap_billing_cycles (
+                        account_id, cycle_label, statement_open_date,
+                        statement_close_date, statement_balance, minimum_payment,
+                        payment_due_date, status, total_paid,
+                        created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        r["account_id"], r["cycle_label"],
+                        r.get("statement_open_date"), r.get("statement_close_date"),
+                        r["statement_balance"], r.get("minimum_payment"),
+                        r["payment_due_date"], r.get("status", "open"),
+                        r.get("total_paid", 0),
+                        r.get("created_at", now), r.get("updated_at", now),
+                    ],
+                )
+
+            # 20. ap_payments
+            conn.execute("DELETE FROM ap_payments")
+            for r in data.get("ap_payments", []):
+                conn.execute(
+                    """INSERT INTO ap_payments (
+                        from_account_id, to_account_id, billing_cycle_id,
+                        payment_date, amount, payment_type, confirmation_ref,
+                        status, verified, verified_fingerprint, data_source,
+                        notes, created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    [
+                        r["from_account_id"], r["to_account_id"],
+                        r.get("billing_cycle_id"), r["payment_date"],
+                        r["amount"], r.get("payment_type", "manual"),
+                        r.get("confirmation_ref"), r.get("status", "pending"),
+                        r.get("verified", False), r.get("verified_fingerprint"),
+                        r.get("data_source", "manual"), r.get("notes"),
+                        r.get("created_at", now), r.get("updated_at", now),
+                    ],
+                )
+
+            # 21. ap_payment_plan
+            conn.execute("DELETE FROM ap_payment_plan")
+            for r in data.get("ap_payment_plan", []):
+                conn.execute(
+                    """INSERT INTO ap_payment_plan (
+                        liability_id, source_id, cycle_month, planned_amount,
+                        strategy, status, notes, created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    [
+                        r["liability_id"], r["source_id"], r["cycle_month"],
+                        r.get("planned_amount"), r.get("strategy", "statement"),
+                        r.get("status", "planned"), r.get("notes"),
+                        r.get("created_at", now), r.get("updated_at", now),
+                    ],
+                )
+
+            # 22. ap_payment_source_tags
+            conn.execute("DELETE FROM ap_payment_source_tags")
+            for r in data.get("ap_payment_source_tags", []):
+                conn.execute(
+                    """INSERT INTO ap_payment_source_tags (
+                        short_code, account_id, created_at
+                    ) VALUES (?,?,?)""",
+                    [r["short_code"], r["account_id"], r.get("created_at", now)],
+                )
+
+            # 23. ap_card_benefits
+            conn.execute("DELETE FROM ap_card_benefits")
+            for r in data.get("ap_card_benefits", []):
+                conn.execute(
+                    """INSERT INTO ap_card_benefits (
+                        account_id, benefit_name, benefit_type, amount,
+                        frequency, provider, redemption_notes, auto_applied,
+                        created_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    [
+                        r["account_id"], r["benefit_name"], r["benefit_type"],
+                        r.get("amount"), r.get("frequency"), r.get("provider"),
+                        r.get("redemption_notes"), r.get("auto_applied", False),
+                        r.get("created_at", now),
+                    ],
+                )
+
+            # 24. ap_apr_terms
+            conn.execute("DELETE FROM ap_apr_terms")
+            for r in data.get("ap_apr_terms", []):
+                conn.execute(
+                    """INSERT INTO ap_apr_terms (
+                        account_id, apr_type, apr_percentage,
+                        balance_subject_to_apr, interest_charge_amount,
+                        effective_date, expiration_date,
+                        created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    [
+                        r["account_id"], r["apr_type"], r["apr_percentage"],
+                        r.get("balance_subject_to_apr"),
+                        r.get("interest_charge_amount"),
+                        r.get("effective_date"), r.get("expiration_date"),
+                        r.get("created_at", now), r.get("updated_at", now),
+                    ],
                 )
 
         except HTTPException:
@@ -6334,6 +6516,14 @@ No cloud services, no external dependencies — all data stays on your machine.
             "nw_accounts_restored": len(data.get("nw_accounts", [])),
             "nw_snapshots_restored": len(data.get("nw_snapshots", [])),
             "annual_reports_restored": len(data.get("annual_reports", [])),
+            "duplicate_candidates_restored": len(data.get("duplicate_candidates", [])),
+            "ap_balance_ledger_restored": len(data.get("ap_balance_ledger", [])),
+            "ap_billing_cycles_restored": len(data.get("ap_billing_cycles", [])),
+            "ap_payments_restored": len(data.get("ap_payments", [])),
+            "ap_payment_plan_restored": len(data.get("ap_payment_plan", [])),
+            "ap_payment_source_tags_restored": len(data.get("ap_payment_source_tags", [])),
+            "ap_card_benefits_restored": len(data.get("ap_card_benefits", [])),
+            "ap_apr_terms_restored": len(data.get("ap_apr_terms", [])),
             "wizard_profiles_restored": profiles_restored,
         }
 

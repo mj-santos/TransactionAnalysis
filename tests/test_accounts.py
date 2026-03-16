@@ -52,10 +52,13 @@ from finance_etl.accounts.billing_cycles import (
     update_cycle_payment_status,
 )
 from finance_etl.accounts.crud import (
+    bulk_delete_accounts,
     create_account,
     create_payment_source_tag,
     delete_payment_source_tag,
     get_account,
+    get_delete_impact,
+    hard_delete_account,
     list_accounts,
     list_payment_source_tags,
     soft_delete_account,
@@ -1662,3 +1665,109 @@ class TestPlaidStubEndpoints:
         assert "subtype_map" in body
         assert "data_sources" in body
         assert "refresh_cadences" in body
+
+
+# ── Delete & Bulk Delete ────────────────────────────────────────────────
+
+
+class TestDeleteAccount:
+
+    def _make_account(self, conn, name="Test CC", **kw):
+        defaults = dict(
+            account_class="liability", liability_type="credit_card",
+            balance=1000, credit_limit=5000,
+        )
+        defaults.update(kw)
+        return create_account(conn, AccountCreate(name=name, **defaults))
+
+    def test_delete_impact_empty(self, conn):
+        acct = self._make_account(conn)
+        impact = get_delete_impact(conn, acct["id"])
+        assert impact["account_id"] == acct["id"]
+        # Only the initial balance ledger entry from create_account
+        assert impact["ap_balance_ledger"] == 1
+        assert impact["ap_billing_cycles"] == 0
+        assert impact["ap_payments"] == 0
+
+    def test_delete_impact_with_related(self, conn):
+        acct = self._make_account(conn, name="CC with data")
+        aid = acct["id"]
+        # Add billing cycle
+        create_billing_cycle(conn, {
+            "account_id": aid, "cycle_label": "2026-03",
+            "statement_balance": 500, "payment_due_date": "2026-04-15",
+        })
+        impact = get_delete_impact(conn, aid)
+        assert impact["ap_billing_cycles"] == 1
+        assert impact["ap_balance_ledger"] >= 1
+
+    def test_hard_delete_removes_account(self, conn):
+        acct = self._make_account(conn, name="To Delete")
+        aid = acct["id"]
+        result = hard_delete_account(conn, aid)
+        assert result["account_id"] == aid
+        assert get_account(conn, aid) is None
+
+    def test_hard_delete_cascades_related(self, conn):
+        acct = self._make_account(conn, name="Cascade Test")
+        aid = acct["id"]
+        # Add billing cycle and source tag
+        create_billing_cycle(conn, {
+            "account_id": aid, "cycle_label": "2026-01",
+            "statement_balance": 200, "payment_due_date": "2026-02-15",
+        })
+        create_payment_source_tag(conn, "ct_tag", aid)
+        # Now hard delete
+        hard_delete_account(conn, aid)
+        # Verify cascade
+        assert get_account(conn, aid) is None
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM ap_billing_cycles WHERE account_id = ?", [aid]
+        ).fetchone()
+        assert rows[0] == 0
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM ap_balance_ledger WHERE account_id = ?", [aid]
+        ).fetchone()
+        assert rows[0] == 0
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM ap_payment_source_tags WHERE account_id = ?", [aid]
+        ).fetchone()
+        assert rows[0] == 0
+
+    def test_bulk_delete_soft(self, conn):
+        a1 = self._make_account(conn, name="Bulk A")
+        a2 = self._make_account(conn, name="Bulk B")
+        result = bulk_delete_accounts(conn, [a1["id"], a2["id"]], permanent=False)
+        assert result["total"] == 2
+        assert all(r["status"] == "closed" for r in result["results"])
+        assert get_account(conn, a1["id"])["status"] == "closed"
+        assert get_account(conn, a2["id"])["status"] == "closed"
+
+    def test_bulk_delete_permanent(self, conn):
+        a1 = self._make_account(conn, name="Perm A")
+        a2 = self._make_account(conn, name="Perm B")
+        result = bulk_delete_accounts(conn, [a1["id"], a2["id"]], permanent=True)
+        assert result["total"] == 2
+        assert all(r["status"] == "deleted" for r in result["results"])
+        assert get_account(conn, a1["id"]) is None
+        assert get_account(conn, a2["id"]) is None
+
+    def test_bulk_delete_nonexistent(self, conn):
+        result = bulk_delete_accounts(conn, [99999], permanent=True)
+        assert result["results"][0]["status"] == "not_found"
+
+    def test_hard_delete_with_payments(self, conn):
+        src = self._make_account(conn, name="Source", account_class="asset", asset_type="checking")
+        dst = self._make_account(conn, name="Dest CC")
+        record_payment(conn, {
+            "from_account_id": src["id"], "to_account_id": dst["id"],
+            "payment_date": "2026-03-01", "amount": 100,
+        })
+        impact = get_delete_impact(conn, dst["id"])
+        assert impact["ap_payments"] == 1
+        hard_delete_account(conn, dst["id"])
+        assert get_account(conn, dst["id"]) is None
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM ap_payments WHERE to_account_id = ?", [dst["id"]]
+        ).fetchone()
+        assert rows[0] == 0

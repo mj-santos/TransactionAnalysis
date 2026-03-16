@@ -262,6 +262,80 @@ def soft_delete_account(conn, account_id: int, new_status: str = "closed") -> bo
     return True
 
 
+def get_delete_impact(conn, account_id: int) -> dict:
+    """Return a summary of related records that would be deleted with an account."""
+    tables = [
+        ("ap_balance_ledger", "account_id"),
+        ("ap_billing_cycles", "account_id"),
+        ("ap_card_benefits", "account_id"),
+        ("ap_apr_terms", "account_id"),
+        ("ap_payment_source_tags", "account_id"),
+    ]
+    impact: dict = {"account_id": account_id}
+    for table, col in tables:
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", [account_id]
+        ).fetchone()
+        impact[table] = row[0] if row else 0
+
+    # Payments reference account as either source or destination
+    row = conn.execute(
+        "SELECT COUNT(*) FROM ap_payments WHERE from_account_id = ? OR to_account_id = ?",
+        [account_id, account_id],
+    ).fetchone()
+    impact["ap_payments"] = row[0] if row else 0
+
+    # Payment plan references as liability or source
+    row = conn.execute(
+        "SELECT COUNT(*) FROM ap_payment_plan WHERE liability_id = ? OR source_id = ?",
+        [account_id, account_id],
+    ).fetchone()
+    impact["ap_payment_plan"] = row[0] if row else 0
+
+    impact["total_related"] = sum(v for k, v in impact.items() if k.startswith("ap_"))
+    return impact
+
+
+def hard_delete_account(conn, account_id: int) -> dict:
+    """Permanently delete an account and all related records."""
+    impact = get_delete_impact(conn, account_id)
+
+    # Cascade delete related records in dependency order
+    conn.execute("DELETE FROM ap_apr_terms WHERE account_id = ?", [account_id])
+    conn.execute("DELETE FROM ap_card_benefits WHERE account_id = ?", [account_id])
+    conn.execute("DELETE FROM ap_payment_source_tags WHERE account_id = ?", [account_id])
+    conn.execute(
+        "DELETE FROM ap_payments WHERE from_account_id = ? OR to_account_id = ?",
+        [account_id, account_id],
+    )
+    conn.execute("DELETE FROM ap_billing_cycles WHERE account_id = ?", [account_id])
+    conn.execute(
+        "DELETE FROM ap_payment_plan WHERE liability_id = ? OR source_id = ?",
+        [account_id, account_id],
+    )
+    conn.execute("DELETE FROM ap_balance_ledger WHERE account_id = ?", [account_id])
+    conn.execute("DELETE FROM nw_accounts WHERE id = ?", [account_id])
+
+    return impact
+
+
+def bulk_delete_accounts(conn, account_ids: list[int], permanent: bool = False) -> dict:
+    """Delete multiple accounts. If permanent=True, hard-deletes with cascade."""
+    results = []
+    for aid in account_ids:
+        acct = get_account(conn, aid)
+        if not acct:
+            results.append({"account_id": aid, "status": "not_found"})
+            continue
+        if permanent:
+            impact = hard_delete_account(conn, aid)
+            results.append({"account_id": aid, "status": "deleted", "impact": impact})
+        else:
+            soft_delete_account(conn, aid, "closed")
+            results.append({"account_id": aid, "status": "closed"})
+    return {"results": results, "total": len(results)}
+
+
 def create_payment_source_tag(conn, short_code: str, account_id: int) -> dict:
     """Create a payment source tag."""
     now = _now_iso()
