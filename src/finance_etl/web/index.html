@@ -1601,7 +1601,10 @@
           <h3 style="margin:0;">Update Balances</h3>
           <button onclick="closeUpdateBalancesGrid()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted);">&times;</button>
         </div>
-        <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px;">Enter new balances. Leave blank to keep unchanged. Tab through fields for speed.</p>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <p style="color:var(--text-muted); font-size:13px; margin:0;">Enter new balances. Leave blank to keep unchanged. Tab through fields for speed.</p>
+          <button class="btn btn-secondary btn-sm" disabled title="Coming soon — connect your bank via Plaid to auto-fill balances" style="opacity:0.5; cursor:not-allowed; white-space:nowrap;">Refresh from Bank</button>
+        </div>
         <table style="width:100%;">
           <thead><tr>
             <th>Account</th><th>Type</th><th style="text-align:right;">Last Balance</th>
@@ -1626,6 +1629,7 @@
         <div style="display:flex; gap:8px;">
           <button class="btn btn-secondary" onclick="openImportWizard()">Import from CSV</button>
           <button class="btn btn-primary" onclick="openAddAccountModal()">+ Add New Account</button>
+          <button class="btn btn-secondary" disabled title="Coming soon — Plaid integration" style="opacity:0.5; cursor:not-allowed;">Connect Bank</button>
         </div>
       </div>
 
@@ -1692,6 +1696,7 @@
         </div>
         <div style="display:flex; gap:8px;">
           <button class="btn btn-secondary btn-sm" onclick="rollforwardPlan()">Rollforward from Last Month</button>
+          <button class="btn btn-secondary btn-sm" disabled title="Coming soon — auto-verify payments against bank transactions via Plaid" style="opacity:0.5; cursor:not-allowed;">Auto-Verify Payments</button>
         </div>
       </div>
 

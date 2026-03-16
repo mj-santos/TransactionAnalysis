@@ -1,4 +1,4 @@
-"""Tests for the Accounts & Liabilities module — Phases 1–6."""
+"""Tests for the Accounts & Liabilities module — Phases 1–7."""
 from __future__ import annotations
 
 import csv
@@ -1448,3 +1448,145 @@ class TestAccountLinking:
         assert float(acct["credit_limit"]) == 12500
         assert acct["data_source"] == "manual"
         assert acct["last_verified_at"] is not None
+
+
+# ── Plaid Stubs (Phase 7) ────────────────────────────────────────────
+
+from finance_etl.accounts.plaid_stubs import (
+    PLAID_FIELD_MAP,
+    _SUBTYPE_MAP,
+    REFRESH_CADENCES,
+)
+
+
+class TestPlaidFieldMap:
+    """Validate the Plaid → Spendly field mapping is complete and consistent."""
+
+    def test_field_map_has_core_balance_fields(self):
+        assert "accounts[].balances.current" in PLAID_FIELD_MAP
+        assert "accounts[].balances.available" in PLAID_FIELD_MAP
+
+    def test_field_map_has_credit_fields(self):
+        assert "liabilities.credit[].last_statement_balance" in PLAID_FIELD_MAP
+        assert "liabilities.credit[].minimum_payment_amount" in PLAID_FIELD_MAP
+        assert "liabilities.credit[].next_payment_due_date" in PLAID_FIELD_MAP
+
+    def test_field_map_has_mortgage_fields(self):
+        assert "liabilities.mortgage[].origination_date" in PLAID_FIELD_MAP
+        assert "liabilities.mortgage[].interest_rate.percentage" in PLAID_FIELD_MAP
+        assert "liabilities.mortgage[].escrow_balance" in PLAID_FIELD_MAP
+        assert "liabilities.mortgage[].loan_term" in PLAID_FIELD_MAP
+
+    def test_field_map_has_student_fields(self):
+        assert "liabilities.student[].interest_rate_percentage" in PLAID_FIELD_MAP
+        assert "liabilities.student[].minimum_payment_amount" in PLAID_FIELD_MAP
+
+    def test_field_map_has_apr_fields(self):
+        assert "liabilities.credit[].aprs[].apr_percentage" in PLAID_FIELD_MAP
+        assert "liabilities.credit[].aprs[].apr_type" in PLAID_FIELD_MAP
+
+    def test_all_mapped_fields_are_strings(self):
+        for k, v in PLAID_FIELD_MAP.items():
+            assert isinstance(k, str), f"Key {k} is not a string"
+            assert isinstance(v, str), f"Value for {k} is not a string"
+
+
+class TestSubtypeMap:
+    """Validate subtype mapping covers common Plaid subtypes."""
+
+    def test_depository_types(self):
+        assert _SUBTYPE_MAP["checking"] == ("asset", "checking")
+        assert _SUBTYPE_MAP["savings"] == ("asset", "savings")
+
+    def test_credit_type(self):
+        assert _SUBTYPE_MAP["credit card"] == ("liability", "credit_card")
+
+    def test_loan_types(self):
+        assert _SUBTYPE_MAP["mortgage"] == ("liability", "mortgage")
+        assert _SUBTYPE_MAP["auto"] == ("liability", "auto_loan")
+        assert _SUBTYPE_MAP["student"] == ("liability", "student_loan")
+
+    def test_investment_types(self):
+        assert _SUBTYPE_MAP["brokerage"] == ("asset", "investment")
+        assert _SUBTYPE_MAP["401k"] == ("asset", "investment")
+        assert _SUBTYPE_MAP["ira"] == ("asset", "investment")
+        assert _SUBTYPE_MAP["roth"] == ("asset", "investment")
+
+    def test_all_map_to_valid_classes(self):
+        for subtype, (acct_class, _) in _SUBTYPE_MAP.items():
+            assert acct_class in ("asset", "liability"), f"Subtype '{subtype}' maps to invalid class '{acct_class}'"
+
+
+class TestRefreshCadences:
+    def test_has_expected_cadences(self):
+        assert "manual" in REFRESH_CADENCES
+        assert "daily" in REFRESH_CADENCES
+        assert "hourly" in REFRESH_CADENCES
+
+
+class TestPlaidStubEndpoints:
+    """Verify stub endpoints return 501 with contract documentation."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from finance_etl.accounts import router
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(router, prefix="/accounts")
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_link_token_returns_501(self, client):
+        resp = client.post("/accounts/connect/plaid/link-token")
+        assert resp.status_code == 501
+        body = resp.json()["detail"]
+        assert body["error"] == "not_implemented"
+        assert "plaid_endpoint" in body["planned_contract"]
+
+    def test_exchange_returns_501(self, client):
+        resp = client.post("/accounts/connect/plaid/exchange")
+        assert resp.status_code == 501
+        body = resp.json()["detail"]
+        assert body["feature"] == "Plaid Token Exchange"
+
+    def test_refresh_returns_501(self, client):
+        resp = client.post("/accounts/connect/refresh")
+        assert resp.status_code == 501
+        body = resp.json()["detail"]
+        assert "field_mapping" in body["planned_contract"]
+
+    def test_refresh_status_returns_501(self, client):
+        resp = client.get("/accounts/connect/refresh/status")
+        assert resp.status_code == 501
+
+    def test_auto_verify_returns_501(self, client):
+        resp = client.post("/accounts/connect/auto-verify")
+        assert resp.status_code == 501
+        body = resp.json()["detail"]
+        assert "processing_steps" in body["planned_contract"]
+
+    def test_settings_returns_501(self, client):
+        resp = client.get("/accounts/connect/settings")
+        assert resp.status_code == 501
+
+    def test_institutions_returns_501(self, client):
+        resp = client.get("/accounts/connect/institutions")
+        assert resp.status_code == 501
+
+    def test_disconnect_returns_501(self, client):
+        resp = client.delete("/accounts/connect/institutions/test-item-id")
+        assert resp.status_code == 501
+
+    def test_callback_returns_501(self, client):
+        resp = client.post("/accounts/connect/plaid/callback")
+        assert resp.status_code == 501
+
+    def test_field_map_returns_200(self, client):
+        """The field-map endpoint is the only one that returns 200 (it's documentation)."""
+        resp = client.get("/accounts/connect/field-map")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "plaid_to_spendly" in body
+        assert "subtype_map" in body
+        assert "data_sources" in body
+        assert "refresh_cadences" in body
