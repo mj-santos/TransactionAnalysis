@@ -14,6 +14,13 @@ from .balance_ops import (
     get_overview_summary,
     get_stale_accounts,
 )
+from .billing_cycles import (
+    create_billing_cycle,
+    get_open_cycles,
+    get_overdue_cycles,
+    list_cycles_for_account,
+    update_billing_cycle,
+)
 from .crud import (
     COA_TAXONOMY,
     create_account,
@@ -25,12 +32,28 @@ from .crud import (
     soft_delete_account,
     update_account,
 )
+from .payment_plan import (
+    get_capacity,
+    get_payment_plan,
+    rollforward_plan,
+    upsert_plan_assignment,
+)
+from .payments import (
+    get_payment_history,
+    record_payment,
+)
 from .schemas import (
     AccountCreate,
     AccountStatusUpdate,
     AccountUpdate,
+    BillingCycleCreate,
+    BillingCycleUpdate,
     BulkBalanceUpdateRequest,
+    PaymentCreate,
     PaymentSourceTagCreate,
+    PlanAssignment,
+    PlanBulkRequest,
+    PlanRollforwardRequest,
 )
 
 
@@ -169,6 +192,116 @@ def route_balance_history(account_id: int, limit: int = Query(100, ge=1, le=1000
         conn.close()
 
 
+# ── Billing Cycles (static paths before /{account_id}) ───────────────────
+
+@router.get("/cycles/open", summary="All open/unpaid billing cycles")
+def route_open_cycles():
+    conn = _get_conn()
+    try:
+        return get_open_cycles(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/cycles/overdue", summary="All overdue billing cycles")
+def route_overdue_cycles():
+    conn = _get_conn()
+    try:
+        return get_overdue_cycles(conn)
+    finally:
+        conn.close()
+
+
+@router.get("/cycles/{cycle_id}", summary="Get a single billing cycle")
+def route_get_cycle(cycle_id: int):
+    from .billing_cycles import get_billing_cycle
+    conn = _get_conn()
+    try:
+        cycle = get_billing_cycle(conn, cycle_id)
+        if not cycle:
+            raise HTTPException(status_code=404, detail="Billing cycle not found")
+        return cycle
+    finally:
+        conn.close()
+
+
+@router.put("/cycles/{cycle_id}", summary="Update a billing cycle")
+def route_update_cycle(cycle_id: int, payload: BillingCycleUpdate):
+    from .billing_cycles import get_billing_cycle
+    conn = _get_conn()
+    try:
+        cycle = get_billing_cycle(conn, cycle_id)
+        if not cycle:
+            raise HTTPException(status_code=404, detail="Billing cycle not found")
+        return update_billing_cycle(conn, cycle_id, payload.model_dump(exclude_none=True))
+    finally:
+        conn.close()
+
+
+# ── Payment Plan & Payments (static paths before /{account_id}) ──────────
+
+@router.get("/payments/plan/{cycle_month}", summary="Payment plan for a cycle month")
+def route_get_plan(cycle_month: str):
+    conn = _get_conn()
+    try:
+        return get_payment_plan(conn, cycle_month)
+    finally:
+        conn.close()
+
+
+@router.post("/payments/plan", summary="Create/update payment plan assignments")
+def route_upsert_plan(payload: PlanBulkRequest):
+    conn = _get_conn()
+    try:
+        results = []
+        for assignment in payload.assignments:
+            results.append(upsert_plan_assignment(conn, assignment.model_dump()))
+        return {"assignments": results, "total": len(results)}
+    finally:
+        conn.close()
+
+
+@router.post("/payments/plan/rollforward", summary="Copy last month's plan forward")
+def route_rollforward(payload: PlanRollforwardRequest):
+    conn = _get_conn()
+    try:
+        return rollforward_plan(conn, payload.from_month, payload.to_month)
+    finally:
+        conn.close()
+
+
+@router.get("/payments/capacity", summary="Per-asset remaining capacity")
+def route_capacity(cycle_month: Optional[str] = Query(None)):
+    conn = _get_conn()
+    try:
+        return get_capacity(conn, cycle_month)
+    finally:
+        conn.close()
+
+
+@router.post("/payments/", summary="Record a payment", status_code=201)
+def route_record_payment(payload: PaymentCreate):
+    conn = _get_conn()
+    try:
+        return record_payment(conn, payload.model_dump())
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        conn.close()
+
+
+@router.get("/payments/history", summary="Payment history")
+def route_payment_history(
+    account_id: Optional[int] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+):
+    conn = _get_conn()
+    try:
+        return get_payment_history(conn, account_id, limit)
+    finally:
+        conn.close()
+
+
 # ── Account Detail (path param routes last) ──────────────────────────────
 
 @router.get("/{account_id}", summary="Get single account detail")
@@ -202,6 +335,36 @@ def route_update_account(account_id: int, payload: AccountUpdate):
         if not acct:
             raise HTTPException(status_code=404, detail="Account not found")
         return update_account(conn, account_id, payload)
+    finally:
+        conn.close()
+
+
+@router.get("/{account_id}/cycles", summary="Billing cycles for one account")
+def route_account_cycles(account_id: int):
+    conn = _get_conn()
+    try:
+        acct = get_account(conn, account_id)
+        if not acct:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return list_cycles_for_account(conn, account_id)
+    finally:
+        conn.close()
+
+
+@router.post("/{account_id}/cycles", summary="Record a new billing statement", status_code=201)
+def route_create_cycle(account_id: int, payload: BillingCycleCreate):
+    conn = _get_conn()
+    try:
+        acct = get_account(conn, account_id)
+        if not acct:
+            raise HTTPException(status_code=404, detail="Account not found")
+        data = payload.model_dump()
+        data["account_id"] = account_id
+        return create_billing_cycle(conn, data)
+    except Exception as exc:
+        if "not found" in str(exc).lower():
+            raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc))
     finally:
         conn.close()
 

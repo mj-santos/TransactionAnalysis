@@ -158,3 +158,59 @@ class PaymentSourceTagResponse(BaseModel):
     short_code: str
     account_id: int
     created_at: str
+
+
+# ── Billing Cycles ───────────────────────────────────────────────────────
+
+class BillingCycleCreate(BaseModel):
+    account_id: int
+    cycle_label: str  # 'YYYY-MM'
+    statement_balance: Decimal
+    payment_due_date: str  # ISO date
+    statement_open_date: Optional[str] = None
+    statement_close_date: Optional[str] = None
+    minimum_payment: Optional[Decimal] = None
+
+
+class BillingCycleUpdate(BaseModel):
+    statement_balance: Optional[Decimal] = None
+    minimum_payment: Optional[Decimal] = None
+    payment_due_date: Optional[str] = None
+    statement_open_date: Optional[str] = None
+    statement_close_date: Optional[str] = None
+    status: Optional[str] = None
+
+
+# ── Payment Plan ─────────────────────────────────────────────────────────
+
+class PlanAssignment(BaseModel):
+    liability_id: int
+    source_id: int
+    cycle_month: str  # 'YYYY-MM'
+    planned_amount: Optional[Decimal] = None
+    strategy: str = "statement"
+    status: str = "planned"
+    notes: Optional[str] = None
+
+
+class PlanBulkRequest(BaseModel):
+    assignments: list[PlanAssignment]
+
+
+class PlanRollforwardRequest(BaseModel):
+    from_month: str  # 'YYYY-MM'
+    to_month: str    # 'YYYY-MM'
+
+
+# ── Payments ─────────────────────────────────────────────────────────────
+
+class PaymentCreate(BaseModel):
+    from_account_id: int
+    to_account_id: int
+    payment_date: str  # ISO date
+    amount: Decimal
+    billing_cycle_id: Optional[int] = None
+    payment_type: str = "manual"
+    confirmation_ref: Optional[str] = None
+    status: str = "pending"
+    notes: Optional[str] = None

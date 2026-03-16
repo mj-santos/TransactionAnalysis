@@ -69,7 +69,7 @@ function _statusBadge(status) {
 
 // ── Sub-tab switching ────────────────────────────────────────────────
 function switchAccountsSubtab(tab) {
-  const validTabs = ['overview', 'manage'];
+  const validTabs = ['overview', 'manage', 'planner'];
   if (!validTabs.includes(tab)) return;
 
   _currentAccountsSubtab = tab;
@@ -87,10 +87,13 @@ function switchAccountsSubtab(tab) {
   // Toggle views
   const overviewView = document.getElementById('accounts-overview-view');
   const manageView = document.getElementById('accounts-manage-view');
+  const plannerView = document.getElementById('accounts-planner-view');
   if (overviewView) overviewView.style.display = tab === 'overview' ? '' : 'none';
   if (manageView) manageView.style.display = tab === 'manage' ? '' : 'none';
+  if (plannerView) plannerView.style.display = tab === 'planner' ? '' : 'none';
 
   if (tab === 'overview') _loadOverviewData();
+  if (tab === 'planner') _initPlanner();
 }
 
 // ── Add Account Modal ────────────────────────────────────────────────
@@ -589,6 +592,335 @@ async function _renderUpdateBalancesGrid() {
 
   tbody.innerHTML = html;
 }
+
+// ── Payment Planner ─────────────────────────────────────────────────
+
+let _plannerData = { plan: [], capacity: [], openCycles: [], payments: [] };
+let _plannerInitialized = false;
+
+function _initPlanner() {
+  const monthInput = document.getElementById('planner-cycle-month');
+  if (!monthInput.value) {
+    const now = new Date();
+    monthInput.value = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  }
+  loadPlannerData();
+}
+
+function _getPlannerMonth() {
+  return document.getElementById('planner-cycle-month').value; // 'YYYY-MM'
+}
+
+function plannerPrevMonth() {
+  const input = document.getElementById('planner-cycle-month');
+  const d = new Date(input.value + '-01');
+  d.setMonth(d.getMonth() - 1);
+  input.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  loadPlannerData();
+}
+
+function plannerNextMonth() {
+  const input = document.getElementById('planner-cycle-month');
+  const d = new Date(input.value + '-01');
+  d.setMonth(d.getMonth() + 1);
+  input.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  loadPlannerData();
+}
+
+async function loadPlannerData() {
+  const month = _getPlannerMonth();
+  if (!month) return;
+
+  try {
+    const [plan, capacity, openCycles, payments] = await Promise.all([
+      api('GET', `/accounts/payments/plan/${month}`),
+      api('GET', `/accounts/payments/capacity?cycle_month=${month}`),
+      api('GET', '/accounts/cycles/open'),
+      api('GET', '/accounts/payments/history?limit=20'),
+    ]);
+    _plannerData = { plan, capacity, openCycles, payments };
+    _renderOpenCycles(openCycles);
+    _renderCapacityMeters(capacity);
+    _renderAssignmentGrid(plan, capacity);
+    _renderPaymentHistory(payments);
+  } catch (e) {
+    toast('Failed to load planner data: ' + e.message, 'error');
+  }
+}
+
+function _cycleBadge(status) {
+  const colors = {
+    open: '#3b82f6', paid_minimum: '#f59e0b', paid_statement: '#22c55e',
+    paid_full: '#22c55e', overdue: '#ef4444',
+  };
+  const color = colors[status] || '#6b7280';
+  return `<span style="display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; background:${color}20; color:${color};">${esc(status)}</span>`;
+}
+
+function _renderOpenCycles(cycles) {
+  const tbody = document.getElementById('planner-open-cycles-body');
+  if (!cycles.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:16px; color:var(--text-muted);">No open billing cycles.</td></tr>';
+    return;
+  }
+  const acctMap = {};
+  _accountsCache.forEach(a => { acctMap[a.id] = a; });
+
+  tbody.innerHTML = cycles.map(c => {
+    const acct = acctMap[c.account_id];
+    const name = acct ? esc(acct.name) : `#${c.account_id}`;
+    return `<tr>
+      <td>${name}</td>
+      <td>${esc(c.cycle_label)}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(c.statement_balance)}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${c.minimum_payment != null ? _fmt(c.minimum_payment) : '-'}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(c.total_paid)}</td>
+      <td>${esc(c.payment_due_date || '-')}</td>
+      <td>${_cycleBadge(c.status)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _renderCapacityMeters(capacityList) {
+  const container = document.getElementById('planner-capacity-meters');
+  if (!capacityList.length) {
+    container.innerHTML = '<p style="color:var(--text-muted); text-align:center;">No asset accounts found.</p>';
+    return;
+  }
+  container.innerHTML = capacityList.map(c => {
+    const balance = c.balance || 0;
+    const allocated = c.total_allocated || 0;
+    const remaining = c.remaining_after_payments || 0;
+    const pct = balance > 0 ? Math.min(100, Math.round((allocated / balance) * 100)) : 0;
+    const barColor = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning, #f59e0b)' : 'var(--primary)';
+    const tag = c.payment_source_tag ? ` <span style="color:var(--text-muted); font-size:11px;">[${esc(c.payment_source_tag)}]</span>` : '';
+    return `<div style="margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+        <span style="font-weight:600; font-size:13px;">${esc(c.name)}${tag}</span>
+        <span style="font-size:12px; color:var(--text-muted);">
+          ${_fmt(allocated)} allocated / ${_fmt(balance)} balance
+          &mdash; <strong style="color:${remaining < 0 ? 'var(--danger)' : 'inherit'};">${_fmt(remaining)} remaining</strong>
+        </span>
+      </div>
+      <div style="background:var(--bg-secondary); border-radius:4px; height:8px; overflow:hidden;">
+        <div style="width:${pct}%; height:100%; background:${barColor}; border-radius:4px; transition:width 0.3s;"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _renderAssignmentGrid(plan, capacityList) {
+  const tbody = document.getElementById('planner-assignments-body');
+  const liabilities = _accountsCache.filter(a => a.account_class === 'liability' && (a.status === 'active' || !a.status));
+  const assets = _accountsCache.filter(a => a.account_class === 'asset' && (a.status === 'active' || !a.status));
+
+  if (!liabilities.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:16px; color:var(--text-muted);">No active liability accounts.</td></tr>';
+    return;
+  }
+
+  const planMap = {};
+  plan.forEach(p => { planMap[p.liability_id] = p; });
+
+  const assetOptions = assets.map(a => {
+    const tag = a.payment_source_tag ? ` [${a.payment_source_tag}]` : '';
+    return `<option value="${a.id}">${esc(a.name)}${tag}</option>`;
+  }).join('');
+
+  const strategies = ['statement', 'minimum', 'full_balance', 'fixed', 'extra_principal'];
+
+  tbody.innerHTML = liabilities.map(l => {
+    const p = planMap[l.id] || {};
+    const selectedSource = p.source_id || '';
+    const selectedStrategy = p.strategy || 'statement';
+    const plannedAmt = p.planned_amount != null ? parseFloat(p.planned_amount).toFixed(2) : '';
+    const status = p.status || '';
+
+    const sourceSelect = `<select class="plan-source" data-lid="${l.id}" style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-size:12px; max-width:160px;">
+      <option value="">-- select --</option>
+      ${assetOptions}
+    </select>`;
+
+    const strategySelect = `<select class="plan-strategy" data-lid="${l.id}" onchange="planStrategyChanged(${l.id})" style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-size:12px;">
+      ${strategies.map(s => `<option value="${s}" ${s === selectedStrategy ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}
+    </select>`;
+
+    const statusBadge = status ? _cycleBadge(status) : '<span style="color:var(--text-muted); font-size:11px;">unassigned</span>';
+    const canPay = selectedSource && status !== 'completed';
+
+    return `<tr>
+      <td><strong>${esc(l.name)}</strong>${l.last_four ? ` <span style="color:var(--text-muted);">(${esc(l.last_four)})</span>` : ''}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(l.balance)}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${l.last_statement_balance != null ? _fmt(l.last_statement_balance) : '-'}</td>
+      <td>${sourceSelect}</td>
+      <td>${strategySelect}</td>
+      <td><input type="number" step="0.01" class="plan-amount" data-lid="${l.id}" value="${plannedAmt}" style="width:100px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; text-align:right; font-variant-numeric:tabular-nums;" /></td>
+      <td>${statusBadge}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="openMarkPaid(${l.id})" ${!canPay ? 'disabled style="opacity:0.5;"' : ''}>Pay</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Set selected source values after DOM render
+  liabilities.forEach(l => {
+    const p = planMap[l.id];
+    if (p && p.source_id) {
+      const sel = document.querySelector(`.plan-source[data-lid="${l.id}"]`);
+      if (sel) sel.value = p.source_id;
+    }
+  });
+}
+
+function planStrategyChanged(liabilityId) {
+  const strategy = document.querySelector(`.plan-strategy[data-lid="${liabilityId}"]`).value;
+  const amtInput = document.querySelector(`.plan-amount[data-lid="${liabilityId}"]`);
+  const acct = _accountsCache.find(a => a.id === liabilityId);
+  if (!acct) return;
+
+  if (strategy === 'statement' && acct.last_statement_balance != null) {
+    amtInput.value = Math.abs(parseFloat(acct.last_statement_balance)).toFixed(2);
+  } else if (strategy === 'minimum' && acct.minimum_payment_amount != null) {
+    amtInput.value = parseFloat(acct.minimum_payment_amount).toFixed(2);
+  } else if (strategy === 'full_balance' && acct.balance != null) {
+    amtInput.value = Math.abs(parseFloat(acct.balance)).toFixed(2);
+  }
+}
+
+async function savePlanAssignments() {
+  const month = _getPlannerMonth();
+  const assignments = [];
+  document.querySelectorAll('.plan-source').forEach(sel => {
+    const lid = parseInt(sel.dataset.lid);
+    const sourceId = sel.value;
+    if (!sourceId) return;
+    const strategy = document.querySelector(`.plan-strategy[data-lid="${lid}"]`).value;
+    const amtInput = document.querySelector(`.plan-amount[data-lid="${lid}"]`);
+    const amt = amtInput.value.trim() ? parseFloat(amtInput.value) : null;
+
+    assignments.push({
+      liability_id: lid,
+      source_id: parseInt(sourceId),
+      cycle_month: month,
+      planned_amount: amt,
+      strategy: strategy,
+      status: 'planned',
+    });
+  });
+
+  if (!assignments.length) {
+    toast('No assignments to save. Select a payment source for at least one liability.', 'info');
+    return;
+  }
+
+  try {
+    await api('POST', '/accounts/payments/plan', { assignments });
+    toast(`Saved ${assignments.length} assignment(s)`, 'success');
+    loadPlannerData();
+  } catch (e) {
+    toast('Failed to save assignments: ' + e.message, 'error');
+  }
+}
+
+async function rollforwardPlan() {
+  const toMonth = _getPlannerMonth();
+  const d = new Date(toMonth + '-01');
+  d.setMonth(d.getMonth() - 1);
+  const fromMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+
+  try {
+    const result = await api('POST', '/accounts/payments/plan/rollforward', {
+      from_month: fromMonth, to_month: toMonth,
+    });
+    toast(`Rolled forward: ${result.created} created, ${result.skipped} skipped`, 'success');
+    loadPlannerData();
+  } catch (e) {
+    toast('Rollforward failed: ' + e.message, 'error');
+  }
+}
+
+function openMarkPaid(liabilityId) {
+  const acct = _accountsCache.find(a => a.id === liabilityId);
+  if (!acct) return;
+
+  const sourceSelect = document.querySelector(`.plan-source[data-lid="${liabilityId}"]`);
+  const sourceId = sourceSelect ? sourceSelect.value : '';
+  const sourceAcct = _accountsCache.find(a => a.id === parseInt(sourceId));
+
+  const amtInput = document.querySelector(`.plan-amount[data-lid="${liabilityId}"]`);
+  const plannedAmt = amtInput ? amtInput.value : '';
+
+  document.getElementById('mp-liability-id').value = liabilityId;
+  document.getElementById('mp-source-id').value = sourceId;
+  document.getElementById('mp-liability-name').textContent = acct.name + (acct.last_four ? ` (${acct.last_four})` : '');
+  document.getElementById('mp-source-name').textContent = sourceAcct ? sourceAcct.name : 'Unknown';
+  document.getElementById('mp-amount').value = plannedAmt;
+  document.getElementById('mp-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('mp-confirmation').value = '';
+  document.getElementById('mp-notes').value = '';
+  document.getElementById('mark-paid-modal').style.display = 'flex';
+}
+
+function closeMarkPaidModal() {
+  document.getElementById('mark-paid-modal').style.display = 'none';
+}
+
+async function submitPayment() {
+  const fromId = parseInt(document.getElementById('mp-source-id').value);
+  const toId = parseInt(document.getElementById('mp-liability-id').value);
+  const amount = parseFloat(document.getElementById('mp-amount').value);
+  const date = document.getElementById('mp-date').value;
+  const ref = document.getElementById('mp-confirmation').value.trim();
+  const notes = document.getElementById('mp-notes').value.trim();
+
+  if (!fromId || !toId || !amount || !date) {
+    toast('Please fill in all required fields', 'error');
+    return;
+  }
+
+  try {
+    await api('POST', '/accounts/payments/', {
+      from_account_id: fromId,
+      to_account_id: toId,
+      payment_date: date,
+      amount: amount,
+      confirmation_ref: ref || null,
+      notes: notes || null,
+    });
+    toast('Payment recorded', 'success');
+    closeMarkPaidModal();
+    loadPlannerData();
+    loadAccounts();
+  } catch (e) {
+    toast('Failed to record payment: ' + e.message, 'error');
+  }
+}
+
+function _renderPaymentHistory(payments) {
+  const tbody = document.getElementById('planner-payments-body');
+  if (!payments.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:16px; color:var(--text-muted);">No payments recorded yet.</td></tr>';
+    return;
+  }
+  const acctMap = {};
+  _accountsCache.forEach(a => { acctMap[a.id] = a; });
+
+  tbody.innerHTML = payments.map(p => {
+    const fromName = acctMap[p.from_account_id] ? esc(acctMap[p.from_account_id].name) : `#${p.from_account_id}`;
+    const toName = acctMap[p.to_account_id] ? esc(acctMap[p.to_account_id].name) : `#${p.to_account_id}`;
+    return `<tr>
+      <td>${esc(p.payment_date)}</td>
+      <td>${fromName}</td>
+      <td>${toName}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(p.amount)}</td>
+      <td>${esc(p.payment_type || 'manual')}</td>
+      <td>${_cycleBadge(p.status || 'pending')}</td>
+      <td style="font-size:12px; color:var(--text-muted);">${p.confirmation_ref ? esc(p.confirmation_ref) : '-'}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Bulk Balance Update ─────────────────────────────────────────────
 
 async function submitBulkBalanceUpdate() {
   const updates = [];

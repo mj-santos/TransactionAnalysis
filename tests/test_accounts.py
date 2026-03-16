@@ -1,4 +1,4 @@
-"""Tests for the Accounts & Liabilities module — Phase 1 & 2."""
+"""Tests for the Accounts & Liabilities module — Phase 1, 2 & 3."""
 from __future__ import annotations
 
 import tempfile
@@ -15,6 +15,15 @@ from finance_etl.accounts.balance_ops import (
     get_overview_summary,
     get_stale_accounts,
 )
+from finance_etl.accounts.billing_cycles import (
+    create_billing_cycle,
+    get_billing_cycle,
+    get_open_cycles,
+    get_overdue_cycles,
+    list_cycles_for_account,
+    update_billing_cycle,
+    update_cycle_payment_status,
+)
 from finance_etl.accounts.crud import (
     create_account,
     create_payment_source_tag,
@@ -24,6 +33,16 @@ from finance_etl.accounts.crud import (
     list_payment_source_tags,
     soft_delete_account,
     update_account,
+)
+from finance_etl.accounts.payment_plan import (
+    get_capacity,
+    get_payment_plan,
+    rollforward_plan,
+    upsert_plan_assignment,
+)
+from finance_etl.accounts.payments import (
+    get_payment_history,
+    record_payment,
 )
 from finance_etl.accounts.schemas import AccountCreate, AccountUpdate
 
@@ -446,3 +465,308 @@ class TestOverviewSummary:
         assert float(summary["net_position"]) == 7500.0
         assert summary["credit_utilization_pct"] == 20.0
         assert summary["est_monthly_interest"] > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 3: Billing Cycles, Payment Planning, Payments
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _make_cc_and_checking(conn):
+    """Helper: create a credit card and checking account."""
+    cc = create_account(conn, AccountCreate(
+        name="Test CC", account_class="liability", liability_type="credit_card",
+        balance=1500, credit_limit=5000, due_day=15,
+    ))
+    checking = create_account(conn, AccountCreate(
+        name="Test Checking", account_class="asset", asset_type="checking", balance=10000,
+    ))
+    return cc, checking
+
+
+class TestBillingCycles:
+    def test_create_billing_cycle(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        cycle = create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 1200.50,
+            "payment_due_date": "2026-04-15",
+            "minimum_payment": 35.00,
+        })
+        assert cycle["account_id"] == cc["id"]
+        assert cycle["cycle_label"] == "2026-03"
+        assert float(cycle["statement_balance"]) == 1200.50
+        assert cycle["status"] == "open"
+        assert float(cycle["total_paid"]) == 0
+
+    def test_creates_updates_account_statement_fields(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 1200.50,
+            "payment_due_date": "2026-04-15",
+            "minimum_payment": 35.00,
+            "statement_close_date": "2026-03-10",
+        })
+        acct = get_account(conn, cc["id"])
+        assert float(acct["last_statement_balance"]) == 1200.50
+        assert float(acct["minimum_payment_amount"]) == 35.00
+        assert acct["next_payment_due_date"] == "2026-04-15"
+
+    def test_list_cycles_for_account(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        create_billing_cycle(conn, {"account_id": cc["id"], "cycle_label": "2026-02", "statement_balance": 800, "payment_due_date": "2026-03-15"})
+        create_billing_cycle(conn, {"account_id": cc["id"], "cycle_label": "2026-03", "statement_balance": 1200, "payment_due_date": "2026-04-15"})
+        cycles = list_cycles_for_account(conn, cc["id"])
+        assert len(cycles) == 2
+        assert cycles[0]["cycle_label"] == "2026-03"  # most recent first
+
+    def test_update_billing_cycle(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        cycle = create_billing_cycle(conn, {"account_id": cc["id"], "cycle_label": "2026-03", "statement_balance": 1000, "payment_due_date": "2026-04-15"})
+        updated = update_billing_cycle(conn, cycle["id"], {"statement_balance": 1100})
+        assert float(updated["statement_balance"]) == 1100.0
+
+    def test_get_open_cycles(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        create_billing_cycle(conn, {"account_id": cc["id"], "cycle_label": "2026-03", "statement_balance": 1000, "payment_due_date": "2026-04-15"})
+        cycles = get_open_cycles(conn)
+        assert len(cycles) >= 1
+        assert cycles[0]["status"] == "open"
+
+    def test_get_overdue_cycles(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2025-01",
+            "statement_balance": 500,
+            "payment_due_date": "2025-02-15",
+        })
+        overdue = get_overdue_cycles(conn)
+        assert len(overdue) >= 1
+
+
+class TestCyclePaymentStatus:
+    def test_paid_full_status(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        cycle = create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 100,
+            "payment_due_date": "2026-04-15",
+            "minimum_payment": 25,
+        })
+        # Simulate paying in full
+        conn.execute("UPDATE ap_billing_cycles SET total_paid = 100 WHERE id = ?", [cycle["id"]])
+        result = update_cycle_payment_status(conn, cycle["id"])
+        assert result["status"] == "paid_full"
+
+    def test_paid_minimum_status(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        cycle = create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 1000,
+            "payment_due_date": "2026-04-15",
+            "minimum_payment": 25,
+        })
+        conn.execute("UPDATE ap_billing_cycles SET total_paid = 25 WHERE id = ?", [cycle["id"]])
+        result = update_cycle_payment_status(conn, cycle["id"])
+        assert result["status"] == "paid_minimum"
+
+    def test_still_open_status(self, conn):
+        cc, _ = _make_cc_and_checking(conn)
+        cycle = create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 1000,
+            "payment_due_date": "2026-04-15",
+            "minimum_payment": 25,
+        })
+        result = update_cycle_payment_status(conn, cycle["id"])
+        assert result["status"] == "open"
+
+
+class TestPaymentPlan:
+    def test_upsert_creates_assignment(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        result = upsert_plan_assignment(conn, {
+            "liability_id": cc["id"],
+            "source_id": checking["id"],
+            "cycle_month": "2026-03",
+            "planned_amount": 1200.50,
+            "strategy": "statement",
+        })
+        assert result["liability_id"] == cc["id"]
+        assert result["source_id"] == checking["id"]
+        assert float(result["planned_amount"]) == 1200.50
+        assert result["status"] == "planned"
+
+    def test_upsert_updates_existing(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-03", "planned_amount": 1000, "strategy": "statement",
+        })
+        updated = upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-03", "planned_amount": 1500, "strategy": "full_balance",
+        })
+        assert float(updated["planned_amount"]) == 1500.0
+        assert updated["strategy"] == "full_balance"
+        # Should be only one row
+        plan = get_payment_plan(conn, "2026-03")
+        assert len(plan) == 1
+
+    def test_get_payment_plan(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-03", "planned_amount": 500,
+        })
+        plan = get_payment_plan(conn, "2026-03")
+        assert len(plan) == 1
+        assert plan[0]["liability_id"] == cc["id"]
+
+
+class TestCapacity:
+    def test_capacity_with_no_allocations(self, conn):
+        _, checking = _make_cc_and_checking(conn)
+        capacity = get_capacity(conn, "2026-03")
+        checking_cap = [c for c in capacity if c["id"] == checking["id"]]
+        assert len(checking_cap) == 1
+        assert checking_cap[0]["total_allocated"] == 0
+        assert checking_cap[0]["remaining_after_payments"] == 10000.0
+
+    def test_capacity_with_allocations(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-03", "planned_amount": 3000,
+        })
+        capacity = get_capacity(conn, "2026-03")
+        checking_cap = [c for c in capacity if c["id"] == checking["id"]]
+        assert checking_cap[0]["total_allocated"] == 3000.0
+        assert checking_cap[0]["remaining_after_payments"] == 7000.0
+
+    def test_capacity_excludes_skipped(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-03", "planned_amount": 2000, "status": "skipped",
+        })
+        capacity = get_capacity(conn, "2026-03")
+        checking_cap = [c for c in capacity if c["id"] == checking["id"]]
+        assert checking_cap[0]["total_allocated"] == 0  # skipped doesn't count
+
+
+class TestRollforward:
+    def test_rollforward_copies_assignments(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-02", "planned_amount": 1000, "strategy": "statement",
+        })
+        result = rollforward_plan(conn, "2026-02", "2026-03")
+        assert result["created"] == 1
+        assert result["skipped"] == 0
+        plan = get_payment_plan(conn, "2026-03")
+        assert len(plan) == 1
+        assert plan[0]["strategy"] == "statement"
+        assert plan[0]["status"] == "planned"
+
+    def test_rollforward_skips_existing(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-02", "planned_amount": 1000,
+        })
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-03", "planned_amount": 500,
+        })
+        result = rollforward_plan(conn, "2026-02", "2026-03")
+        assert result["created"] == 0
+        assert result["skipped"] == 1
+
+
+class TestRecordPayment:
+    def test_record_payment_basic(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        payment = record_payment(conn, {
+            "from_account_id": checking["id"],
+            "to_account_id": cc["id"],
+            "payment_date": "2026-03-10",
+            "amount": 500.00,
+        })
+        assert payment["from_account_id"] == checking["id"]
+        assert payment["to_account_id"] == cc["id"]
+        assert float(payment["amount"]) == 500.0
+
+    def test_payment_updates_last_payment_on_account(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        record_payment(conn, {
+            "from_account_id": checking["id"],
+            "to_account_id": cc["id"],
+            "payment_date": "2026-03-10",
+            "amount": 200.00,
+        })
+        acct = get_account(conn, cc["id"])
+        assert acct["last_payment_date"] == "2026-03-10"
+        assert float(acct["last_payment_amount"]) == 200.0
+
+    def test_payment_updates_billing_cycle(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        cycle = create_billing_cycle(conn, {
+            "account_id": cc["id"],
+            "cycle_label": "2026-03",
+            "statement_balance": 1000,
+            "payment_due_date": "2026-04-15",
+            "minimum_payment": 25,
+        })
+        record_payment(conn, {
+            "from_account_id": checking["id"],
+            "to_account_id": cc["id"],
+            "payment_date": "2026-03-10",
+            "amount": 1000.00,
+            "billing_cycle_id": cycle["id"],
+        })
+        updated_cycle = get_billing_cycle(conn, cycle["id"])
+        assert float(updated_cycle["total_paid"]) == 1000.0
+        assert updated_cycle["status"] == "paid_full"
+
+    def test_payment_sets_plan_in_progress(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        upsert_plan_assignment(conn, {
+            "liability_id": cc["id"], "source_id": checking["id"],
+            "cycle_month": "2026-03", "planned_amount": 1000,
+        })
+        record_payment(conn, {
+            "from_account_id": checking["id"],
+            "to_account_id": cc["id"],
+            "payment_date": "2026-03-10",
+            "amount": 500.00,
+        })
+        plan = get_payment_plan(conn, "2026-03")
+        assert plan[0]["status"] == "in_progress"
+
+
+class TestPaymentHistory:
+    def test_get_all_history(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        record_payment(conn, {"from_account_id": checking["id"], "to_account_id": cc["id"], "payment_date": "2026-03-01", "amount": 100})
+        record_payment(conn, {"from_account_id": checking["id"], "to_account_id": cc["id"], "payment_date": "2026-03-05", "amount": 200})
+        history = get_payment_history(conn)
+        assert len(history) == 2
+        assert float(history[0]["amount"]) == 200.0  # most recent first
+
+    def test_filter_by_account(self, conn):
+        cc, checking = _make_cc_and_checking(conn)
+        cc2 = create_account(conn, AccountCreate(name="CC2", account_class="liability", liability_type="credit_card", balance=500))
+        record_payment(conn, {"from_account_id": checking["id"], "to_account_id": cc["id"], "payment_date": "2026-03-01", "amount": 100})
+        record_payment(conn, {"from_account_id": checking["id"], "to_account_id": cc2["id"], "payment_date": "2026-03-02", "amount": 200})
+        history = get_payment_history(conn, account_id=cc["id"])
+        assert len(history) == 1
+        assert history[0]["to_account_id"] == cc["id"]

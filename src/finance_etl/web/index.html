@@ -1505,7 +1505,7 @@
       <div style="display:flex; gap:0; border-bottom:1px solid var(--border);">
         <button class="btn accounts-subtab" data-subtab="overview" onclick="switchAccountsSubtab('overview')" style="border-radius:0; flex:1;">Overview</button>
         <button class="btn accounts-subtab active" data-subtab="manage" onclick="switchAccountsSubtab('manage')" style="border-radius:0; border-bottom:2px solid var(--primary); flex:1;">Manage Accounts</button>
-        <button class="btn accounts-subtab" data-subtab="planner" onclick="switchAccountsSubtab('planner')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 3">Payment Planner</button>
+        <button class="btn accounts-subtab" data-subtab="planner" onclick="switchAccountsSubtab('planner')" style="border-radius:0; flex:1;">Payment Planner</button>
         <button class="btn accounts-subtab" data-subtab="trends" onclick="switchAccountsSubtab('trends')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 4">History &amp; Trends</button>
       </div>
     </div>
@@ -1667,6 +1667,162 @@
               <tbody id="tags-table-body"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Payment Planner sub-view -->
+    <div id="accounts-planner-view" style="display:none;">
+      <!-- Cycle month selector + actions -->
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <h3 style="margin:0;">Payment Planner</h3>
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button class="btn btn-secondary btn-sm" onclick="plannerPrevMonth()" title="Previous month">&larr;</button>
+            <input type="month" id="planner-cycle-month" onchange="loadPlannerData()" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; font-size:14px;" />
+            <button class="btn btn-secondary btn-sm" onclick="plannerNextMonth()" title="Next month">&rarr;</button>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="rollforwardPlan()">Rollforward from Last Month</button>
+        </div>
+      </div>
+
+      <!-- Open / Overdue billing cycles -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Open Billing Cycles</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body" style="overflow-x:auto;">
+            <table style="width:100%;">
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th>Cycle</th>
+                  <th style="text-align:right;">Statement Bal</th>
+                  <th style="text-align:right;">Min Payment</th>
+                  <th style="text-align:right;">Total Paid</th>
+                  <th>Due Date</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="planner-open-cycles-body">
+                <tr><td colspan="7" style="text-align:center; padding:16px; color:var(--text-muted);">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Capacity meters -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Asset Capacity</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body">
+            <div id="planner-capacity-meters">
+              <p style="color:var(--text-muted); text-align:center;">Loading...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assignment grid -->
+      <div class="card" style="margin-bottom:16px;">
+        <div style="padding:12px 16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+          <div class="card-title" style="margin:0;">Payment Assignments</div>
+          <button class="btn btn-primary btn-sm" onclick="savePlanAssignments()">Save Assignments</button>
+        </div>
+        <div class="card-body" style="overflow-x:auto;">
+          <table style="width:100%;">
+            <thead>
+              <tr>
+                <th>Liability</th>
+                <th style="text-align:right;">Balance</th>
+                <th style="text-align:right;">Statement Bal</th>
+                <th>Pay From</th>
+                <th>Strategy</th>
+                <th style="text-align:right;">Planned Amt</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="planner-assignments-body">
+              <tr><td colspan="8" style="text-align:center; padding:16px; color:var(--text-muted);">Select a month to view assignments.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Payment History -->
+      <div class="card">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Recent Payments</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body" style="display:none;">
+          <div class="card-body" style="overflow-x:auto;">
+            <table style="width:100%;">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>From</th>
+                  <th>To</th>
+                  <th style="text-align:right;">Amount</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Ref</th>
+                </tr>
+              </thead>
+              <tbody id="planner-payments-body">
+                <tr><td colspan="7" style="text-align:center; padding:16px; color:var(--text-muted);">No payments recorded.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mark Paid Modal -->
+    <div id="mark-paid-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+      <div style="background:var(--card-bg); border-radius:12px; padding:24px; max-width:480px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 style="margin:0;">Record Payment</h3>
+          <button onclick="closeMarkPaidModal()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted);">&times;</button>
+        </div>
+        <input type="hidden" id="mp-liability-id" />
+        <input type="hidden" id="mp-source-id" />
+        <div style="margin-bottom:12px;">
+          <label style="display:block; font-weight:600; margin-bottom:4px;">Liability</label>
+          <div id="mp-liability-name" style="color:var(--text-muted);"></div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block; font-weight:600; margin-bottom:4px;">Pay From</label>
+          <div id="mp-source-name" style="color:var(--text-muted);"></div>
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block; font-weight:600; margin-bottom:4px;">Amount</label>
+          <input type="number" id="mp-amount" step="0.01" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:6px;" />
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block; font-weight:600; margin-bottom:4px;">Payment Date</label>
+          <input type="date" id="mp-date" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:6px;" />
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="display:block; font-weight:600; margin-bottom:4px;">Confirmation Ref (optional)</label>
+          <input type="text" id="mp-confirmation" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:6px;" placeholder="e.g., Chase #12345" />
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="display:block; font-weight:600; margin-bottom:4px;">Notes (optional)</label>
+          <input type="text" id="mp-notes" style="width:100%; padding:8px 12px; border:1px solid var(--border); border-radius:6px;" />
+        </div>
+        <div style="display:flex; gap:8px; justify-content:flex-end;">
+          <button class="btn btn-secondary" onclick="closeMarkPaidModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="submitPayment()">Record Payment</button>
         </div>
       </div>
     </div>
