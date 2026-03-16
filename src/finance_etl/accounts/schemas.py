@@ -135,12 +135,16 @@ class AccountListResponse(BaseModel):
 
 # ── Balance Update ───────────────────────────────────────────────────────
 
-class BalanceUpdateRequest(BaseModel):
+class BalanceUpdateEntry(BaseModel):
     account_id: int
     current_balance: Decimal
     statement_balance: Optional[Decimal] = None
     minimum_payment: Optional[Decimal] = None
     data_source: str = "manual"
+
+
+class BulkBalanceUpdateRequest(BaseModel):
+    updates: list[BalanceUpdateEntry]
 
 
 # ── Payment Source Tags ──────────────────────────────────────────────────

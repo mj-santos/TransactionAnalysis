@@ -99,6 +99,7 @@ TransactionAnalysis/
 │   ├── __init__.py
 │   ├── accounts/               ← Accounts & Liabilities subpackage
 │   │   ├── __init__.py         ← FastAPI sub-router
+│   │   ├── balance_ops.py      ← Bulk update, ledger, stale detection, snapshots
 │   │   ├── crud.py             ← Account CRUD + CoA auto-assignment
 │   │   ├── db_migrations.py    ← ALTER TABLE + CREATE TABLE migrations
 │   │   ├── routes.py           ← API route handlers
@@ -178,7 +179,7 @@ TransactionAnalysis/
 | Merchants | `#page-merchant-rules` | `loadMerchantRules()` | ✅ |
 | Categories | `#page-category-rules` | `loadCategoryRules()` | ✅ |
 | Recurring | `#page-recurring-transactions` | `loadRecurringTransactions()` | ✅ |
-| Accounts | `#page-accounts` | `loadAccounts()` | ✅ Phase 1 |
+| Accounts | `#page-accounts` | `loadAccounts()` | ✅ Phase 1+2 |
 | Utilities | `#page-utilities` | `loadUtilCategories()` + others | ✅ |
 | Settings | `#page-settings` | `loadSettings()` | ✅ |
 
@@ -398,13 +399,14 @@ No npm, no package.json, no build step. Vanilla browser JS/CSS only. No third-pa
 
 ## 9. VERSION TRACKING
 
-**Current Version:** v2.36.0
+**Current Version:** v2.37.0
 **App Name:** Spendly
 
 ### Changelog
 
 | Version | Date | Description |
 |---|---|---|
+| v2.37.0 | 2026-03-16 | feat: Accounts Phase 2 — balance ledger, overview KPIs, bulk update, stale detection |
 | v2.36.0 | 2026-03-16 | feat: Accounts & Liabilities module Phase 1 (schema + CRUD + UI) |
 | v2.35.2 | 2026-03-13 | fix: bulk category override + remove dead health metric |
 | v2.35.1 | 2026-03-13 | fix: bulk category assignment DOM cleanup + missing SELECT columns |
@@ -606,3 +608,9 @@ All endpoints in `src/finance_etl/api.py` inside `create_app()`. Interactive doc
 | `PATCH` | `/accounts/{id}/status` | Change status | 🟢 |
 | `GET` | `/accounts/taxonomy` | CoA tree structure | 🟢 |
 | `GET/POST/DELETE` | `/accounts/tags` | Payment source tags | 🟢 |
+| `POST` | `/accounts/balances/update` | Bulk balance update (reconciliation) | 🟢 |
+| `GET` | `/accounts/balances/history/{id}` | Balance ledger for one account | 🟢 |
+| `GET` | `/accounts/balances/latest` | Latest balance for all accounts | 🟢 |
+| `GET` | `/accounts/balances/stale` | Accounts not updated in > N days | 🟢 |
+| `GET` | `/accounts/balances/snapshot` | Generate net worth snapshot | 🟢 |
+| `GET` | `/accounts/balances/summary` | Overview KPI summary | 🟢 |

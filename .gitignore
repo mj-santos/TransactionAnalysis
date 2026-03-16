@@ -48,3 +48,4 @@ config/wizard_profiles/
 Thumbs.db
 docs
 docs/*
+PROJECT.md

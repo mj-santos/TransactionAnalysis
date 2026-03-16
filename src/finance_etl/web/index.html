@@ -1503,10 +1503,115 @@
     <!-- Sub-navigation tabs -->
     <div class="card" style="margin-bottom:16px;">
       <div style="display:flex; gap:0; border-bottom:1px solid var(--border);">
+        <button class="btn accounts-subtab" data-subtab="overview" onclick="switchAccountsSubtab('overview')" style="border-radius:0; flex:1;">Overview</button>
         <button class="btn accounts-subtab active" data-subtab="manage" onclick="switchAccountsSubtab('manage')" style="border-radius:0; border-bottom:2px solid var(--primary); flex:1;">Manage Accounts</button>
-        <button class="btn accounts-subtab" data-subtab="overview" onclick="switchAccountsSubtab('overview')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 2">Overview</button>
         <button class="btn accounts-subtab" data-subtab="planner" onclick="switchAccountsSubtab('planner')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 3">Payment Planner</button>
         <button class="btn accounts-subtab" data-subtab="trends" onclick="switchAccountsSubtab('trends')" style="border-radius:0; flex:1; opacity:0.5;" disabled title="Coming in Phase 4">History &amp; Trends</button>
+      </div>
+    </div>
+
+    <!-- Overview sub-view -->
+    <div id="accounts-overview-view" style="display:none;">
+      <!-- KPI cards -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:16px;">
+        <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Total Liabilities</div>
+          <div id="kpi-total-liabilities" style="font-size:22px; font-weight:700; color:var(--danger); margin-top:4px;">$0</div>
+        </div>
+        <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Total Assets</div>
+          <div id="kpi-total-assets" style="font-size:22px; font-weight:700; color:var(--success); margin-top:4px;">$0</div>
+        </div>
+        <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Net Position</div>
+          <div id="kpi-net-position" style="font-size:22px; font-weight:700; margin-top:4px;">$0</div>
+        </div>
+        <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Credit Utilization</div>
+          <div id="kpi-utilization" style="font-size:22px; font-weight:700; margin-top:4px;">0%</div>
+        </div>
+        <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Due This Week</div>
+          <div id="kpi-due-this-week" style="font-size:22px; font-weight:700; margin-top:4px;">0</div>
+        </div>
+        <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Est. Monthly Interest</div>
+          <div id="kpi-monthly-interest" style="font-size:22px; font-weight:700; color:var(--warning); margin-top:4px;">$0</div>
+        </div>
+      </div>
+
+      <!-- Action bar -->
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:12px;">
+        <button class="btn btn-primary" onclick="openUpdateBalancesGrid()">Update Balances</button>
+      </div>
+
+      <!-- Liabilities table -->
+      <div class="card" style="margin-bottom:16px;">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Liabilities</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body" style="overflow-x:auto;">
+            <table style="width:100%;">
+              <thead><tr>
+                <th>Account</th><th>Institution</th><th style="text-align:right;">Balance</th>
+                <th style="text-align:right;">Statement</th><th style="text-align:right;">Min Due</th>
+                <th>Due Day</th><th style="text-align:right;">Credit Limit</th>
+                <th style="text-align:right;">Util %</th><th>Source</th><th>Last Updated</th>
+              </tr></thead>
+              <tbody id="overview-liabilities-body">
+                <tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-muted);">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assets table -->
+      <div class="card">
+        <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+          <div class="card-title">Assets</div>
+          <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div class="card-collapsible-body">
+          <div class="card-body" style="overflow-x:auto;">
+            <table style="width:100%;">
+              <thead><tr>
+                <th>Account</th><th>Institution</th><th style="text-align:right;">Balance</th>
+                <th>Source Tag</th><th>Last Updated</th>
+              </tr></thead>
+              <tbody id="overview-assets-body">
+                <tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-muted);">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Update Balances Modal -->
+    <div id="update-balances-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:flex-start; padding-top:40px;">
+      <div style="background:var(--card-bg); border-radius:12px; padding:24px; max-width:900px; width:95%; max-height:85vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 style="margin:0;">Update Balances</h3>
+          <button onclick="closeUpdateBalancesGrid()" style="background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-muted);">&times;</button>
+        </div>
+        <p style="color:var(--text-muted); font-size:13px; margin-bottom:12px;">Enter new balances. Leave blank to keep unchanged. Tab through fields for speed.</p>
+        <table style="width:100%;">
+          <thead><tr>
+            <th>Account</th><th>Type</th><th style="text-align:right;">Last Balance</th>
+            <th style="text-align:right;">New Balance</th>
+            <th style="text-align:right;" class="bal-col-stmt">Statement Bal</th>
+            <th style="text-align:right;" class="bal-col-min">Min Payment</th>
+            <th>Stale</th>
+          </tr></thead>
+          <tbody id="update-balances-body"></tbody>
+        </table>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+          <button class="btn btn-secondary" onclick="closeUpdateBalancesGrid()">Cancel</button>
+          <button class="btn btn-primary" onclick="submitBulkBalanceUpdate()">Save All Changes</button>
+        </div>
       </div>
     </div>
 

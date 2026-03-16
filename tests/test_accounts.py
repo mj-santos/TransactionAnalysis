@@ -1,4 +1,4 @@
-"""Tests for the Accounts & Liabilities module — Phase 1."""
+"""Tests for the Accounts & Liabilities module — Phase 1 & 2."""
 from __future__ import annotations
 
 import tempfile
@@ -7,6 +7,14 @@ from pathlib import Path
 import pytest
 
 from finance_etl.db import get_connection
+from finance_etl.accounts.balance_ops import (
+    bulk_balance_update,
+    generate_snapshot,
+    get_balance_history,
+    get_latest_balances,
+    get_overview_summary,
+    get_stale_accounts,
+)
 from finance_etl.accounts.crud import (
     create_account,
     create_payment_source_tag,
@@ -305,3 +313,136 @@ class TestBalanceLedgerOnCreate:
         entry = dict(zip(cols, ledger[0]))
         assert float(entry["current_balance"]) == 1500.00
         assert float(entry["statement_balance"]) == 1200.00
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Phase 2 Tests — Balance Operations
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestBulkBalanceUpdate:
+    def test_single_update(self, conn):
+        acct = create_account(conn, AccountCreate(name="CC", account_class="liability", liability_type="credit_card", balance=1000))
+        result = bulk_balance_update(conn, [{"account_id": acct["id"], "current_balance": 1500}])
+        assert result["updated"] == 1
+        fetched = get_account(conn, acct["id"])
+        assert float(fetched["balance"]) == 1500.0
+        assert fetched["last_verified_at"] is not None
+
+    def test_multiple_updates(self, conn):
+        a1 = create_account(conn, AccountCreate(name="A", account_class="asset", asset_type="checking", balance=5000))
+        a2 = create_account(conn, AccountCreate(name="B", account_class="liability", liability_type="credit_card", balance=200))
+        result = bulk_balance_update(conn, [
+            {"account_id": a1["id"], "current_balance": 4500},
+            {"account_id": a2["id"], "current_balance": 300, "statement_balance": 250, "minimum_payment": 25},
+        ])
+        assert result["updated"] == 2
+        f2 = get_account(conn, a2["id"])
+        assert float(f2["balance"]) == 300.0
+        assert float(f2["last_statement_balance"]) == 250.0
+        assert float(f2["minimum_payment_amount"]) == 25.0
+
+    def test_skip_unchanged(self, conn):
+        """Passing an empty list should update nothing."""
+        result = bulk_balance_update(conn, [])
+        assert result["updated"] == 0
+
+
+class TestLedgerImmutability:
+    def test_multiple_updates_create_multiple_ledger_entries(self, conn):
+        acct = create_account(conn, AccountCreate(name="CC", account_class="liability", liability_type="credit_card", balance=1000))
+        bulk_balance_update(conn, [{"account_id": acct["id"], "current_balance": 1200}])
+        bulk_balance_update(conn, [{"account_id": acct["id"], "current_balance": 900}])
+        history = get_balance_history(conn, acct["id"])
+        # 1 from create + 2 from updates = 3
+        assert len(history) == 3
+        # Most recent first
+        assert float(history[0]["current_balance"]) == 900.0
+        assert float(history[1]["current_balance"]) == 1200.0
+        assert float(history[2]["current_balance"]) == 1000.0
+
+    def test_balance_history_returns_limited(self, conn):
+        acct = create_account(conn, AccountCreate(name="A", account_class="asset", asset_type="checking", balance=0))
+        for i in range(5):
+            bulk_balance_update(conn, [{"account_id": acct["id"], "current_balance": i * 100}])
+        history = get_balance_history(conn, acct["id"], limit=3)
+        assert len(history) == 3
+
+
+class TestSnapshotGeneration:
+    def test_snapshot_totals(self, conn):
+        create_account(conn, AccountCreate(name="Checking", account_class="asset", asset_type="checking", balance=10000))
+        create_account(conn, AccountCreate(name="CC", account_class="liability", liability_type="credit_card", balance=3000))
+        snap = generate_snapshot(conn)
+        assert float(snap["total_assets"]) == 10000.0
+        assert float(snap["total_liabilities"]) == 3000.0
+        assert float(snap["net_worth"]) == 7000.0
+
+    def test_snapshot_inserted_to_db(self, conn):
+        create_account(conn, AccountCreate(name="A", account_class="asset", asset_type="checking", balance=5000))
+        generate_snapshot(conn)
+        rows = conn.execute("SELECT COUNT(*) FROM nw_snapshots").fetchone()
+        assert rows[0] >= 1
+
+    def test_bulk_update_generates_snapshot_via_api(self, conn):
+        """After bulk_balance_update + generate_snapshot, snapshot exists."""
+        create_account(conn, AccountCreate(name="A", account_class="asset", asset_type="checking", balance=5000))
+        bulk_balance_update(conn, [])  # no changes, but snapshot is separate
+        snap = generate_snapshot(conn)
+        assert snap["snapshot_date"] is not None
+
+
+class TestLatestBalances:
+    def test_returns_active_accounts(self, conn):
+        create_account(conn, AccountCreate(name="Active", account_class="asset", asset_type="checking", balance=100))
+        closed = create_account(conn, AccountCreate(name="Closed", account_class="asset", asset_type="savings", balance=200))
+        soft_delete_account(conn, closed["id"], "closed")
+        latest = get_latest_balances(conn)
+        names = [a["name"] for a in latest]
+        assert "Active" in names
+        assert "Closed" not in names
+
+
+class TestStaleDetection:
+    def test_never_verified_accounts_are_stale(self, conn):
+        # Create an account, then manually null out last_verified_at
+        acct = create_account(conn, AccountCreate(name="Stale", account_class="asset", asset_type="checking", balance=0))
+        conn.execute("UPDATE nw_accounts SET last_verified_at = NULL WHERE id = ?", [acct["id"]])
+        stale = get_stale_accounts(conn, days=1)
+        assert len(stale) >= 1
+        assert any(s["name"] == "Stale" for s in stale)
+
+    def test_recently_verified_not_stale(self, conn):
+        create_account(conn, AccountCreate(name="Fresh", account_class="asset", asset_type="checking", balance=0))
+        # Just created = last_verified_at is now, so not stale at 7 days
+        stale = get_stale_accounts(conn, days=7)
+        assert not any(s["name"] == "Fresh" for s in stale)
+
+
+class TestOverviewSummary:
+    def test_empty_db(self, conn):
+        summary = get_overview_summary(conn)
+        assert summary["total_assets"] == 0
+        assert summary["total_liabilities"] == 0
+        assert summary["net_position"] == 0
+        assert summary["credit_utilization_pct"] == 0
+
+    def test_with_data(self, conn):
+        create_account(conn, AccountCreate(
+            name="Checking", account_class="asset", asset_type="checking", balance=10000,
+        ))
+        create_account(conn, AccountCreate(
+            name="CC", account_class="liability", liability_type="credit_card",
+            balance=2000, credit_limit=10000, interest_rate=24.99,
+        ))
+        create_account(conn, AccountCreate(
+            name="Debt", account_class="liability", liability_type="personal_debt", balance=500,
+        ))
+        summary = get_overview_summary(conn)
+        assert float(summary["total_assets"]) == 10000.0
+        assert float(summary["total_liabilities"]) == 2500.0
+        # Excl personal = 2000
+        assert float(summary["total_liabilities_excl_personal"]) == 2000.0
+        assert float(summary["net_position"]) == 7500.0
+        assert summary["credit_utilization_pct"] == 20.0
+        assert summary["est_monthly_interest"] > 0

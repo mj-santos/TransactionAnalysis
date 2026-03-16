@@ -1,7 +1,9 @@
 // ── Accounts & Liabilities Module ─────────────────────────────────────
 // Phase 1: Manage Accounts sub-view, Add/Edit Account, Payment Source Tags
+// Phase 2: Overview sub-view, Update Balances grid, KPI cards, stale detection
 
 let _accountsCache = [];
+let _currentAccountsSubtab = 'manage';
 
 // ── Load Accounts ────────────────────────────────────────────────────
 async function loadAccounts() {
@@ -11,6 +13,10 @@ async function loadAccounts() {
     _renderAccountsTable(_accountsCache);
     _loadPaymentSourceTags();
     _populateTagAccountDropdown(_accountsCache);
+    // Also load overview data if that tab is active
+    if (_currentAccountsSubtab === 'overview') {
+      _loadOverviewData();
+    }
   } catch (e) {
     toast('Failed to load accounts: ' + e.message, 'error');
   }
@@ -63,8 +69,11 @@ function _statusBadge(status) {
 
 // ── Sub-tab switching ────────────────────────────────────────────────
 function switchAccountsSubtab(tab) {
-  // Phase 1 only implements 'manage'
-  if (tab !== 'manage') return;
+  const validTabs = ['overview', 'manage'];
+  if (!validTabs.includes(tab)) return;
+
+  _currentAccountsSubtab = tab;
+
   document.querySelectorAll('.accounts-subtab').forEach(b => {
     b.classList.remove('active');
     b.style.borderBottom = 'none';
@@ -74,6 +83,14 @@ function switchAccountsSubtab(tab) {
     btn.classList.add('active');
     btn.style.borderBottom = '2px solid var(--primary)';
   }
+
+  // Toggle views
+  const overviewView = document.getElementById('accounts-overview-view');
+  const manageView = document.getElementById('accounts-manage-view');
+  if (overviewView) overviewView.style.display = tab === 'overview' ? '' : 'none';
+  if (manageView) manageView.style.display = tab === 'manage' ? '' : 'none';
+
+  if (tab === 'overview') _loadOverviewData();
 }
 
 // ── Add Account Modal ────────────────────────────────────────────────
@@ -415,5 +432,195 @@ async function deletePaymentSourceTag(code) {
     _loadPaymentSourceTags();
   } catch (e) {
     toast('Failed to delete tag: ' + e.message, 'error');
+  }
+}
+
+// ── Overview Sub-View (Phase 2) ─────────────────────────────────────
+
+function _fmt(val) {
+  if (val == null) return '-';
+  return parseFloat(val).toLocaleString('en-US', {style:'currency', currency:'USD'});
+}
+
+async function _loadOverviewData() {
+  try {
+    const [summary, latestAccounts] = await Promise.all([
+      api('GET', '/accounts/balances/summary'),
+      api('GET', '/accounts/balances/latest'),
+    ]);
+    _renderKPIs(summary);
+    _renderOverviewTables(latestAccounts);
+  } catch (e) {
+    toast('Failed to load overview: ' + e.message, 'error');
+  }
+}
+
+function _renderKPIs(s) {
+  document.getElementById('kpi-total-liabilities').textContent = _fmt(s.total_liabilities_excl_personal);
+  document.getElementById('kpi-total-assets').textContent = _fmt(s.total_assets);
+  const netEl = document.getElementById('kpi-net-position');
+  netEl.textContent = _fmt(s.net_position);
+  netEl.style.color = s.net_position >= 0 ? 'var(--success)' : 'var(--danger)';
+  const utilEl = document.getElementById('kpi-utilization');
+  utilEl.textContent = s.credit_utilization_pct + '%';
+  utilEl.style.color = s.credit_utilization_pct > 80 ? 'var(--danger)' : s.credit_utilization_pct > 30 ? 'var(--warning)' : 'var(--success)';
+  document.getElementById('kpi-due-this-week').textContent = s.due_this_week;
+  document.getElementById('kpi-monthly-interest').textContent = _fmt(s.est_monthly_interest);
+}
+
+function _renderOverviewTables(accounts) {
+  const liabilities = accounts.filter(a => a.account_class === 'liability' || a.is_asset === false);
+  const assets = accounts.filter(a => a.account_class === 'asset' || a.is_asset === true);
+
+  // Liabilities
+  const liabBody = document.getElementById('overview-liabilities-body');
+  if (!liabilities.length) {
+    liabBody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-muted);">No liabilities</td></tr>';
+  } else {
+    liabBody.innerHTML = liabilities.map(a => {
+      const bal = Math.abs(parseFloat(a.balance || 0));
+      const stmt = a.last_statement_balance != null ? Math.abs(parseFloat(a.last_statement_balance)) : null;
+      const minDue = a.minimum_payment_amount != null ? parseFloat(a.minimum_payment_amount) : null;
+      const cl = a.credit_limit ? parseFloat(a.credit_limit) : null;
+      const util = cl && cl > 0 ? Math.round(bal / cl * 100) : null;
+      const utilStyle = util != null && util > 80 ? 'color:var(--danger); font-weight:600;' : util != null && util > 30 ? 'color:var(--warning);' : '';
+      const staleInfo = _staleBadge(a.last_verified_at);
+      return `<tr>
+        <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
+        <td>${esc(a.institution || '-')}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(bal)}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${stmt != null ? _fmt(stmt) : '-'}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${minDue != null ? _fmt(minDue) : '-'}</td>
+        <td>${a.due_day || '-'}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${cl != null ? _fmt(cl) : '-'}</td>
+        <td style="text-align:right; ${utilStyle}">${util != null ? util + '%' : '-'}</td>
+        <td><code style="font-size:11px;">${esc(a.payment_source_tag || '-')}</code></td>
+        <td style="font-size:12px;">${staleInfo}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Assets
+  const assetBody = document.getElementById('overview-assets-body');
+  if (!assets.length) {
+    assetBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-muted);">No assets</td></tr>';
+  } else {
+    assetBody.innerHTML = assets.map(a => {
+      const staleInfo = _staleBadge(a.last_verified_at);
+      return `<tr>
+        <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
+        <td>${esc(a.institution || '-')}</td>
+        <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.balance)}</td>
+        <td><code style="font-size:11px;">${esc(a.payment_source_tag || '-')}</code></td>
+        <td style="font-size:12px;">${staleInfo}</td>
+      </tr>`;
+    }).join('');
+  }
+}
+
+function _staleBadge(lastVerifiedAt) {
+  if (!lastVerifiedAt) return '<span style="color:var(--danger);" title="Never verified">&#9679; Never</span>';
+  const now = new Date();
+  const verified = new Date(lastVerifiedAt);
+  const days = Math.floor((now - verified) / (1000 * 60 * 60 * 24));
+  const dateStr = verified.toLocaleDateString();
+  if (days > 14) return `<span style="color:var(--danger);" title="${days} days ago">&#9679; ${dateStr}</span>`;
+  if (days > 7) return `<span style="color:var(--warning);" title="${days} days ago">&#9679; ${dateStr}</span>`;
+  return `<span style="color:var(--success);" title="${days} days ago">&#9679; ${dateStr}</span>`;
+}
+
+// ── Update Balances Grid ─────────────────────────────────────────────
+
+function openUpdateBalancesGrid() {
+  document.getElementById('update-balances-modal').style.display = 'flex';
+  _renderUpdateBalancesGrid();
+}
+
+function closeUpdateBalancesGrid() {
+  document.getElementById('update-balances-modal').style.display = 'none';
+}
+
+async function _renderUpdateBalancesGrid() {
+  let accounts;
+  try {
+    accounts = await api('GET', '/accounts/balances/latest');
+  } catch (e) {
+    toast('Failed to load balances', 'error');
+    return;
+  }
+
+  // Group by type for easier scanning
+  const typeOrder = ['credit_card','mortgage','auto_loan','student_loan','utility','personal_debt','other','checking','savings','investment','digital_wallet'];
+  accounts.sort((a, b) => {
+    const aType = a.liability_type || a.asset_type || '';
+    const bType = b.liability_type || b.asset_type || '';
+    return typeOrder.indexOf(aType) - typeOrder.indexOf(bType);
+  });
+
+  const tbody = document.getElementById('update-balances-body');
+  let lastType = null;
+  let html = '';
+
+  for (const a of accounts) {
+    const subtype = a.liability_type || a.asset_type || a.acct_type;
+    const typeLabels = {
+      credit_card: 'Credit Cards', mortgage: 'Mortgages', auto_loan: 'Auto Loans',
+      student_loan: 'Student Loans', utility: 'Utilities', personal_debt: 'Personal Debts',
+      other: 'Other', checking: 'Checking', savings: 'Savings',
+      investment: 'Investments', digital_wallet: 'Digital Wallets',
+    };
+    if (subtype !== lastType) {
+      lastType = subtype;
+      html += `<tr><td colspan="7" style="background:var(--bg-secondary); font-weight:600; padding:8px 12px; font-size:13px;">${typeLabels[subtype] || subtype || 'Other'}</td></tr>`;
+    }
+
+    const isCC = a.liability_type === 'credit_card';
+    const staleInfo = _staleBadge(a.last_verified_at);
+    html += `<tr data-account-id="${a.id}">
+      <td>${esc(a.name)}${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
+      <td style="font-size:12px;">${_typeLabel(a)}</td>
+      <td style="text-align:right; color:var(--text-muted); font-variant-numeric:tabular-nums;">${_fmt(a.balance)}</td>
+      <td><input type="number" step="0.01" class="bal-input-current" data-id="${a.id}" placeholder="unchanged" style="width:120px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; text-align:right; font-variant-numeric:tabular-nums;" /></td>
+      <td class="bal-col-stmt">${isCC ? `<input type="number" step="0.01" class="bal-input-stmt" data-id="${a.id}" placeholder="${a.last_statement_balance || ''}" style="width:110px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; text-align:right;" />` : '-'}</td>
+      <td class="bal-col-min">${isCC ? `<input type="number" step="0.01" class="bal-input-min" data-id="${a.id}" placeholder="${a.minimum_payment_amount || ''}" style="width:100px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; text-align:right;" />` : '-'}</td>
+      <td style="font-size:12px;">${staleInfo}</td>
+    </tr>`;
+  }
+
+  tbody.innerHTML = html;
+}
+
+async function submitBulkBalanceUpdate() {
+  const updates = [];
+  document.querySelectorAll('.bal-input-current').forEach(input => {
+    const val = input.value.trim();
+    if (!val) return; // Skip unchanged
+    const id = parseInt(input.dataset.id);
+    const entry = { account_id: id, current_balance: parseFloat(val) };
+
+    const stmtInput = document.querySelector(`.bal-input-stmt[data-id="${id}"]`);
+    if (stmtInput && stmtInput.value.trim()) {
+      entry.statement_balance = parseFloat(stmtInput.value.trim());
+    }
+    const minInput = document.querySelector(`.bal-input-min[data-id="${id}"]`);
+    if (minInput && minInput.value.trim()) {
+      entry.minimum_payment = parseFloat(minInput.value.trim());
+    }
+    updates.push(entry);
+  });
+
+  if (!updates.length) {
+    toast('No changes to save', 'info');
+    return;
+  }
+
+  try {
+    const result = await api('POST', '/accounts/balances/update', { updates });
+    toast(`Updated ${result.updated} account(s). Snapshot saved.`, 'success');
+    closeUpdateBalancesGrid();
+    loadAccounts();
+    if (_currentAccountsSubtab === 'overview') _loadOverviewData();
+  } catch (e) {
+    toast('Failed to save balances: ' + e.message, 'error');
   }
 }
