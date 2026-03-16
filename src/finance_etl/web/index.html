@@ -2234,6 +2234,18 @@
               <input type="text" id="edit-acct-name" required style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
             </div>
             <div>
+              <label>Account Class</label>
+              <select id="edit-acct-class" onchange="_onEditClassChange()" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;">
+                <option value="liability">Liability</option>
+                <option value="asset">Asset</option>
+              </select>
+            </div>
+            <div>
+              <label>Account Type</label>
+              <select id="edit-acct-subtype" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;">
+              </select>
+            </div>
+            <div>
               <label>Institution</label>
               <input type="text" id="edit-acct-institution" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
             </div>

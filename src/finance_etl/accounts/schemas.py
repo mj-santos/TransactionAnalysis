@@ -56,6 +56,9 @@ class AccountCreate(BaseModel):
 
 class AccountUpdate(BaseModel):
     name: Optional[str] = None
+    account_class: Optional[str] = Field(None, pattern="^(asset|liability)$")
+    liability_type: Optional[str] = None
+    asset_type: Optional[str] = None
     institution: Optional[str] = None
     last_four: Optional[str] = None
     responsibility: Optional[str] = None

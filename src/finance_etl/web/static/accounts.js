@@ -317,6 +317,38 @@ async function submitNewAccount() {
 }
 
 // ── Edit Account ─────────────────────────────────────────────────────
+const _LIABILITY_TYPES = [
+  { value: 'credit_card', label: 'Credit Card' },
+  { value: 'mortgage', label: 'Mortgage' },
+  { value: 'auto_loan', label: 'Auto Loan' },
+  { value: 'student_loan', label: 'Student Loan' },
+  { value: 'utility', label: 'Utility / Service' },
+  { value: 'personal_debt', label: 'Personal Debt' },
+  { value: 'other', label: 'Other Liability' },
+];
+
+const _ASSET_TYPES = [
+  { value: 'checking', label: 'Checking' },
+  { value: 'savings', label: 'Savings' },
+  { value: 'investment', label: 'Investment' },
+  { value: 'digital_wallet', label: 'Digital Wallet' },
+];
+
+function _populateSubtypeDropdown(acctClass, currentSubtype) {
+  const select = document.getElementById('edit-acct-subtype');
+  if (!select) return;
+  const types = acctClass === 'asset' ? _ASSET_TYPES : _LIABILITY_TYPES;
+  select.innerHTML = types.map(t =>
+    `<option value="${t.value}" ${t.value === currentSubtype ? 'selected' : ''}>${t.label}</option>`
+  ).join('');
+}
+
+function _onEditClassChange() {
+  const cls = document.getElementById('edit-acct-class').value;
+  const defaults = cls === 'asset' ? 'checking' : 'credit_card';
+  _populateSubtypeDropdown(cls, defaults);
+}
+
 function openEditAccount(id) {
   const acct = _accountsCache.find(a => a.id === id);
   if (!acct) return;
@@ -339,6 +371,12 @@ function openEditAccount(id) {
   document.getElementById('edit-acct-interest-rate').value = acct.interest_rate || '';
   document.getElementById('edit-acct-payment-source-tag').value = acct.payment_source_tag || '';
 
+  // Populate account class + subtype dropdowns
+  const acctClass = acct.account_class || (acct.is_asset ? 'asset' : 'liability');
+  document.getElementById('edit-acct-class').value = acctClass;
+  const currentSubtype = acctClass === 'asset' ? acct.asset_type : acct.liability_type;
+  _populateSubtypeDropdown(acctClass, currentSubtype || (acctClass === 'asset' ? 'checking' : 'credit_card'));
+
   // Populate linked transaction source dropdown
   _populateLinkedSourceDropdown(acct);
 }
@@ -348,6 +386,17 @@ async function submitEditAccount() {
   const payload = {};
   const name = document.getElementById('edit-acct-name').value.trim();
   if (name) payload.name = name;
+
+  // Account class + type
+  const acctClass = document.getElementById('edit-acct-class').value;
+  const subtype = document.getElementById('edit-acct-subtype').value;
+  payload.account_class = acctClass;
+  if (acctClass === 'asset') {
+    payload.asset_type = subtype;
+  } else {
+    payload.liability_type = subtype;
+  }
+
   const inst = document.getElementById('edit-acct-institution').value.trim();
   if (inst) payload.institution = inst;
   const lf = document.getElementById('edit-acct-last-four').value.trim();

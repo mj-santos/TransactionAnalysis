@@ -216,11 +216,31 @@ def list_accounts(conn, filters: dict | None = None) -> list[dict]:
 
 
 def update_account(conn, account_id: int, data: AccountUpdate) -> dict:
-    """Update an existing account."""
+    """Update an existing account. Handles type changes with CoA re-assignment."""
     now = _now_iso()
     updates = data.model_dump(exclude_none=True)
     if not updates:
         return get_account(conn, account_id)
+
+    # If account_class or subtype changed, re-derive acct_type, is_asset, account_code
+    if "account_class" in updates or "liability_type" in updates or "asset_type" in updates:
+        current = get_account(conn, account_id)
+        new_class = updates.get("account_class", current["account_class"])
+        new_liability_type = updates.get("liability_type", current.get("liability_type"))
+        new_asset_type = updates.get("asset_type", current.get("asset_type"))
+
+        # Determine the active subtype based on class
+        if new_class == "asset":
+            subtype = new_asset_type or "checking"
+            updates["liability_type"] = None
+        else:
+            subtype = new_liability_type or "credit_card"
+            updates["asset_type"] = None
+
+        updates["acct_type"] = _acct_type_label(new_class, subtype)
+        updates["is_asset"] = new_class == "asset"
+        updates["account_code"] = _assign_account_code(conn, new_class, subtype)
+
     # Convert Decimal fields to float for DuckDB
     for key, val in updates.items():
         if isinstance(val, Decimal):

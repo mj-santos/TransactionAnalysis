@@ -1450,6 +1450,78 @@ class TestAccountLinking:
         assert acct["last_verified_at"] is not None
 
 
+class TestAccountTypeEdit:
+    """Test changing account type (class + subtype)."""
+
+    def test_change_liability_subtype(self, conn):
+        """Change a credit_card to auto_loan."""
+        cc = create_account(conn, AccountCreate(
+            name="Test Card", account_class="liability",
+            liability_type="credit_card", balance=1000,
+        ))
+        assert cc["liability_type"] == "credit_card"
+        assert cc["acct_type"] == "credit_card"
+        assert cc["account_code"].startswith("21")  # 2100 range
+
+        updated = update_account(conn, cc["id"], AccountUpdate(
+            liability_type="auto_loan",
+        ))
+        assert updated["liability_type"] == "auto_loan"
+        assert updated["acct_type"] == "auto_loan"
+        assert updated["account_code"].startswith("22")  # 2220 range
+        assert updated["account_class"] == "liability"
+        assert updated["is_asset"] is False
+
+    def test_change_asset_subtype(self, conn):
+        """Change checking to savings."""
+        acct = create_account(conn, AccountCreate(
+            name="My Account", account_class="asset",
+            asset_type="checking", balance=5000,
+        ))
+        assert acct["asset_type"] == "checking"
+
+        updated = update_account(conn, acct["id"], AccountUpdate(
+            asset_type="savings",
+        ))
+        assert updated["asset_type"] == "savings"
+        assert updated["acct_type"] == "savings"
+        assert updated["account_code"].startswith("112")  # 1120 range
+
+    def test_change_class_liability_to_asset(self, conn):
+        """Change from liability to asset (reclassification)."""
+        acct = create_account(conn, AccountCreate(
+            name="PayPal", account_class="liability",
+            liability_type="other", balance=500,
+        ))
+        assert acct["is_asset"] is False
+
+        updated = update_account(conn, acct["id"], AccountUpdate(
+            account_class="asset",
+            asset_type="digital_wallet",
+        ))
+        assert updated["account_class"] == "asset"
+        assert updated["asset_type"] == "digital_wallet"
+        assert updated["is_asset"] is True
+        assert updated["acct_type"] == "digital_wallet"
+        assert updated["liability_type"] is None
+        assert updated["account_code"].startswith("113")  # 1130 range
+
+    def test_change_class_asset_to_liability(self, conn):
+        """Change from asset to liability."""
+        acct = create_account(conn, AccountCreate(
+            name="Personal Loan", account_class="asset",
+            asset_type="checking", balance=1000,
+        ))
+        updated = update_account(conn, acct["id"], AccountUpdate(
+            account_class="liability",
+            liability_type="personal_debt",
+        ))
+        assert updated["account_class"] == "liability"
+        assert updated["liability_type"] == "personal_debt"
+        assert updated["is_asset"] is False
+        assert updated["asset_type"] is None
+
+
 # ── Plaid Stubs (Phase 7) ────────────────────────────────────────────
 
 from finance_etl.accounts.plaid_stubs import (
