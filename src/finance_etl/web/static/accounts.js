@@ -454,7 +454,9 @@ function _toggleAnnualFeeFields(mode) {
 
 async function _syncAnnualFeeRecurring(acct) {
   if (!acct || !acct.name) return;
-  const merchantKey = `Annual Fee: ${acct.name}`;
+  const inst = acct.institution || 'N/A';
+  const last4 = acct.last_four || 'XXXX';
+  const merchantKey = `${acct.name} - ${inst} - ${last4}`;
   const fee = parseFloat(acct.annual_fee) || 0;
   const feeMonth = acct.annual_fee_month;
 
@@ -472,7 +474,7 @@ async function _syncAnnualFeeRecurring(acct) {
       await api('POST', '/recurring/override', {
         merchant: merchantKey,
         is_recurring: true,
-        label: `${acct.name} Annual Fee`,
+        label: merchantKey,
         amount: fee,
         frequency: 'yearly',
         next_estimated: nextEstimated,

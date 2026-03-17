@@ -1253,6 +1253,32 @@ async function saveRecurringEdit(idx, originalMerchant) {
   }
 }
 
+function filterRecurringCharges() {
+  const q = (document.getElementById('recurring-search')?.value || '').toLowerCase();
+  const tbody = document.querySelector('#recurring-list table tbody');
+  if (!tbody) return;
+  const rows = tbody.querySelectorAll('tr');
+  let visible = 0, total = 0;
+  // Rows come in pairs: data row + edit row
+  for (let i = 0; i < rows.length; i += 2) {
+    const dataRow = rows[i];
+    const editRow = rows[i + 1];
+    const text = dataRow.textContent.toLowerCase();
+    const match = !q || text.includes(q);
+    total++;
+    if (match) {
+      visible++;
+      dataRow.style.display = '';
+      if (editRow) editRow.style.display = editRow.dataset.wasOpen === '1' ? '' : 'none';
+    } else {
+      dataRow.style.display = 'none';
+      if (editRow) editRow.style.display = 'none';
+    }
+  }
+  const countEl = document.getElementById('recurring-search-count');
+  if (countEl) countEl.textContent = q ? `${visible} of ${total}` : '';
+}
+
 async function pauseRecurringCharge(merchant) {
   try {
     await api('POST', '/recurring/override', { merchant, is_recurring: true, paused: true });

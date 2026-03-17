@@ -1446,7 +1446,19 @@
 
     <!-- Recurring list -->
     <div class="card">
-      <div class="card-title">Detected Recurring Charges</div>
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <span>Detected Recurring Charges</span>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span id="recurring-search-count" style="font-size:11px; color:var(--text-muted);"></span>
+          <div style="position:relative;">
+            <input type="text" id="recurring-search" placeholder="Search charges…"
+              oninput="filterRecurringCharges()"
+              style="font-size:12px; padding:5px 28px 5px 10px; border:1px solid var(--border); border-radius:5px; width:200px;" />
+            <button onclick="document.getElementById('recurring-search').value=''; filterRecurringCharges();"
+              style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); line-height:1;">&times;</button>
+          </div>
+        </div>
+      </div>
       <div id="recurring-list" style="font-size:13px;">
         <p style="color:var(--text-muted);">Loading…</p>
       </div>
