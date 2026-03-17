@@ -72,24 +72,28 @@ def _now_iso() -> str:
 
 
 def _assign_account_code(conn, account_class: str, subtype: str) -> str:
-    """Auto-assign the next available CoA code for the given account type."""
+    """Auto-assign the next available CoA code for the given account type.
+
+    Finds the lowest unused code in the range, reclaiming gaps from
+    deleted or re-typed accounts instead of always using MAX+1.
+    """
     key = subtype or ("checking" if account_class == "asset" else "other")
     lo, hi = _COA_RANGES.get(key, (2500, 2599))
 
-    row = conn.execute(
-        "SELECT MAX(CAST(account_code AS INTEGER)) FROM nw_accounts "
+    rows = conn.execute(
+        "SELECT CAST(account_code AS INTEGER) AS code FROM nw_accounts "
         "WHERE account_code IS NOT NULL "
-        "AND CAST(account_code AS INTEGER) BETWEEN ? AND ?",
+        "AND CAST(account_code AS INTEGER) BETWEEN ? AND ? "
+        "ORDER BY code",
         [lo, hi],
-    ).fetchone()
+    ).fetchall()
+    used = {int(r[0]) for r in rows}
 
-    max_code = row[0] if row and row[0] is not None else None
-    if max_code is not None:
-        next_code = int(max_code) + 1
-        if next_code > hi:
-            raise ValueError(f"CoA range exhausted for {key} ({lo}-{hi})")
-        return str(next_code)
-    return str(lo)
+    for candidate in range(lo, hi + 1):
+        if candidate not in used:
+            return str(candidate)
+
+    raise ValueError(f"CoA range exhausted for {key} ({lo}-{hi})")
 
 
 def _acct_type_label(account_class: str, subtype: str | None) -> str:
@@ -225,7 +229,7 @@ def update_account(conn, account_id: int, data: AccountUpdate) -> dict:
     # If account_class or subtype changed, re-derive acct_type, is_asset, account_code
     if "account_class" in updates or "liability_type" in updates or "asset_type" in updates:
         current = get_account(conn, account_id)
-        new_class = updates.get("account_class", current["account_class"])
+        new_class = updates.get("account_class", current.get("account_class"))
         new_liability_type = updates.get("liability_type", current.get("liability_type"))
         new_asset_type = updates.get("asset_type", current.get("asset_type"))
 
@@ -239,7 +243,12 @@ def update_account(conn, account_id: int, data: AccountUpdate) -> dict:
 
         updates["acct_type"] = _acct_type_label(new_class, subtype)
         updates["is_asset"] = new_class == "asset"
-        updates["account_code"] = _assign_account_code(conn, new_class, subtype)
+
+        # Only re-assign CoA code if the type actually changed
+        old_class = current.get("account_class")
+        old_subtype = current.get("asset_type") if old_class == "asset" else current.get("liability_type")
+        if new_class != old_class or subtype != old_subtype:
+            updates["account_code"] = _assign_account_code(conn, new_class, subtype)
 
     # Convert Decimal fields to float for DuckDB
     for key, val in updates.items():

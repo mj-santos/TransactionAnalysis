@@ -513,16 +513,40 @@ No cloud services, no external dependencies — all data stays on your machine.
     )
 
     # Global unhandled-exception handler — surfaces error details when verbose_logs is enabled
+    # and writes to the backend log file so errors appear in the logs panel.
+    import logging as _logging
     from fastapi.responses import JSONResponse
     from starlette.requests import Request
 
+    _api_logger = _logging.getLogger("spendly.api")
+
+    def _ensure_api_log_handler():
+        """Ensure the API logger writes to data/logs/api_errors.log."""
+        if _api_logger.handlers:
+            return
+        log_dir = Path("data/logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        fh = _logging.FileHandler(log_dir / "api_errors.log", encoding="utf-8")
+        fh.setFormatter(_logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        _api_logger.addHandler(fh)
+        _api_logger.setLevel(_logging.DEBUG)
+
     @app.exception_handler(Exception)
     async def _global_exception_handler(request: Request, exc: Exception):
+        import traceback
+        tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        tb_str = "".join(tb)
+
+        # Always write to backend log file
+        _ensure_api_log_handler()
+        _api_logger.error(
+            "%s %s -> %s: %s\n%s",
+            request.method, request.url.path, type(exc).__name__, exc, tb_str,
+        )
+
         verbose = getattr(getattr(app, "state", None), "ui_settings", {}).get("verbose_logs", False)
         if verbose:
-            import traceback
-            tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
-            detail = {"error": str(exc), "type": type(exc).__name__, "traceback": "".join(tb)}
+            detail = {"error": str(exc), "type": type(exc).__name__, "traceback": tb_str}
         else:
             detail = "Internal Server Error"
         return JSONResponse(status_code=500, content={"detail": detail})
