@@ -237,6 +237,8 @@ function _resetAccountForm() {
   inputs.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('acct-responsibility').value = 'individual';
   document.getElementById('acct-annual-fee-month').value = '';
+  const hasFeeCb = document.getElementById('acct-has-annual-fee');
+  if (hasFeeCb) hasFeeCb.checked = false;
   // Reset radio buttons
   const liabRadio = document.querySelector('input[name="account-class"][value="liability"]');
   if (liabRadio) liabRadio.checked = true;
@@ -348,6 +350,11 @@ function _showBalanceFields() {
     document.querySelectorAll('#account-step-3 .acct-field-asset').forEach(el => el.style.display = '');
   } else if (subtype === 'credit_card') {
     document.querySelectorAll('#account-step-3 .acct-field-cc').forEach(el => el.style.display = '');
+    // Restore fee fields only if checkbox is checked
+    const hasFee = document.getElementById('acct-has-annual-fee')?.checked;
+    if (hasFee) {
+      document.querySelectorAll('#account-step-3 .acct-field-cc-fee').forEach(el => el.style.display = '');
+    }
   }
 }
 
@@ -414,12 +421,73 @@ async function submitNewAccount() {
   }
 
   try {
-    await api('POST', '/accounts/', payload);
+    const result = await api('POST', '/accounts/', payload);
     toast('Account created successfully', 'success');
+    // Sync annual fee to recurring tab
+    _syncAnnualFeeRecurring(result);
     closeAddAccountModal();
     loadAccounts();
   } catch (e) {
     toast('Failed to create account: ' + e.message, 'error');
+  }
+}
+
+// ── Annual Fee Checkbox Toggle ───────────────────────────────────────
+
+function _toggleAnnualFeeFields(mode) {
+  const prefix = mode === 'edit' ? 'edit-' : '';
+  const checked = document.getElementById(`${prefix}acct-has-annual-fee`).checked;
+  if (mode === 'edit') {
+    document.getElementById('edit-field-annual-fee').style.display = checked ? '' : 'none';
+    document.getElementById('edit-field-annual-fee-month').style.display = checked ? '' : 'none';
+  } else {
+    document.getElementById('field-annual-fee').style.display = checked ? '' : 'none';
+    document.getElementById('field-annual-fee-month').style.display = checked ? '' : 'none';
+  }
+  if (!checked) {
+    document.getElementById(`${prefix}acct-annual-fee`).value = '';
+    document.getElementById(`${prefix}acct-annual-fee-month`).value = '';
+  }
+}
+
+// ── Annual Fee → Recurring Sync ─────────────────────────────────────
+
+async function _syncAnnualFeeRecurring(acct) {
+  if (!acct || !acct.name) return;
+  const merchantKey = `Annual Fee: ${acct.name}`;
+  const fee = parseFloat(acct.annual_fee) || 0;
+  const feeMonth = acct.annual_fee_month;
+
+  if (fee > 0) {
+    // Calculate next estimated date from annual_fee_month
+    let nextEstimated = null;
+    if (feeMonth) {
+      const now = new Date();
+      let year = now.getFullYear();
+      // If fee month already passed this year, set to next year
+      if (feeMonth <= now.getMonth() + 1) year++;
+      nextEstimated = `${year}-${String(feeMonth).padStart(2, '0')}-01`;
+    }
+    try {
+      await api('POST', '/recurring/override', {
+        merchant: merchantKey,
+        is_recurring: true,
+        label: `${acct.name} Annual Fee`,
+        amount: fee,
+        frequency: 'yearly',
+        next_estimated: nextEstimated,
+      });
+    } catch (e) {
+      // Non-fatal — don't block account save
+      console.warn('Failed to sync annual fee to recurring:', e.message);
+    }
+  } else {
+    // Fee removed — delete the generated recurring override
+    try {
+      await api('DELETE', `/recurring/override/${encodeURIComponent(merchantKey)}`);
+    } catch (e) {
+      // 404 is fine — override may not exist
+    }
   }
 }
 
@@ -484,6 +552,15 @@ function openEditAccount(id) {
   const currentSubtype = acctClass === 'asset' ? acct.asset_type : acct.liability_type;
   _populateSubtypeDropdown(acctClass, currentSubtype || (acctClass === 'asset' ? 'checking' : 'credit_card'));
 
+  // Annual fee checkbox + fields
+  const hasAnnualFee = acct.annual_fee != null && parseFloat(acct.annual_fee) > 0;
+  const feeCb = document.getElementById('edit-acct-has-annual-fee');
+  feeCb.checked = hasAnnualFee;
+  document.getElementById('edit-acct-annual-fee').value = hasAnnualFee ? acct.annual_fee : '';
+  document.getElementById('edit-acct-annual-fee-month').value = acct.annual_fee_month || '';
+  document.getElementById('edit-field-annual-fee').style.display = hasAnnualFee ? '' : 'none';
+  document.getElementById('edit-field-annual-fee-month').style.display = hasAnnualFee ? '' : 'none';
+
   // Populate linked transaction source dropdown
   _populateLinkedSourceDropdown(acct);
 }
@@ -519,6 +596,19 @@ async function submitEditAccount() {
   const tag = document.getElementById('edit-acct-payment-source-tag').value.trim();
   if (tag) payload.payment_source_tag = tag;
 
+  // Annual fee
+  const hasAnnualFee = document.getElementById('edit-acct-has-annual-fee').checked;
+  if (hasAnnualFee) {
+    const af = document.getElementById('edit-acct-annual-fee').value;
+    if (af) payload.annual_fee = parseFloat(af);
+    const afm = document.getElementById('edit-acct-annual-fee-month').value;
+    if (afm) payload.annual_fee_month = parseInt(afm);
+  } else {
+    // Explicitly clear annual fee fields
+    payload.annual_fee = 0;
+    payload.annual_fee_month = null;
+  }
+
   // Handle linked transaction source
   const linkedSelect = document.getElementById('edit-acct-linked-source');
   if (linkedSelect) {
@@ -534,8 +624,10 @@ async function submitEditAccount() {
   }
 
   try {
-    await api('PUT', `/accounts/${id}`, payload);
+    const result = await api('PUT', `/accounts/${id}`, payload);
     toast('Account updated', 'success');
+    // Sync annual fee to recurring tab
+    _syncAnnualFeeRecurring(result);
     closeAddAccountModal();
     loadAccounts();
   } catch (e) {

@@ -250,6 +250,14 @@ def update_account(conn, account_id: int, data: AccountUpdate) -> dict:
         if new_class != old_class or subtype != old_subtype:
             updates["account_code"] = _assign_account_code(conn, new_class, subtype)
 
+    # If annual_fee is being set to 0, also clear annual_fee_month
+    if "annual_fee" in updates:
+        fee_val = updates["annual_fee"]
+        if isinstance(fee_val, Decimal):
+            fee_val = float(fee_val)
+        if fee_val is not None and float(fee_val) == 0:
+            updates["annual_fee_month"] = None
+
     # Convert Decimal fields to float for DuckDB
     for key, val in updates.items():
         if isinstance(val, Decimal):

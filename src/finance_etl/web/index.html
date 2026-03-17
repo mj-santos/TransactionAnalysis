@@ -2208,14 +2208,20 @@
               <label>Due Day of Month</label>
               <input type="number" id="acct-due-day" min="1" max="31" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
             </div>
-            <div id="field-annual-fee" class="acct-field-cc" style="display:none;">
-              <label>Annual Fee</label>
-              <input type="number" id="acct-annual-fee" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            <div id="field-annual-fee-toggle" class="acct-field-cc" style="display:none; grid-column:1/-1;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="acct-has-annual-fee" onchange="_toggleAnnualFeeFields('add')" />
+                This card has an annual fee
+              </label>
             </div>
-            <div id="field-annual-fee-month" class="acct-field-cc" style="display:none;">
+            <div id="field-annual-fee" class="acct-field-cc-fee" style="display:none;">
+              <label>Annual Fee Amount</label>
+              <input type="number" id="acct-annual-fee" step="0.01" min="0" placeholder="e.g. 95.00" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="field-annual-fee-month" class="acct-field-cc-fee" style="display:none;">
               <label>Annual Fee Month</label>
               <select id="acct-annual-fee-month" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;">
-                <option value="">N/A</option>
+                <option value="">Select month...</option>
                 <option value="1">January</option><option value="2">February</option><option value="3">March</option>
                 <option value="4">April</option><option value="5">May</option><option value="6">June</option>
                 <option value="7">July</option><option value="8">August</option><option value="9">September</option>
@@ -2324,6 +2330,26 @@
             <div>
               <label>Interest Rate (%)</label>
               <input type="number" id="edit-acct-interest-rate" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div style="grid-column:1/-1;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="edit-acct-has-annual-fee" onchange="_toggleAnnualFeeFields('edit')" />
+                This card has an annual fee
+              </label>
+            </div>
+            <div id="edit-field-annual-fee" style="display:none;">
+              <label>Annual Fee Amount</label>
+              <input type="number" id="edit-acct-annual-fee" step="0.01" min="0" placeholder="e.g. 95.00" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+            <div id="edit-field-annual-fee-month" style="display:none;">
+              <label>Annual Fee Month</label>
+              <select id="edit-acct-annual-fee-month" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;">
+                <option value="">Select month...</option>
+                <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+                <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+              </select>
             </div>
             <div>
               <label>Payment Source Tag</label>

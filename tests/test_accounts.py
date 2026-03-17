@@ -1771,3 +1771,74 @@ class TestDeleteAccount:
             "SELECT COUNT(*) FROM ap_payments WHERE to_account_id = ?", [dst["id"]]
         ).fetchone()
         assert rows[0] == 0
+
+
+# ── Annual Fee ──────────────────────────────────────────────────────────
+
+
+class TestAnnualFee:
+
+    def test_create_with_annual_fee(self, conn):
+        acct = create_account(conn, AccountCreate(
+            name="Sapphire Preferred",
+            account_class="liability",
+            liability_type="credit_card",
+            balance=2000,
+            annual_fee=95,
+            annual_fee_month=3,
+        ))
+        assert float(acct["annual_fee"]) == 95.0
+        assert acct["annual_fee_month"] == 3
+
+    def test_edit_add_annual_fee(self, conn):
+        acct = create_account(conn, AccountCreate(
+            name="Freedom Flex",
+            account_class="liability",
+            liability_type="credit_card",
+            balance=500,
+        ))
+        # Initially no fee
+        assert acct["annual_fee"] is None or float(acct["annual_fee"] or 0) == 0
+
+        # Add annual fee
+        result = update_account(conn, acct["id"], AccountUpdate(
+            annual_fee=95,
+            annual_fee_month=6,
+        ))
+        assert float(result["annual_fee"]) == 95.0
+        assert result["annual_fee_month"] == 6
+
+    def test_edit_remove_annual_fee(self, conn):
+        acct = create_account(conn, AccountCreate(
+            name="Gold Card",
+            account_class="liability",
+            liability_type="credit_card",
+            balance=1000,
+            annual_fee=250,
+            annual_fee_month=10,
+        ))
+        assert float(acct["annual_fee"]) == 250.0
+
+        # Remove fee by setting to 0
+        result = update_account(conn, acct["id"], AccountUpdate(
+            annual_fee=0,
+        ))
+        assert float(result["annual_fee"]) == 0
+        # annual_fee_month should also be cleared
+        assert result["annual_fee_month"] is None
+
+    def test_edit_change_annual_fee_month(self, conn):
+        acct = create_account(conn, AccountCreate(
+            name="Platinum",
+            account_class="liability",
+            liability_type="credit_card",
+            balance=3000,
+            annual_fee=695,
+            annual_fee_month=1,
+        ))
+        # Change only the month
+        result = update_account(conn, acct["id"], AccountUpdate(
+            annual_fee_month=7,
+        ))
+        assert float(result["annual_fee"]) == 695.0
+        assert result["annual_fee_month"] == 7
