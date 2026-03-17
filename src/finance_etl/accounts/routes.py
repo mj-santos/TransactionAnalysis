@@ -638,6 +638,10 @@ def route_update_account(account_id: int, payload: AccountUpdate):
         if not acct:
             raise HTTPException(status_code=404, detail="Account not found")
         return update_account(conn, account_id, payload)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
     finally:
         conn.close()
 

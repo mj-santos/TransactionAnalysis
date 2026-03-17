@@ -512,6 +512,21 @@ No cloud services, no external dependencies — all data stays on your machine.
         allow_headers=["*"],
     )
 
+    # Global unhandled-exception handler — surfaces error details when verbose_logs is enabled
+    from fastapi.responses import JSONResponse
+    from starlette.requests import Request
+
+    @app.exception_handler(Exception)
+    async def _global_exception_handler(request: Request, exc: Exception):
+        verbose = getattr(getattr(app, "state", None), "ui_settings", {}).get("verbose_logs", False)
+        if verbose:
+            import traceback
+            tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+            detail = {"error": str(exc), "type": type(exc).__name__, "traceback": "".join(tb)}
+        else:
+            detail = "Internal Server Error"
+        return JSONResponse(status_code=500, content={"detail": detail})
+
     _UI_SETTINGS_PATH = Path("data/ui_settings.json")
 
     def _load_ui_settings() -> dict:
