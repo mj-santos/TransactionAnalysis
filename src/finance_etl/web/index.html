@@ -1516,6 +1516,17 @@
 
     <!-- Overview sub-view -->
     <div id="accounts-overview-view" style="display:none;">
+      <!-- Search bar -->
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+        <div style="position:relative; flex:1; max-width:320px;">
+          <input id="overview-search" type="text" placeholder="Search accounts..."
+            oninput="filterOverviewAccounts()" onkeydown="if(event.key==='Escape'){this.value='';filterOverviewAccounts();}"
+            style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+          <button id="overview-search-clear" onclick="document.getElementById('overview-search').value='';filterOverviewAccounts();"
+            style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">&times;</button>
+        </div>
+        <span id="overview-search-count" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
       <!-- KPI cards -->
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:16px;">
         <div class="card" style="padding:16px; text-align:center;">
@@ -1633,6 +1644,18 @@
         </div>
       </div>
 
+      <!-- Search bar -->
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+        <div style="position:relative; flex:1; max-width:320px;">
+          <input id="manage-acct-search" type="text" placeholder="Search accounts..."
+            oninput="filterManageAccounts()" onkeydown="if(event.key==='Escape'){this.value='';filterManageAccounts();}"
+            style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+          <button id="manage-acct-search-clear" onclick="document.getElementById('manage-acct-search').value='';filterManageAccounts();"
+            style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">&times;</button>
+        </div>
+        <span id="manage-acct-search-count" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+
       <!-- Bulk action bar (hidden until items selected) -->
       <div id="accounts-bulk-bar" style="display:none; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:10px 16px; margin-bottom:12px; align-items:center; gap:12px;">
         <span id="accounts-bulk-count" style="font-weight:600;"></span>
@@ -1707,6 +1730,18 @@
           <button class="btn btn-secondary btn-sm" onclick="rollforwardPlan()">Rollforward from Last Month</button>
           <button class="btn btn-secondary btn-sm" disabled title="Coming soon — auto-verify payments against bank transactions via Plaid" style="opacity:0.5; cursor:not-allowed;">Auto-Verify Payments</button>
         </div>
+      </div>
+
+      <!-- Search bar -->
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+        <div style="position:relative; flex:1; max-width:320px;">
+          <input id="planner-search" type="text" placeholder="Search planner..."
+            oninput="filterPlannerRows()" onkeydown="if(event.key==='Escape'){this.value='';filterPlannerRows();}"
+            style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+          <button id="planner-search-clear" onclick="document.getElementById('planner-search').value='';filterPlannerRows();"
+            style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">&times;</button>
+        </div>
+        <span id="planner-search-count" style="font-size:12px; color:var(--text-muted);"></span>
       </div>
 
       <!-- Open / Overdue billing cycles -->
@@ -1810,6 +1845,18 @@
 
     <!-- History & Trends sub-view -->
     <div id="accounts-trends-view" style="display:none;">
+
+      <!-- Search bar -->
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+        <div style="position:relative; flex:1; max-width:320px;">
+          <input id="trends-search" type="text" placeholder="Search accounts..."
+            oninput="filterTrendsRows()" onkeydown="if(event.key==='Escape'){this.value='';filterTrendsRows();}"
+            style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+          <button id="trends-search-clear" onclick="document.getElementById('trends-search').value='';filterTrendsRows();"
+            style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">&times;</button>
+        </div>
+        <span id="trends-search-count" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
 
       <!-- Debt vs Assets Net Worth Trend -->
       <div class="card" style="margin-bottom:16px;">

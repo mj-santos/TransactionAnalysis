@@ -74,6 +74,106 @@ function _statusBadge(status) {
   return `<span style="display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; background:${color}20; color:${color};">${status}</span>`;
 }
 
+// ── Search / Filter ──────────────────────────────────────────────────
+
+// Shared helper: toggle clear button and count badge for a search bar
+function _acctSearchUI(inputId, clearId, countId, shown, total) {
+  const q = (document.getElementById(inputId)?.value || '').trim();
+  const clearBtn = document.getElementById(clearId);
+  const countEl = document.getElementById(countId);
+  if (clearBtn) clearBtn.style.display = q ? '' : 'none';
+  if (countEl) countEl.textContent = q ? `${shown} of ${total}` : '';
+}
+
+// ── Manage Accounts search ──
+function filterManageAccounts() {
+  const query = (document.getElementById('manage-acct-search')?.value || '').toLowerCase();
+  if (!query) {
+    _renderAccountsTable(_accountsCache);
+    _acctSearchUI('manage-acct-search', 'manage-acct-search-clear', 'manage-acct-search-count', 0, 0);
+    return;
+  }
+  const filtered = _accountsCache.filter(a => {
+    const subtype = a.account_class === 'asset' ? a.asset_type : a.liability_type;
+    const haystack = [
+      a.name, a.institution, a.last_four, a.account_code,
+      a.status, a.acct_type, subtype, a.account_class,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(query);
+  });
+  _renderAccountsTable(filtered);
+  _acctSearchUI('manage-acct-search', 'manage-acct-search-clear', 'manage-acct-search-count', filtered.length, _accountsCache.length);
+}
+
+// ── Overview search (DOM-based row visibility) ──
+function filterOverviewAccounts() {
+  const query = (document.getElementById('overview-search')?.value || '').toLowerCase();
+  const tables = ['overview-liabilities-body', 'overview-assets-body'];
+  let shown = 0, total = 0;
+  for (const tbodyId of tables) {
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) continue;
+    const rows = tbody.querySelectorAll('tr');
+    for (const row of rows) {
+      const text = row.textContent.toLowerCase();
+      total++;
+      if (!query || text.includes(query)) {
+        row.style.display = '';
+        shown++;
+      } else {
+        row.style.display = 'none';
+      }
+    }
+  }
+  _acctSearchUI('overview-search', 'overview-search-clear', 'overview-search-count', shown, total);
+}
+
+// ── Payment Planner search (DOM-based row visibility) ──
+function filterPlannerRows() {
+  const query = (document.getElementById('planner-search')?.value || '').toLowerCase();
+  const tables = ['planner-open-cycles-body', 'planner-assignments-body', 'planner-payments-body'];
+  let shown = 0, total = 0;
+  for (const tbodyId of tables) {
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) continue;
+    const rows = tbody.querySelectorAll('tr');
+    for (const row of rows) {
+      const text = row.textContent.toLowerCase();
+      total++;
+      if (!query || text.includes(query)) {
+        row.style.display = '';
+        shown++;
+      } else {
+        row.style.display = 'none';
+      }
+    }
+  }
+  _acctSearchUI('planner-search', 'planner-search-clear', 'planner-search-count', shown, total);
+}
+
+// ── History & Trends search (DOM-based row visibility) ──
+function filterTrendsRows() {
+  const query = (document.getElementById('trends-search')?.value || '').toLowerCase();
+  const tables = ['trends-interest-body', 'trends-payoff-body'];
+  let shown = 0, total = 0;
+  for (const tbodyId of tables) {
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) continue;
+    const rows = tbody.querySelectorAll('tr');
+    for (const row of rows) {
+      const text = row.textContent.toLowerCase();
+      total++;
+      if (!query || text.includes(query)) {
+        row.style.display = '';
+        shown++;
+      } else {
+        row.style.display = 'none';
+      }
+    }
+  }
+  _acctSearchUI('trends-search', 'trends-search-clear', 'trends-search-count', shown, total);
+}
+
 // ── Sub-tab switching ────────────────────────────────────────────────
 function switchAccountsSubtab(tab) {
   const validTabs = ['overview', 'manage', 'planner', 'trends'];
