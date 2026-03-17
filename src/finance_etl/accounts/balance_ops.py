@@ -178,10 +178,14 @@ def get_overview_summary(conn) -> dict:
     total liabilities, total assets, net position, credit utilization,
     due this week count, estimated monthly interest.
     """
-    # Totals
+    # Totals — split assets into liquid cash vs investments
     row = conn.execute("""
         SELECT
             COALESCE(SUM(CASE WHEN is_asset = TRUE THEN balance ELSE 0 END), 0) AS total_assets,
+            COALESCE(SUM(CASE WHEN is_asset = TRUE AND asset_type IN ('checking', 'savings', 'digital_wallet')
+                         THEN balance ELSE 0 END), 0) AS cash_at_hand,
+            COALESCE(SUM(CASE WHEN is_asset = TRUE AND asset_type = 'investment'
+                         THEN balance ELSE 0 END), 0) AS total_investments,
             COALESCE(SUM(CASE WHEN is_asset = FALSE THEN ABS(balance) ELSE 0 END), 0) AS total_liabilities,
             COALESCE(SUM(CASE WHEN is_asset = FALSE AND liability_type != 'personal_debt'
                          THEN ABS(balance) ELSE 0 END), 0) AS total_liab_excl_personal
@@ -190,8 +194,10 @@ def get_overview_summary(conn) -> dict:
     """).fetchone()
 
     total_assets = float(row[0])
-    total_liabilities = float(row[1])
-    total_liab_excl = float(row[2])
+    cash_at_hand = float(row[1])
+    total_investments = float(row[2])
+    total_liabilities = float(row[3])
+    total_liab_excl = float(row[4])
 
     # Credit utilization
     cc_row = conn.execute("""
@@ -233,9 +239,12 @@ def get_overview_summary(conn) -> dict:
 
     return {
         "total_assets": round(total_assets, 2),
+        "cash_at_hand": round(cash_at_hand, 2),
+        "total_investments": round(total_investments, 2),
         "total_liabilities": round(total_liabilities, 2),
         "total_liabilities_excl_personal": round(total_liab_excl, 2),
         "net_position": round(total_assets - total_liabilities, 2),
+        "liquid_net": round(cash_at_hand - total_liab_excl, 2),
         "credit_utilization_pct": utilization,
         "cc_balance": round(cc_balance, 2),
         "cc_limit": round(cc_limit, 2),

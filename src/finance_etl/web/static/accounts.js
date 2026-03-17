@@ -841,11 +841,12 @@ async function _loadOverviewData() {
 }
 
 function _renderKPIs(s) {
+  document.getElementById('kpi-cash-at-hand').textContent = _fmt(s.cash_at_hand);
+  document.getElementById('kpi-investments').textContent = _fmt(s.total_investments);
   document.getElementById('kpi-total-liabilities').textContent = _fmt(s.total_liabilities_excl_personal);
-  document.getElementById('kpi-total-assets').textContent = _fmt(s.total_assets);
-  const netEl = document.getElementById('kpi-net-position');
-  netEl.textContent = _fmt(s.net_position);
-  netEl.style.color = s.net_position >= 0 ? 'var(--success)' : 'var(--danger)';
+  const liquidEl = document.getElementById('kpi-liquid-net');
+  liquidEl.textContent = _fmt(s.liquid_net);
+  liquidEl.style.color = s.liquid_net >= 0 ? 'var(--success)' : 'var(--danger)';
   const utilEl = document.getElementById('kpi-utilization');
   utilEl.textContent = s.credit_utilization_pct + '%';
   utilEl.style.color = s.credit_utilization_pct > 80 ? 'var(--danger)' : s.credit_utilization_pct > 30 ? 'var(--warning)' : 'var(--success)';

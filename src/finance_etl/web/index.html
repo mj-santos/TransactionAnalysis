@@ -1542,16 +1542,23 @@
       <!-- KPI cards -->
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:16px;">
         <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Cash at Hand</div>
+          <div id="kpi-cash-at-hand" style="font-size:22px; font-weight:700; color:var(--success); margin-top:4px;">$0</div>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Checking + Savings + Wallets</div>
+        </div>
+        <div class="card" style="padding:16px; text-align:center;">
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Investments</div>
+          <div id="kpi-investments" style="font-size:22px; font-weight:700; color:#6366f1; margin-top:4px;">$0</div>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Brokerage + Retirement</div>
+        </div>
+        <div class="card" style="padding:16px; text-align:center;">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Total Liabilities</div>
           <div id="kpi-total-liabilities" style="font-size:22px; font-weight:700; color:var(--danger); margin-top:4px;">$0</div>
         </div>
         <div class="card" style="padding:16px; text-align:center;">
-          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Total Assets</div>
-          <div id="kpi-total-assets" style="font-size:22px; font-weight:700; color:var(--success); margin-top:4px;">$0</div>
-        </div>
-        <div class="card" style="padding:16px; text-align:center;">
-          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Net Position</div>
-          <div id="kpi-net-position" style="font-size:22px; font-weight:700; margin-top:4px;">$0</div>
+          <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Liquid Net</div>
+          <div id="kpi-liquid-net" style="font-size:22px; font-weight:700; margin-top:4px;">$0</div>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Cash at Hand &minus; Liabilities</div>
         </div>
         <div class="card" style="padding:16px; text-align:center;">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Credit Utilization</div>

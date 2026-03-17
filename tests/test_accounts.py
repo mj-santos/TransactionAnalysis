@@ -472,8 +472,11 @@ class TestOverviewSummary:
     def test_empty_db(self, conn):
         summary = get_overview_summary(conn)
         assert summary["total_assets"] == 0
+        assert summary["cash_at_hand"] == 0
+        assert summary["total_investments"] == 0
         assert summary["total_liabilities"] == 0
         assert summary["net_position"] == 0
+        assert summary["liquid_net"] == 0
         assert summary["credit_utilization_pct"] == 0
 
     def test_with_data(self, conn):
@@ -489,12 +492,37 @@ class TestOverviewSummary:
         ))
         summary = get_overview_summary(conn)
         assert float(summary["total_assets"]) == 10000.0
+        assert float(summary["cash_at_hand"]) == 10000.0  # checking is liquid
+        assert float(summary["total_investments"]) == 0.0
         assert float(summary["total_liabilities"]) == 2500.0
         # Excl personal = 2000
         assert float(summary["total_liabilities_excl_personal"]) == 2000.0
         assert float(summary["net_position"]) == 7500.0
+        # Liquid net = cash_at_hand - liab_excl_personal = 10000 - 2000
+        assert float(summary["liquid_net"]) == 8000.0
         assert summary["credit_utilization_pct"] == 20.0
         assert summary["est_monthly_interest"] > 0
+
+    def test_investments_excluded_from_cash(self, conn):
+        """Investments should appear in total_investments, not cash_at_hand."""
+        create_account(conn, AccountCreate(
+            name="Savings", account_class="asset", asset_type="savings", balance=5000,
+        ))
+        create_account(conn, AccountCreate(
+            name="401k", account_class="asset", asset_type="investment", balance=50000,
+        ))
+        create_account(conn, AccountCreate(
+            name="CC", account_class="liability", liability_type="credit_card",
+            balance=2000, credit_limit=10000,
+        ))
+        summary = get_overview_summary(conn)
+        assert float(summary["total_assets"]) == 55000.0
+        assert float(summary["cash_at_hand"]) == 5000.0
+        assert float(summary["total_investments"]) == 50000.0
+        # Liquid net uses only cash, not investments
+        assert float(summary["liquid_net"]) == 3000.0  # 5000 - 2000
+        # Net position still uses all assets
+        assert float(summary["net_position"]) == 53000.0  # 55000 - 2000
 
 
 # ═══════════════════════════════════════════════════════════════════════
