@@ -295,10 +295,24 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
     return active, paused
 
 
+_MONTHLY_MULTIPLIERS: dict[str, float] = {
+    "weekly":    52 / 12,
+    "biweekly":  26 / 12,
+    "monthly":   1.0,
+    "quarterly": 1 / 3,
+    "annual":    1 / 12,
+    "yearly":    1 / 12,
+    "irregular": 1.0,
+}
+
+
 def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:
+    mult = _MONTHLY_MULTIPLIERS.get(p.frequency, 1.0)
+    monthly_equiv = round(p.median_amount * mult, 2)
     return {
         "merchant": p.merchant,
         "median_amount": p.median_amount,
+        "monthly_equivalent": monthly_equiv,
         "frequency": p.frequency,
         "avg_interval_days": p.avg_interval_days,
         "occurrences": p.occurrences,
@@ -313,22 +327,16 @@ def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:
 def compute_monthly_recurring_total(patterns: list[dict[str, Any]]) -> float:
     """Estimate total monthly cost from a list of recurring patterns.
 
-    Converts each pattern's median_amount to a monthly equivalent based
-    on its detected frequency.
+    Uses pre-computed ``monthly_equivalent`` if present, otherwise falls back
+    to multiplying median_amount by the frequency multiplier.
     """
-    multipliers = {
-        "weekly": 52 / 12,
-        "biweekly": 26 / 12,
-        "monthly": 1.0,
-        "quarterly": 1 / 3,
-        "annual": 1 / 12,
-        "yearly": 1 / 12,
-        "irregular": 1.0,  # assume monthly as fallback
-    }
     total = 0.0
     for p in patterns:
-        mult = multipliers.get(p.get("frequency", "monthly"), 1.0)
-        total += p.get("median_amount", 0) * mult
+        if "monthly_equivalent" in p:
+            total += p["monthly_equivalent"]
+        else:
+            mult = _MONTHLY_MULTIPLIERS.get(p.get("frequency", "monthly"), 1.0)
+            total += p.get("median_amount", 0) * mult
     return round(total, 2)
 
 

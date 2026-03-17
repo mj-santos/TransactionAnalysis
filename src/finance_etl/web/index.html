@@ -1430,12 +1430,16 @@
   <!-- ─── RECURRING TRANSACTIONS PAGE ─── -->
   <section id="page-recurring-transactions" class="page">
 
-    <!-- Monthly total KPI -->
-    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:14px; margin-bottom:20px;">
+    <!-- KPI row -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px; margin-bottom:20px;">
       <div class="card" style="padding:16px 20px;">
         <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Monthly Recurring Cost</div>
         <div id="recurring-monthly-total" style="font-size:28px; font-weight:700; margin-top:4px; color:var(--danger);">—</div>
         <div id="recurring-count-label" style="font-size:12px; color:var(--text-muted); margin-top:4px;"></div>
+      </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Cost Breakdown</div>
+        <div id="recurring-breakdown" style="margin-top:8px; font-size:12px; color:var(--text-muted);">—</div>
       </div>
     </div>
 
@@ -1448,17 +1452,34 @@
     <div class="card">
       <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
         <span>Detected Recurring Charges</span>
-        <div style="display:flex; align-items:center; gap:6px;">
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
           <span id="recurring-search-count" style="font-size:11px; color:var(--text-muted);"></span>
           <div style="position:relative;">
             <input type="text" id="recurring-search" placeholder="Search charges…"
-              oninput="filterRecurringCharges()"
-              style="font-size:12px; padding:5px 28px 5px 10px; border:1px solid var(--border); border-radius:5px; width:200px;" />
-            <button onclick="document.getElementById('recurring-search').value=''; filterRecurringCharges();"
+              oninput="_onRecurringFilterChange()"
+              style="font-size:12px; padding:5px 28px 5px 10px; border:1px solid var(--border); border-radius:5px; width:190px;" />
+            <button onclick="document.getElementById('recurring-search').value=''; _onRecurringFilterChange();"
               style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); line-height:1;">&times;</button>
           </div>
         </div>
       </div>
+
+      <!-- Filter toolbar -->
+      <div id="recurring-filter-bar" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:10px 0 4px; border-bottom:1px solid var(--border); margin-bottom:8px;">
+        <span style="font-size:11px; color:var(--text-muted); font-weight:600; margin-right:2px;">Frequency:</span>
+        <button id="rec-pill-all"       class="rec-pill rec-pill-active" onclick="_setRecurringFreqFilter(null)">All</button>
+        <button id="rec-pill-weekly"    class="rec-pill" onclick="_setRecurringFreqFilter('weekly')">Weekly</button>
+        <button id="rec-pill-biweekly"  class="rec-pill" onclick="_setRecurringFreqFilter('biweekly')">Biweekly</button>
+        <button id="rec-pill-monthly"   class="rec-pill" onclick="_setRecurringFreqFilter('monthly')">Monthly</button>
+        <button id="rec-pill-quarterly" class="rec-pill" onclick="_setRecurringFreqFilter('quarterly')">Quarterly</button>
+        <button id="rec-pill-annual"    class="rec-pill" onclick="_setRecurringFreqFilter('annual')">Annual</button>
+        <button id="rec-pill-irregular" class="rec-pill" onclick="_setRecurringFreqFilter('irregular')">Irregular</button>
+        <span style="margin-left:10px; font-size:11px; color:var(--text-muted); font-weight:600;">Source:</span>
+        <button id="rec-pill-src-all"    class="rec-pill rec-pill-active" onclick="_setRecurringSourceFilter(null)">All</button>
+        <button id="rec-pill-src-auto"   class="rec-pill" onclick="_setRecurringSourceFilter('auto')">Auto</button>
+        <button id="rec-pill-src-manual" class="rec-pill" onclick="_setRecurringSourceFilter('manual')">Manual</button>
+      </div>
+
       <div id="recurring-list" style="font-size:13px;">
         <p style="color:var(--text-muted);">Loading…</p>
       </div>

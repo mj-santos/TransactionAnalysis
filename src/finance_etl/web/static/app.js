@@ -1030,26 +1030,46 @@ async function maybeShowLogsOnError() {
 
 // ── Recurring Transactions ─────────────────────────────────────
 
+// ── Recurring — data cache & filter state ─────────────────────
+let _recurringPatterns = [];   // full active list from last fetch
+let _recurringFilterState = {
+  query: '',
+  frequency: null,   // null = all
+  source: null,      // null | 'auto' | 'manual'
+  sortCol: 'monthly_equivalent',
+  sortDir: 'desc',
+};
+
+const _freqColors = {
+  weekly: '#3b82f6', biweekly: '#6366f1', monthly: '#8b5cf6',
+  quarterly: '#f59e0b', annual: '#22c55e', irregular: '#94a3b8',
+};
+
+// ── Load ──────────────────────────────────────────────────────
+
 async function loadRecurringTransactions() {
   const statusEl = document.getElementById('recurring-status');
-  const listEl = document.getElementById('recurring-list');
-  const totalEl = document.getElementById('recurring-monthly-total');
-  const countEl = document.getElementById('recurring-count-label');
+  const listEl   = document.getElementById('recurring-list');
+  const totalEl  = document.getElementById('recurring-monthly-total');
+  const countEl  = document.getElementById('recurring-count-label');
 
   if (statusEl) statusEl.textContent = 'Analyzing…';
   try {
     const data = await api('GET', '/recurring');
     if (statusEl) statusEl.textContent = '';
 
-    // KPI
-    totalEl.textContent = '$' + Number(data.monthly_total).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    _recurringPatterns = data.patterns || [];
+
+    // Top-level KPI (always reflects unfiltered total)
+    totalEl.textContent = '$' + Number(data.monthly_total).toLocaleString(undefined,
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     countEl.textContent = `${data.count} recurring charge${data.count !== 1 ? 's' : ''} detected`;
 
-    if (!data.patterns || data.patterns.length === 0) {
-      listEl.innerHTML = '<p style="color:var(--text-muted);">No recurring transactions detected. Import more data or manually mark merchants below.</p>';
-    } else {
-      _renderRecurringList(data.patterns, listEl);
-    }
+    // Cost breakdown card
+    _renderRecurringBreakdown(data.frequency_breakdown || {});
+
+    // Render with current filter state
+    _applyRecurringFilters();
 
     // Paused section
     const pausedCard = document.getElementById('paused-recurring-card');
@@ -1064,48 +1084,175 @@ async function loadRecurringTransactions() {
       }
     }
 
-    // Also load annual fee suggestions
     loadAnnualSuggestions();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Error: ${err.message}`;
-    listEl.innerHTML = `<p style="color:var(--danger);">Failed to load: ${esc(err.message)}</p>`;
+    const listEl2 = document.getElementById('recurring-list');
+    if (listEl2) listEl2.innerHTML = `<p style="color:var(--danger);">Failed to load: ${esc(err.message)}</p>`;
   }
 }
 
-const _freqColors = {
-  weekly: '#3b82f6', biweekly: '#6366f1', monthly: '#8b5cf6',
-  quarterly: '#f59e0b', annual: '#22c55e', irregular: '#94a3b8',
-};
+// ── Filter state setters ──────────────────────────────────────
+
+function _onRecurringFilterChange() {
+  _recurringFilterState.query = (document.getElementById('recurring-search')?.value || '').toLowerCase().trim();
+  _applyRecurringFilters();
+}
+
+function _setRecurringFreqFilter(freq) {
+  _recurringFilterState.frequency = freq;
+  // Update pill active state
+  ['all','weekly','biweekly','monthly','quarterly','annual','irregular'].forEach(f => {
+    const el = document.getElementById(`rec-pill-${f}`);
+    if (el) el.classList.toggle('rec-pill-active', (freq === null ? f === 'all' : f === freq));
+  });
+  _applyRecurringFilters();
+}
+
+function _setRecurringSourceFilter(src) {
+  _recurringFilterState.source = src;
+  ['all','auto','manual'].forEach(s => {
+    const el = document.getElementById(`rec-pill-src-${s}`);
+    if (el) el.classList.toggle('rec-pill-active', (src === null ? s === 'all' : s === src));
+  });
+  _applyRecurringFilters();
+}
+
+function _setRecurringSortCol(col) {
+  if (_recurringFilterState.sortCol === col) {
+    _recurringFilterState.sortDir = _recurringFilterState.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _recurringFilterState.sortCol = col;
+    _recurringFilterState.sortDir = 'desc';
+  }
+  _applyRecurringFilters();
+}
+
+// ── Core filter + render pipeline ────────────────────────────
+
+function _applyRecurringFilters() {
+  const { query, frequency, source, sortCol, sortDir } = _recurringFilterState;
+  const listEl = document.getElementById('recurring-list');
+  if (!listEl) return;
+
+  let filtered = _recurringPatterns;
+
+  if (frequency) {
+    filtered = filtered.filter(p => p.frequency === frequency);
+  }
+  if (source === 'auto') {
+    filtered = filtered.filter(p => p.is_auto);
+  } else if (source === 'manual') {
+    filtered = filtered.filter(p => !p.is_auto);
+  }
+  if (query) {
+    filtered = filtered.filter(p => p.merchant.toLowerCase().includes(query));
+  }
+
+  // Sort
+  filtered = [...filtered].sort((a, b) => {
+    let av = a[sortCol] ?? 0;
+    let bv = b[sortCol] ?? 0;
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  // Update count label
+  const countEl = document.getElementById('recurring-search-count');
+  if (countEl) {
+    const isFiltered = query || frequency || source;
+    countEl.textContent = isFiltered ? `${filtered.length} of ${_recurringPatterns.length}` : '';
+  }
+
+  if (!filtered.length) {
+    listEl.innerHTML = _recurringPatterns.length
+      ? '<p style="color:var(--text-muted); padding:12px 0;">No charges match the current filters.</p>'
+      : '<p style="color:var(--text-muted); padding:12px 0;">No recurring transactions detected. Import more data or manually mark merchants below.</p>';
+    return;
+  }
+
+  _renderRecurringList(filtered, listEl);
+}
+
+// ── Breakdown card ────────────────────────────────────────────
+
+function _renderRecurringBreakdown(breakdown) {
+  const el = document.getElementById('recurring-breakdown');
+  if (!el) return;
+  const order = ['monthly', 'weekly', 'biweekly', 'quarterly', 'annual', 'irregular'];
+  const fmt2 = n => '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const lines = order
+    .filter(f => breakdown[f] > 0)
+    .map(f => {
+      const color = _freqColors[f] || '#94a3b8';
+      return `<span style="display:inline-flex; align-items:center; gap:4px; margin-right:10px; margin-bottom:4px;">
+        <span style="width:8px; height:8px; border-radius:50%; background:${color}; display:inline-block;"></span>
+        <span style="font-weight:600;">${f.charAt(0).toUpperCase() + f.slice(1)}</span>
+        <span style="color:var(--text);">${fmt2(breakdown[f])}/mo</span>
+      </span>`;
+    });
+  el.innerHTML = lines.length ? `<div style="display:flex; flex-wrap:wrap;">${lines.join('')}</div>` : '<span style="color:var(--text-muted);">No data</span>';
+}
+
+// ── Table renderer ────────────────────────────────────────────
 
 function _renderRecurringList(patterns, container) {
+  const { sortCol, sortDir } = _recurringFilterState;
+  const arrow = dir => `<span class="rec-sort-arrow">${dir === 'asc' ? '▲' : '▼'}</span>`;
+  const th = (label, col) => {
+    const active = sortCol === col;
+    return `<th class="rec-th-sort" style="padding:8px 10px;" onclick="_setRecurringSortCol('${col}')">${label}${active ? arrow(sortDir) : '<span class="rec-sort-arrow" style="opacity:0.2;">⬍</span>'}</th>`;
+  };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
   let html = '<table style="width:100%; border-collapse:collapse;">';
   html += `<thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
-    <th style="padding:8px 10px;">Merchant</th>
-    <th style="padding:8px 10px;">Amount</th>
-    <th style="padding:8px 10px;">Frequency</th>
-    <th style="padding:8px 10px;">Last Charged</th>
-    <th style="padding:8px 10px;">Next Estimated</th>
-    <th style="padding:8px 10px;">Hits</th>
+    ${th('Merchant', 'merchant')}
+    ${th('Amount', 'median_amount')}
+    ${th('Mo. Equiv', 'monthly_equivalent')}
+    ${th('Frequency', 'frequency')}
+    ${th('Last Charged', 'last_date')}
+    ${th('Next Estimated', 'next_estimated')}
+    ${th('Hits', 'occurrences')}
     <th style="padding:8px 10px;"></th>
   </tr></thead><tbody>`;
 
   for (let i = 0; i < patterns.length; i++) {
     const p = patterns[i];
     const color = _freqColors[p.frequency] || '#94a3b8';
-    const badge = p.is_auto
+    const sourceBadge = p.is_auto
       ? '<span style="font-size:10px; background:#e2e8f0; color:#64748b; padding:1px 6px; border-radius:3px; margin-left:6px;">auto</span>'
       : '<span style="font-size:10px; background:#dbeafe; color:#3b82f6; padding:1px 6px; border-radius:3px; margin-left:6px;">manual</span>';
+
+    // Due-soon badge: next_estimated within 7 days
+    let dueSoonBadge = '';
+    if (p.next_estimated) {
+      const nextDate = new Date(p.next_estimated + 'T00:00:00');
+      const diffDays = Math.round((nextDate - today) / 86400000);
+      if (diffDays >= 0 && diffDays <= 7) {
+        const label = diffDays === 0 ? 'Due today' : `Due in ${diffDays}d`;
+        dueSoonBadge = `<span class="rec-due-soon">${label}</span>`;
+      }
+    }
 
     const menuId = `rec-menu-${i}`;
     const editId = `rec-edit-${i}`;
     const mEsc = esc(p.merchant).replace(/'/g, "\\'");
-
     const lastDateVal = p.last_date || '';
-    const nextEstVal = p.next_estimated || '';
+    const nextEstVal  = p.next_estimated || '';
+    const moEquiv = p.monthly_equivalent != null
+      ? '$' + Number(p.monthly_equivalent).toFixed(2)
+      : '—';
 
     html += `<tr id="rec-row-${i}" style="border-bottom:1px solid var(--border);">
-      <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}${badge}</td>
-      <td style="padding:8px 10px; font-weight:600;">$${Number(p.median_amount).toFixed(2)}</td>
+      <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}${sourceBadge}${dueSoonBadge}</td>
+      <td style="padding:8px 10px; font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</td>
+      <td style="padding:8px 10px; font-variant-numeric:tabular-nums; color:var(--text-muted);">${moEquiv}</td>
       <td style="padding:8px 10px;">
         <span style="background:${color}; color:#fff; font-size:11px; padding:2px 8px; border-radius:4px;">${esc(p.frequency)}</span>
       </td>
@@ -1121,7 +1268,7 @@ function _renderRecurringList(patterns, container) {
           <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
             background:none; cursor:pointer; color:var(--text,#1e293b);"
             onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
-            onclick="_toggleRecMenu('${menuId}'); _showRecEditForm(${i}, '${mEsc}', ${p.median_amount}, '${esc(p.frequency)}')">Edit</button>
+            onclick="_toggleRecMenu('${menuId}'); _showRecEditForm(${i})">Edit</button>
           <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
             background:none; cursor:pointer; color:var(--text,#1e293b);"
             onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
@@ -1134,7 +1281,7 @@ function _renderRecurringList(patterns, container) {
       </td>
     </tr>
     <tr id="${editId}" style="display:none;">
-      <td colspan="7" style="padding:10px 12px; background:var(--bg-alt,#f8faff);">
+      <td colspan="8" style="padding:10px 12px; background:var(--bg-alt,#f8faff);">
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <label style="font-size:11px; color:var(--text-muted);">Label</label>
           <input type="text" id="${editId}-label" value="${mEsc}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:180px;" />
@@ -1193,10 +1340,9 @@ function _renderPausedList(patterns, container) {
   container.innerHTML = html;
 }
 
-// ── Recurring Action Menu ──────────────────────────────────────
+// ── Recurring Action Menu ─────────────────────────────────────
 
 function _toggleRecMenu(menuId) {
-  // Close all other menus first
   document.querySelectorAll('[id^="rec-menu-"]').forEach(el => {
     if (el.id !== menuId) el.style.display = 'none';
   });
@@ -1204,14 +1350,13 @@ function _toggleRecMenu(menuId) {
   if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
 }
 
-// Close menus on outside click
 document.addEventListener('click', function(e) {
   if (!e.target.closest('[id^="rec-menu-"]') && !e.target.closest('button')) {
     document.querySelectorAll('[id^="rec-menu-"]').forEach(el => el.style.display = 'none');
   }
 });
 
-function _showRecEditForm(idx, merchant, amount, freq) {
+function _showRecEditForm(idx) {
   const editRow = document.getElementById(`rec-edit-${idx}`);
   if (editRow) editRow.style.display = '';
 }
@@ -1219,8 +1364,8 @@ function _showRecEditForm(idx, merchant, amount, freq) {
 /** Recalculate Next Estimated from Last Charged date + frequency. */
 function _recalcNextEstimated(editId) {
   const lastDate = document.getElementById(`${editId}-lastdate`)?.value;
-  const freqEl = document.getElementById(`${editId}-freq`);
-  const nextEl = document.getElementById(`${editId}-nextest`);
+  const freqEl   = document.getElementById(`${editId}-freq`);
+  const nextEl   = document.getElementById(`${editId}-nextest`);
   if (!lastDate || !nextEl) return;
   const freq = freqEl?.value || 'monthly';
   const freqDays = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, annual: 365 };
@@ -1231,11 +1376,11 @@ function _recalcNextEstimated(editId) {
 }
 
 async function saveRecurringEdit(idx, originalMerchant) {
-  const editId = `rec-edit-${idx}`;
-  const label = document.getElementById(`${editId}-label`)?.value?.trim();
-  const amount = parseFloat(document.getElementById(`${editId}-amount`)?.value);
+  const editId   = `rec-edit-${idx}`;
+  const label    = document.getElementById(`${editId}-label`)?.value?.trim();
+  const amount   = parseFloat(document.getElementById(`${editId}-amount`)?.value);
   const frequency = document.getElementById(`${editId}-freq`)?.value || 'monthly';
-  const last_date = document.getElementById(`${editId}-lastdate`)?.value || null;
+  const last_date      = document.getElementById(`${editId}-lastdate`)?.value || null;
   const next_estimated = document.getElementById(`${editId}-nextest`)?.value || null;
 
   if (!label) { toast('Label is required', 'error', 2000); return; }
@@ -1253,31 +1398,8 @@ async function saveRecurringEdit(idx, originalMerchant) {
   }
 }
 
-function filterRecurringCharges() {
-  const q = (document.getElementById('recurring-search')?.value || '').toLowerCase();
-  const tbody = document.querySelector('#recurring-list table tbody');
-  if (!tbody) return;
-  const rows = tbody.querySelectorAll('tr');
-  let visible = 0, total = 0;
-  // Rows come in pairs: data row + edit row
-  for (let i = 0; i < rows.length; i += 2) {
-    const dataRow = rows[i];
-    const editRow = rows[i + 1];
-    const text = dataRow.textContent.toLowerCase();
-    const match = !q || text.includes(q);
-    total++;
-    if (match) {
-      visible++;
-      dataRow.style.display = '';
-      if (editRow) editRow.style.display = editRow.dataset.wasOpen === '1' ? '' : 'none';
-    } else {
-      dataRow.style.display = 'none';
-      if (editRow) editRow.style.display = 'none';
-    }
-  }
-  const countEl = document.getElementById('recurring-search-count');
-  if (countEl) countEl.textContent = q ? `${visible} of ${total}` : '';
-}
+// Legacy alias — kept so any external callers don't break
+function filterRecurringCharges() { _onRecurringFilterChange(); }
 
 async function pauseRecurringCharge(merchant) {
   try {

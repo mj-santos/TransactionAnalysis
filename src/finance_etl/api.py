@@ -5536,10 +5536,17 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=500,
                                 detail=f"Recurring detection failed: {exc}") from exc
 
+        # Breakdown of monthly-equivalent cost by frequency bucket
+        breakdown: dict[str, float] = {}
+        for p in active:
+            freq = p.get("frequency", "irregular")
+            breakdown[freq] = round(breakdown.get(freq, 0.0) + p.get("monthly_equivalent", 0.0), 2)
+
         return {
             "patterns": active,
             "paused": paused,
             "monthly_total": monthly_total,
+            "frequency_breakdown": breakdown,
             "count": len(active),
         }
 
