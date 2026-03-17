@@ -1663,15 +1663,24 @@
         </div>
       </div>
 
-      <!-- Search bar -->
-      <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
-        <div style="position:relative; flex:1; max-width:320px;">
+      <!-- Search & filter bar -->
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+        <div style="position:relative; flex:1; max-width:280px;">
           <input id="manage-acct-search" type="text" placeholder="Search accounts..."
             oninput="filterManageAccounts()" onkeydown="if(event.key==='Escape'){this.value='';filterManageAccounts();}"
             style="width:100%; padding:6px 28px 6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
           <button id="manage-acct-search-clear" onclick="document.getElementById('manage-acct-search').value='';filterManageAccounts();"
             style="display:none; position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-muted); padding:2px 4px;">&times;</button>
         </div>
+        <select id="manage-acct-type-filter" onchange="filterManageAccounts()"
+          style="padding:6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px; min-width:140px;">
+          <option value="">All Types</option>
+        </select>
+        <select id="manage-acct-institution-filter" onchange="filterManageAccounts()"
+          style="padding:6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px; min-width:140px;">
+          <option value="">All Institutions</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="_clearManageFilters()" style="font-size:12px;">Clear Filters</button>
         <span id="manage-acct-search-count" style="font-size:12px; color:var(--text-muted);"></span>
       </div>
 

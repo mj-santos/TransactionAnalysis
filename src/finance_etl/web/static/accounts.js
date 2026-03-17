@@ -11,6 +11,7 @@ async function loadAccounts() {
     const res = await api('GET', '/accounts/');
     _accountsCache = res.accounts || [];
     _renderAccountsTable(_accountsCache);
+    _populateManageFilters(_accountsCache);
     _loadPaymentSourceTags();
     _populateTagAccountDropdown(_accountsCache);
     // Also load overview data if that tab is active
@@ -85,21 +86,68 @@ function _acctSearchUI(inputId, clearId, countId, shown, total) {
   if (countEl) countEl.textContent = q ? `${shown} of ${total}` : '';
 }
 
-// ── Manage Accounts search ──
+// ── Manage Accounts filters ──
+const _TYPE_LABELS = {
+  credit_card: 'Credit Card', mortgage: 'Mortgage', auto_loan: 'Auto Loan',
+  student_loan: 'Student Loan', utility: 'Utility', personal_debt: 'Personal Debt',
+  other: 'Other', checking: 'Checking', savings: 'Savings',
+  investment: 'Investment', digital_wallet: 'Digital Wallet',
+};
+
+function _populateManageFilters(accounts) {
+  const typeSet = new Set();
+  const instSet = new Set();
+  for (const a of accounts) {
+    const subtype = a.account_class === 'asset' ? a.asset_type : a.liability_type;
+    if (subtype) typeSet.add(subtype);
+    if (a.institution) instSet.add(a.institution);
+  }
+  const typeSel = document.getElementById('manage-acct-type-filter');
+  const instSel = document.getElementById('manage-acct-institution-filter');
+  if (!typeSel || !instSel) return;
+  const curType = typeSel.value;
+  const curInst = instSel.value;
+  typeSel.innerHTML = '<option value="">All Types</option>' +
+    [...typeSet].sort().map(t => `<option value="${t}">${_TYPE_LABELS[t] || t}</option>`).join('');
+  instSel.innerHTML = '<option value="">All Institutions</option>' +
+    [...instSet].sort().map(i => `<option value="${esc(i)}">${esc(i)}</option>`).join('');
+  typeSel.value = curType;
+  instSel.value = curInst;
+}
+
+function _clearManageFilters() {
+  const search = document.getElementById('manage-acct-search');
+  const typeSel = document.getElementById('manage-acct-type-filter');
+  const instSel = document.getElementById('manage-acct-institution-filter');
+  if (search) search.value = '';
+  if (typeSel) typeSel.value = '';
+  if (instSel) instSel.value = '';
+  filterManageAccounts();
+}
+
 function filterManageAccounts() {
   const query = (document.getElementById('manage-acct-search')?.value || '').toLowerCase();
-  if (!query) {
+  const typeFilter = document.getElementById('manage-acct-type-filter')?.value || '';
+  const instFilter = document.getElementById('manage-acct-institution-filter')?.value || '';
+  const hasFilter = query || typeFilter || instFilter;
+
+  if (!hasFilter) {
     _renderAccountsTable(_accountsCache);
     _acctSearchUI('manage-acct-search', 'manage-acct-search-clear', 'manage-acct-search-count', 0, 0);
     return;
   }
   const filtered = _accountsCache.filter(a => {
     const subtype = a.account_class === 'asset' ? a.asset_type : a.liability_type;
-    const haystack = [
-      a.name, a.institution, a.last_four, a.account_code,
-      a.status, a.acct_type, subtype, a.account_class,
-    ].filter(Boolean).join(' ').toLowerCase();
-    return haystack.includes(query);
+    if (typeFilter && subtype !== typeFilter) return false;
+    if (instFilter && a.institution !== instFilter) return false;
+    if (query) {
+      const haystack = [
+        a.name, a.institution, a.last_four, a.account_code,
+        a.status, a.acct_type, subtype, a.account_class,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
   });
   _renderAccountsTable(filtered);
   _acctSearchUI('manage-acct-search', 'manage-acct-search-clear', 'manage-acct-search-count', filtered.length, _accountsCache.length);
@@ -476,7 +524,7 @@ async function _syncAnnualFeeRecurring(acct) {
         is_recurring: true,
         label: merchantKey,
         amount: fee,
-        frequency: 'yearly',
+        frequency: 'annual',
         next_estimated: nextEstimated,
       });
     } catch (e) {

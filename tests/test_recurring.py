@@ -78,6 +78,11 @@ class TestComputeMonthlyTotal:
         ]
         assert compute_monthly_recurring_total(patterns) == 25.0
 
+    def test_yearly_alias(self):
+        """'yearly' should be treated the same as 'annual' (÷12)."""
+        patterns = [{"median_amount": 120.0, "frequency": "yearly"}]
+        assert compute_monthly_recurring_total(patterns) == 10.0
+
     def test_empty(self):
         assert compute_monthly_recurring_total([]) == 0.0
 

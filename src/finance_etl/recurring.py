@@ -322,6 +322,7 @@ def compute_monthly_recurring_total(patterns: list[dict[str, Any]]) -> float:
         "monthly": 1.0,
         "quarterly": 1 / 3,
         "annual": 1 / 12,
+        "yearly": 1 / 12,
         "irregular": 1.0,  # assume monthly as fallback
     }
     total = 0.0
