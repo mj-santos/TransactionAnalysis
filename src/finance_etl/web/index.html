@@ -2261,6 +2261,18 @@
               <input type="number" id="acct-interest-rate" step="0.01" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
             </div>
 
+            <!-- Recurring monthly payment fields -->
+            <div id="field-recurring-pay-toggle" class="acct-field-recurring-pay" style="display:none; grid-column:1/-1;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="acct-has-recurring-pay" onchange="_toggleRecurringPayFields('add')" />
+                This account has a fixed monthly payment
+              </label>
+            </div>
+            <div id="field-recurring-pay" class="acct-field-recurring-pay-amt" style="display:none;">
+              <label>Monthly Payment Amount</label>
+              <input type="number" id="acct-monthly-payment" step="0.01" min="0" placeholder="e.g. 1200.00" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
+            </div>
+
             <!-- Loan fields -->
             <div id="field-origination-principal" class="acct-field-loan" style="display:none;">
               <label>Original Principal</label>
@@ -2378,6 +2390,16 @@
                 <option value="7">July</option><option value="8">August</option><option value="9">September</option>
                 <option value="10">October</option><option value="11">November</option><option value="12">December</option>
               </select>
+            </div>
+            <div style="grid-column:1/-1;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="edit-acct-has-recurring-pay" onchange="_toggleRecurringPayFields('edit')" />
+                This account has a fixed monthly payment
+              </label>
+            </div>
+            <div id="edit-field-recurring-pay" style="display:none;">
+              <label>Monthly Payment Amount</label>
+              <input type="number" id="edit-acct-monthly-payment" step="0.01" min="0" placeholder="e.g. 1200.00" style="width:100%; padding:8px; border:1px solid var(--border); border-radius:4px;" />
             </div>
             <div>
               <label>Payment Source Tag</label>

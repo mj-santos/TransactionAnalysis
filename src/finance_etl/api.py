@@ -6290,7 +6290,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                         annual_fee, annual_fee_month,
                         payment_source_tag, last_verified_at, data_source,
                         plaid_account_id, status,
-                        linked_account_id, linked_bank_name
+                        linked_account_id, linked_bank_name,
+                        monthly_payment
                     ) VALUES (
                         ?,?,?,?,?,?,
                         ?,?,?,?,
@@ -6306,7 +6307,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                         ?,?,
                         ?,?,?,
                         ?,?,
-                        ?,?
+                        ?,?,
+                        ?
                     )""",
                     [
                         r["name"], r.get("acct_type", "other"),
@@ -6331,6 +6333,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                         r.get("data_source", "manual"),
                         r.get("plaid_account_id"), r.get("status", "active"),
                         r.get("linked_account_id"), r.get("linked_bank_name"),
+                        r.get("monthly_payment"),
                     ],
                 )
 

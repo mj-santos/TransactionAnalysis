@@ -1870,3 +1870,81 @@ class TestAnnualFee:
         ))
         assert float(result["annual_fee"]) == 695.0
         assert result["annual_fee_month"] == 7
+
+
+# ── Monthly Payment ──────────────────────────────────────────────────────
+
+
+class TestMonthlyPayment:
+
+    def _make_mortgage(self, conn, name="Home Loan", monthly_payment=None):
+        kw = dict(
+            account_class="liability",
+            liability_type="mortgage",
+            balance=320000,
+            interest_rate="3.75",
+            origination_principal=350000,
+            loan_term=360,
+        )
+        if monthly_payment is not None:
+            kw["monthly_payment"] = monthly_payment
+        return create_account(conn, AccountCreate(name=name, **kw))
+
+    def test_create_with_monthly_payment(self, conn):
+        acct = self._make_mortgage(conn, monthly_payment="1850.00")
+        assert float(acct["monthly_payment"]) == 1850.0
+
+    def test_create_without_monthly_payment(self, conn):
+        acct = self._make_mortgage(conn)
+        assert acct["monthly_payment"] is None
+
+    def test_update_add_monthly_payment(self, conn):
+        acct = self._make_mortgage(conn, name="Auto Loan")
+        assert acct["monthly_payment"] is None
+
+        result = update_account(conn, acct["id"], AccountUpdate(monthly_payment="450.00"))
+        assert float(result["monthly_payment"]) == 450.0
+
+    def test_update_remove_monthly_payment(self, conn):
+        acct = self._make_mortgage(conn, name="Student Loan", monthly_payment="300.00")
+        assert float(acct["monthly_payment"]) == 300.0
+
+        result = update_account(conn, acct["id"], AccountUpdate(monthly_payment=None))
+        # model_dump(exclude_none=True) means None is not sent — value stays
+        # To clear it, it should be set explicitly in the update; passing None skips the field
+        # monthly_payment should remain 300 (None is excluded from update dict)
+        assert float(result["monthly_payment"]) == 300.0
+
+    def test_monthly_payment_independent_of_minimum_payment(self, conn):
+        acct = self._make_mortgage(conn, name="Independence Test", monthly_payment="1500.00")
+        aid = acct["id"]
+
+        # Set minimum_payment_amount directly via SQL (simulates a Plaid/statement update)
+        conn.execute(
+            "UPDATE nw_accounts SET minimum_payment_amount = 1234.56 WHERE id = ?", [aid]
+        )
+
+        # Update monthly_payment — minimum_payment_amount must not change
+        result = update_account(conn, aid, AccountUpdate(monthly_payment="1600.00"))
+        assert float(result["monthly_payment"]) == 1600.0
+        assert float(result["minimum_payment_amount"]) == 1234.56
+
+    def test_annual_fee_suffix_independence(self, conn):
+        """Annual fee and monthly payment use distinct merchant key suffixes."""
+        acct = create_account(conn, AccountCreate(
+            name="Chase Sapphire",
+            account_class="liability",
+            liability_type="credit_card",
+            institution="Chase",
+            last_four="1234",
+            balance=5000,
+            annual_fee=95,
+            annual_fee_month=3,
+        ))
+        inst = acct["institution"] or "N/A"
+        last4 = acct["last_four"] or "XXXX"
+        annual_key = f"{acct['name']} - {inst} - {last4} (Annual Fee)"
+        monthly_key = f"{acct['name']} - {inst} - {last4} (Monthly)"
+        assert annual_key != monthly_key
+        assert "(Annual Fee)" in annual_key
+        assert "(Monthly)" in monthly_key

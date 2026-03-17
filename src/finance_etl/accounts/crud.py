@@ -120,7 +120,7 @@ def create_account(conn, data: AccountCreate) -> dict:
             credit_limit, annual_fee, annual_fee_month,
             autopay_enabled, autopay_source_id, default_payment_source_id,
             origination_date, origination_principal, interest_rate, loan_term,
-            escrow_balance, payment_source_tag,
+            escrow_balance, monthly_payment, payment_source_tag,
             last_verified_at, data_source, status
         ) VALUES (
             ?,?,?,?,?,?,
@@ -130,7 +130,7 @@ def create_account(conn, data: AccountCreate) -> dict:
             ?,?,?,
             ?,?,?,
             ?,?,?,?,
-            ?,?,
+            ?,?,?,
             ?,?,?
         )""",
         [
@@ -149,6 +149,7 @@ def create_account(conn, data: AccountCreate) -> dict:
             float(data.interest_rate) if data.interest_rate is not None else None,
             data.loan_term,
             float(data.escrow_balance) if data.escrow_balance is not None else None,
+            float(data.monthly_payment) if data.monthly_payment is not None else None,
             data.payment_source_tag,
             now, "manual", "active",
         ],

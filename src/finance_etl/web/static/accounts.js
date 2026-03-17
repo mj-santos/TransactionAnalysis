@@ -382,6 +382,9 @@ function _showTypeFields() {
     if (subtype === 'utility') {
       document.querySelectorAll('.acct-field-utility').forEach(el => el.style.display = '');
     }
+    if (['utility', 'auto_loan', 'mortgage', 'student_loan', 'personal_debt', 'other'].includes(subtype)) {
+      document.querySelectorAll('.acct-field-recurring-pay').forEach(el => el.style.display = '');
+    }
   }
 
   // Listen for subtype changes
@@ -466,13 +469,21 @@ async function submitNewAccount() {
       const dd = document.getElementById('acct-due-day').value;
       if (dd) payload.due_day = parseInt(dd);
     }
+    const hasRecurringPay = document.getElementById('acct-has-recurring-pay')?.checked;
+    if (hasRecurringPay) {
+      const mp = document.getElementById('acct-monthly-payment').value;
+      if (mp) payload.monthly_payment = parseFloat(mp);
+    } else {
+      payload.monthly_payment = null;
+    }
   }
 
   try {
     const result = await api('POST', '/accounts/', payload);
     toast('Account created successfully', 'success');
-    // Sync annual fee to recurring tab
+    // Sync annual fee and monthly payment to recurring tab
     _syncAnnualFeeRecurring(result);
+    _syncMonthlyPaymentRecurring(result);
     closeAddAccountModal();
     loadAccounts();
   } catch (e) {
@@ -504,7 +515,7 @@ async function _syncAnnualFeeRecurring(acct) {
   if (!acct || !acct.name) return;
   const inst = acct.institution || 'N/A';
   const last4 = acct.last_four || 'XXXX';
-  const merchantKey = `${acct.name} - ${inst} - ${last4}`;
+  const merchantKey = `${acct.name} - ${inst} - ${last4} (Annual Fee)`;
   const fee = parseFloat(acct.annual_fee) || 0;
   const feeMonth = acct.annual_fee_month;
 
@@ -538,6 +549,47 @@ async function _syncAnnualFeeRecurring(acct) {
     } catch (e) {
       // 404 is fine — override may not exist
     }
+  }
+}
+
+// ── Monthly Payment → Recurring Sync ────────────────────────────────
+
+async function _syncMonthlyPaymentRecurring(acct) {
+  if (!acct || !acct.name) return;
+  const inst = acct.institution || 'N/A';
+  const last4 = acct.last_four || 'XXXX';
+  const merchantKey = `${acct.name} - ${inst} - ${last4} (Monthly)`;
+  const mp = parseFloat(acct.monthly_payment) || 0;
+
+  if (mp > 0) {
+    try {
+      await api('POST', '/recurring/override', {
+        merchant: merchantKey,
+        is_recurring: true,
+        label: merchantKey,
+        amount: mp,
+        frequency: 'monthly',
+      });
+    } catch (e) {
+      console.warn('Failed to sync monthly payment to recurring:', e.message);
+    }
+  } else {
+    try {
+      await api('DELETE', `/recurring/override/${encodeURIComponent(merchantKey)}`);
+    } catch (e) {
+      // 404 is fine — override may not exist
+    }
+  }
+}
+
+// ── Recurring Pay Checkbox Toggle ────────────────────────────────────
+
+function _toggleRecurringPayFields(mode) {
+  const prefix = mode === 'edit' ? 'edit-' : '';
+  const checked = document.getElementById(`${prefix}acct-has-recurring-pay`).checked;
+  document.getElementById(`${prefix}field-recurring-pay`).style.display = checked ? '' : 'none';
+  if (!checked) {
+    document.getElementById(`${prefix}acct-monthly-payment`).value = '';
   }
 }
 
@@ -611,6 +663,15 @@ function openEditAccount(id) {
   document.getElementById('edit-field-annual-fee').style.display = hasAnnualFee ? '' : 'none';
   document.getElementById('edit-field-annual-fee-month').style.display = hasAnnualFee ? '' : 'none';
 
+  // Monthly payment checkbox + field
+  const hasMonthlyPay = acct.monthly_payment != null && parseFloat(acct.monthly_payment) > 0;
+  const mpCb = document.getElementById('edit-acct-has-recurring-pay');
+  if (mpCb) {
+    mpCb.checked = hasMonthlyPay;
+    document.getElementById('edit-acct-monthly-payment').value = hasMonthlyPay ? acct.monthly_payment : '';
+    document.getElementById('edit-field-recurring-pay').style.display = hasMonthlyPay ? '' : 'none';
+  }
+
   // Populate linked transaction source dropdown
   _populateLinkedSourceDropdown(acct);
 }
@@ -659,6 +720,15 @@ async function submitEditAccount() {
     payload.annual_fee_month = null;
   }
 
+  // Monthly payment
+  const hasRecurringPay = document.getElementById('edit-acct-has-recurring-pay')?.checked;
+  if (hasRecurringPay) {
+    const mp = document.getElementById('edit-acct-monthly-payment').value;
+    payload.monthly_payment = mp ? parseFloat(mp) : null;
+  } else {
+    payload.monthly_payment = null;
+  }
+
   // Handle linked transaction source
   const linkedSelect = document.getElementById('edit-acct-linked-source');
   if (linkedSelect) {
@@ -676,8 +746,9 @@ async function submitEditAccount() {
   try {
     const result = await api('PUT', `/accounts/${id}`, payload);
     toast('Account updated', 'success');
-    // Sync annual fee to recurring tab
+    // Sync annual fee and monthly payment to recurring tab
     _syncAnnualFeeRecurring(result);
+    _syncMonthlyPaymentRecurring(result);
     closeAddAccountModal();
     loadAccounts();
   } catch (e) {

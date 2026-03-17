@@ -41,6 +41,9 @@ class AccountCreate(BaseModel):
     loan_term: Optional[int] = None
     escrow_balance: Optional[Decimal] = None
 
+    # Recurring monthly payment (utility, loan, mortgage, personal_debt, other)
+    monthly_payment: Optional[Decimal] = None
+
     # Initial balance (required)
     balance: Decimal = Decimal("0")
     # Optional initial statement/available balance
@@ -76,6 +79,7 @@ class AccountUpdate(BaseModel):
     interest_rate: Optional[Decimal] = None
     loan_term: Optional[int] = None
     escrow_balance: Optional[Decimal] = None
+    monthly_payment: Optional[Decimal] = None
     payment_source_tag: Optional[str] = None
     balance: Optional[Decimal] = None
     linked_account_id: Optional[str] = None
@@ -118,6 +122,7 @@ class AccountResponse(BaseModel):
     interest_rate: Optional[Decimal] = None
     loan_term: Optional[int] = None
     escrow_balance: Optional[Decimal] = None
+    monthly_payment: Optional[Decimal] = None
     ytd_interest_paid: Optional[Decimal] = None
     ytd_principal_paid: Optional[Decimal] = None
     autopay_enabled: Optional[bool] = None

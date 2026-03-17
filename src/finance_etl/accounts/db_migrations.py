@@ -49,6 +49,7 @@ ACCOUNT_MIGRATIONS = [
     "ALTER TABLE nw_accounts ADD COLUMN IF NOT EXISTS due_day INTEGER",
     "ALTER TABLE nw_accounts ADD COLUMN IF NOT EXISTS linked_account_id TEXT",
     "ALTER TABLE nw_accounts ADD COLUMN IF NOT EXISTS linked_bank_name TEXT",
+    "ALTER TABLE nw_accounts ADD COLUMN IF NOT EXISTS monthly_payment DECIMAL(18,2)",
 
     # ── ap_balance_ledger ─────────────────────────────────────────────────
     "CREATE SEQUENCE IF NOT EXISTS seq_ap_balance_ledger_id",
