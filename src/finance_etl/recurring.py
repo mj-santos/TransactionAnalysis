@@ -207,9 +207,11 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
     for merchant, pat in auto_results.items():
         if overrides.get(merchant) is False:
             continue
-        # Apply user overrides for pause, frequency, dates
+        # Apply user overrides for pause, amount, frequency, dates
         details = override_details.get(merchant, {})
         pat.paused = details.get("paused", False)
+        if details.get("amount") is not None:
+            pat.median_amount = round(float(details["amount"]), 2)
         if details.get("frequency"):
             pat.frequency = details["frequency"]
         if details.get("last_date"):
@@ -246,7 +248,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
         if txns:
             dates = sorted(set(t[0] for t in txns))
             amounts = [t[1] for t in txns]
-            med_amount = _median(amounts)
+            # Prefer user-set amount; fall back to transaction-computed median
+            med_amount = float(details["amount"]) if details.get("amount") is not None else _median(amounts)
             effective_last = details.get("last_date") or (dates[-1] if dates else "")
 
             if len(dates) >= 2:

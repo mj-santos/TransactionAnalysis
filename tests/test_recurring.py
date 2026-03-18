@@ -463,6 +463,40 @@ class TestOverrideLastDate:
         assert active[0]["next_estimated"] is None
 
 
+class TestAmountOverrideRespected:
+    """User-set amount must win over auto-detected/computed median."""
+
+    def test_auto_detected_amount_overridden_by_user(self):
+        """Auto-detected charge that user edits amount for must show new amount."""
+        txns = _make_monthly_txns("Netflix", 15.99, "2024-01-01", 5)
+        overrides = [("Netflix", True, "Netflix", 19.99, "monthly", False, None, None)]
+        conn = _FakeConn(txns, overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        r = next(x for x in active if x["merchant"] == "Netflix")
+        assert r["median_amount"] == 19.99, "Override amount must win over tx-computed median"
+
+    def test_user_marked_with_transactions_amount_overridden(self):
+        """User-marked merchant with transactions must use the stored amount, not tx median."""
+        txns = _make_monthly_txns("Gym", 50.0, "2024-01-01", 4)
+        overrides = [("Gym", True, "Gym", 65.0, "monthly", False, None, None)]
+        conn = _FakeConn(txns, overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        r = next(x for x in active if x["merchant"] == "Gym")
+        assert r["median_amount"] == 65.0, "Override amount must win over tx-history median"
+
+    def test_amount_override_zero_is_respected(self):
+        """An explicit amount of 0 in the override should NOT be treated as 'not set'."""
+        txns = _make_monthly_txns("Free Trial", 9.99, "2024-01-01", 4)
+        overrides = [("Free Trial", True, "Free Trial", 0.0, "monthly", False, None, None)]
+        conn = _FakeConn(txns, overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        r = next(x for x in active if x["merchant"] == "Free Trial")
+        assert r["median_amount"] == 0.0, "Explicit zero override amount must be respected"
+
+
 class TestFrequencyOverrideRespected:
     """User-set frequency must win over auto-detected/computed frequency."""
 
