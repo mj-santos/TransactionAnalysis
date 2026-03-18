@@ -1172,7 +1172,7 @@ function _applyRecurringFilters() {
   if (!filtered.length) {
     listEl.innerHTML = _recurringPatterns.length
       ? '<p style="color:var(--text-muted); padding:12px 0;">No charges match the current filters.</p>'
-      : '<p style="color:var(--text-muted); padding:12px 0;">No recurring transactions detected. Import more data or manually mark merchants below.</p>';
+      : '<p style="color:var(--text-muted); padding:12px 0;">No recurring charges yet. Click <strong>+ Add Recurring</strong> to add one manually, or import transactions to auto-detect.</p>';
     return;
   }
 
@@ -1251,7 +1251,7 @@ function _renderRecurringList(patterns, container) {
       ? '$' + Number(p.monthly_equivalent).toFixed(2)
       : '—';
 
-    html += `<tr id="rec-row-${i}" style="border-bottom:1px solid var(--border);">
+    html += `<tr id="rec-row-${i}" style="border-bottom:1px solid var(--border); cursor:default;">
       <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}${sourceBadge}${dueSoonBadge}</td>
       <td style="padding:8px 10px; font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</td>
       <td style="padding:8px 10px; font-variant-numeric:tabular-nums; color:var(--text-muted);">${moEquiv}</td>
@@ -1265,12 +1265,12 @@ function _renderRecurringList(patterns, container) {
         <button class="btn btn-secondary btn-sm" style="font-size:14px; padding:2px 10px; line-height:1;"
           onclick="event.stopPropagation(); _toggleRecMenu('${menuId}')">&#x22EF;</button>
         <div id="${menuId}" style="display:none; position:absolute; right:10px; top:calc(100% - 4px); z-index:50;
-          background:var(--bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12);
+          background:var(--card-bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12);
           min-width:120px; overflow:hidden;">
           <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
             background:none; cursor:pointer; color:var(--text,#1e293b);"
             onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
-            onclick="_toggleRecMenu('${menuId}'); _showRecEditForm(${i})">Edit</button>
+            onclick="_toggleRecMenu('${menuId}'); _openRecEditPanel(${i})">Edit</button>
           <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
             background:none; cursor:pointer; color:var(--text,#1e293b);"
             onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
@@ -1279,33 +1279,6 @@ function _renderRecurringList(patterns, container) {
             background:none; cursor:pointer; color:var(--danger);"
             onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
             onclick="_toggleRecMenu('${menuId}'); deleteRecurringCharge('${mEsc}', ${p.is_auto})">Delete</button>
-        </div>
-      </td>
-    </tr>
-    <tr id="${editId}" style="display:none;">
-      <td colspan="8" style="padding:10px 12px; background:var(--bg-alt,#f8faff);">
-        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <label style="font-size:11px; color:var(--text-muted);">Label</label>
-          <input type="text" id="${editId}-label" value="${mEsc}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:180px;" />
-          <label style="font-size:11px; color:var(--text-muted);">Amount</label>
-          <input type="number" id="${editId}-amount" value="${p.median_amount}" step="0.01" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:100px;" />
-          <label style="font-size:11px; color:var(--text-muted);">Frequency</label>
-          <select id="${editId}-freq" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;"
-            onchange="_recalcNextEstimated('${editId}')">
-            <option value="monthly"${p.frequency === 'monthly' ? ' selected' : ''}>Monthly</option>
-            <option value="annual"${p.frequency === 'annual' ? ' selected' : ''}>Annual</option>
-            <option value="quarterly"${p.frequency === 'quarterly' ? ' selected' : ''}>Quarterly</option>
-            <option value="biweekly"${p.frequency === 'biweekly' ? ' selected' : ''}>Biweekly</option>
-            <option value="weekly"${p.frequency === 'weekly' ? ' selected' : ''}>Weekly</option>
-            <option value="irregular"${p.frequency === 'irregular' ? ' selected' : ''}>Irregular</option>
-          </select>
-          <label style="font-size:11px; color:var(--text-muted);">Last Charged</label>
-          <input type="date" id="${editId}-lastdate" value="${lastDateVal}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;"
-            onchange="_recalcNextEstimated('${editId}')" />
-          <label style="font-size:11px; color:var(--text-muted);">Next Estimated</label>
-          <input type="date" id="${editId}-nextest" value="${nextEstVal}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;" />
-          <button class="btn btn-primary btn-sm" style="font-size:11px;" onclick="saveRecurringEdit(${i}, '${mEsc}')">Save</button>
-          <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="document.getElementById('${editId}').style.display='none'">Cancel</button>
         </div>
       </td>
     </tr>`;
@@ -1360,59 +1333,230 @@ document.addEventListener('click', function(e) {
   }
 });
 
-function _showRecEditForm(idx) {
-  const editRow = document.getElementById(`rec-edit-${idx}`);
-  if (editRow) editRow.style.display = '';
+// Legacy alias — kept so any external callers don't break
+function filterRecurringCharges() { _onRecurringFilterChange(); }
+
+// ── Recurring Edit Slide-Over Panel ──────────────────────────
+
+let _recPanelMerchant = null;  // original merchant key for the open panel
+let _recPanelIsAuto   = false;
+
+function _openRecEditPanel(idx) {
+  const p = _recurringPatterns[idx];
+  if (!p) return;
+
+  _recPanelMerchant = p.merchant;
+  _recPanelIsAuto   = !!p.is_auto;
+
+  // Populate panel fields
+  document.getElementById('rec-panel-title').textContent    = p.merchant;
+  document.getElementById('rec-panel-subtitle').textContent = p.is_auto ? 'Auto-detected' : 'Manually added';
+  document.getElementById('rec-panel-label').value    = p.merchant;
+  document.getElementById('rec-panel-amount').value   = p.median_amount != null ? p.median_amount : '';
+  document.getElementById('rec-panel-lastdate').value = p.last_date || '';
+  document.getElementById('rec-panel-nextest').value  = p.next_estimated || '';
+  document.getElementById('rec-panel-notes').value    = p.notes || '';
+
+  const freqEl = document.getElementById('rec-panel-freq');
+  freqEl.value = p.frequency || 'monthly';
+  _panelFreqChanged();  // disable next-est if irregular
+
+  // Pause button label
+  document.getElementById('rec-panel-pause-btn').textContent = p.paused ? 'Resume' : 'Pause';
+
+  // Reset danger zone
+  document.getElementById('rec-panel-danger-confirm').style.display = 'none';
+  document.getElementById('rec-panel-danger-delete-btn').style.display = '';
+
+  // Highlight active row
+  document.querySelectorAll('tr.rec-row-active').forEach(r => r.classList.remove('rec-row-active'));
+  const row = document.getElementById(`rec-row-${idx}`);
+  if (row) row.classList.add('rec-row-active');
+
+  // Show overlay + panel
+  document.getElementById('rec-slideover-overlay').style.display = '';
+  const panel = document.getElementById('rec-slideover');
+  panel.style.transform = 'translateX(100%)';
+  panel.offsetHeight; // force reflow
+  panel.classList.add('open');
 }
 
-/** Recalculate Next Estimated from Last Charged date + frequency. */
-function _recalcNextEstimated(editId) {
-  const lastDate = document.getElementById(`${editId}-lastdate`)?.value;
-  const freqEl   = document.getElementById(`${editId}-freq`);
-  const nextEl   = document.getElementById(`${editId}-nextest`);
+function _closeRecEditPanel() {
+  const panel = document.getElementById('rec-slideover');
+  panel.classList.remove('open');
+  document.getElementById('rec-slideover-overlay').style.display = 'none';
+  document.querySelectorAll('tr.rec-row-active').forEach(r => r.classList.remove('rec-row-active'));
+  _recPanelMerchant = null;
+}
+
+function _panelFreqChanged() {
+  const freq   = document.getElementById('rec-panel-freq')?.value;
+  const nextEl = document.getElementById('rec-panel-nextest');
   if (!nextEl) return;
-  const freq = freqEl?.value || 'monthly';
   if (freq === 'irregular') {
     nextEl.value = '';
     nextEl.disabled = true;
     nextEl.title = 'No predictable next date for irregular charges';
-    return;
+  } else {
+    nextEl.disabled = false;
+    nextEl.title = '';
   }
-  nextEl.disabled = false;
-  nextEl.title = '';
-  if (!lastDate) return;
+}
+
+function _panelLastDateChanged() {
+  const lastDate = document.getElementById('rec-panel-lastdate')?.value;
+  const freq     = document.getElementById('rec-panel-freq')?.value || 'monthly';
+  const nextEl   = document.getElementById('rec-panel-nextest');
+  if (!nextEl || freq === 'irregular' || !lastDate) return;
   const freqDays = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, annual: 365 };
-  const days = freqDays[freq] || 30;
   const d = new Date(lastDate + 'T00:00:00');
-  d.setDate(d.getDate() + days);
+  d.setDate(d.getDate() + (freqDays[freq] || 30));
   nextEl.value = d.toISOString().split('T')[0];
 }
 
-async function saveRecurringEdit(idx, originalMerchant) {
-  const editId   = `rec-edit-${idx}`;
-  const label    = document.getElementById(`${editId}-label`)?.value?.trim();
-  const amount   = parseFloat(document.getElementById(`${editId}-amount`)?.value);
-  const frequency = document.getElementById(`${editId}-freq`)?.value || 'monthly';
-  const last_date      = document.getElementById(`${editId}-lastdate`)?.value || null;
-  const next_estimated = document.getElementById(`${editId}-nextest`)?.value || null;
+async function _saveRecEditPanel() {
+  if (!_recPanelMerchant) return;
+  const label    = document.getElementById('rec-panel-label')?.value?.trim();
+  const amtRaw   = document.getElementById('rec-panel-amount')?.value;
+  const amount   = amtRaw !== '' ? parseFloat(amtRaw) : null;
+  const frequency       = document.getElementById('rec-panel-freq')?.value || 'monthly';
+  const last_date       = document.getElementById('rec-panel-lastdate')?.value || null;
+  const next_estimated  = document.getElementById('rec-panel-nextest')?.value || null;
 
   if (!label) { toast('Label is required', 'error', 2000); return; }
-
   try {
     await api('POST', '/recurring/override', {
-      merchant: originalMerchant, is_recurring: true,
-      label, amount: isNaN(amount) ? null : amount, frequency,
-      last_date, next_estimated,
+      merchant: _recPanelMerchant, is_recurring: true,
+      label, amount: (amount !== null && !isNaN(amount)) ? amount : null,
+      frequency, last_date, next_estimated,
     });
     toast(`Updated "${label}"`, 'success', 2500);
+    _closeRecEditPanel();
     loadRecurringTransactions();
   } catch (err) {
     toast(`Edit failed: ${err.message}`, 'error');
   }
 }
 
-// Legacy alias — kept so any external callers don't break
-function filterRecurringCharges() { _onRecurringFilterChange(); }
+async function _panelTogglePause() {
+  if (!_recPanelMerchant) return;
+  const btn = document.getElementById('rec-panel-pause-btn');
+  const pausing = btn.textContent === 'Pause';
+  try {
+    await api('POST', '/recurring/override', { merchant: _recPanelMerchant, is_recurring: true, paused: pausing });
+    toast(pausing ? `Paused "${_recPanelMerchant}"` : `Resumed "${_recPanelMerchant}"`, 'info', 2500);
+    _closeRecEditPanel();
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Action failed: ${err.message}`, 'error');
+  }
+}
+
+async function _confirmDeleteFromPanel() {
+  if (!_recPanelMerchant) return;
+  try {
+    if (_recPanelIsAuto) {
+      await api('POST', '/recurring/override', { merchant: _recPanelMerchant, is_recurring: false });
+    } else {
+      await api('DELETE', `/recurring/override/${encodeURIComponent(_recPanelMerchant)}`);
+    }
+    toast(`Removed "${_recPanelMerchant}" from recurring`, 'success', 2500);
+    _closeRecEditPanel();
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Delete failed: ${err.message}`, 'error');
+  }
+}
+
+// ── Add Recurring Modal ───────────────────────────────────────
+
+function _openAddRecurringModal() {
+  // Clear fields
+  ['add-rec-merchant','add-rec-amount','add-rec-notes'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('add-rec-lastdate').value = '';
+  document.getElementById('add-rec-nextest').value  = '';
+  document.getElementById('add-rec-freq').value     = 'monthly';
+  document.getElementById('add-rec-nextest').disabled = false;
+  document.getElementById('add-rec-nextest-hint').style.display = '';
+  document.getElementById('add-rec-merchant-warn').style.display = 'none';
+
+  // Populate merchant datalist from existing patterns (duplicate warning)
+  const dl = document.getElementById('add-rec-merchant-suggestions');
+  if (dl) {
+    dl.innerHTML = _recurringPatterns.map(p => `<option value="${esc(p.merchant)}">`).join('');
+  }
+
+  // Wire duplicate warning
+  const merchantInput = document.getElementById('add-rec-merchant');
+  if (merchantInput) {
+    merchantInput.oninput = () => {
+      const val = merchantInput.value.trim().toLowerCase();
+      const exists = _recurringPatterns.some(p => p.merchant.toLowerCase() === val);
+      document.getElementById('add-rec-merchant-warn').style.display = exists ? '' : 'none';
+    };
+  }
+
+  document.getElementById('add-recurring-modal').classList.remove('hidden');
+  document.getElementById('add-rec-merchant').focus();
+}
+
+function _closeAddRecurringModal() {
+  document.getElementById('add-recurring-modal').classList.add('hidden');
+}
+
+function _addRecFreqChanged() {
+  const freq   = document.getElementById('add-rec-freq')?.value;
+  const nextEl = document.getElementById('add-rec-nextest');
+  const hint   = document.getElementById('add-rec-nextest-hint');
+  if (!nextEl) return;
+  if (freq === 'irregular') {
+    nextEl.value = ''; nextEl.disabled = true;
+    if (hint) hint.textContent = 'Not applicable for irregular charges';
+  } else {
+    nextEl.disabled = false;
+    if (hint) hint.textContent = 'Auto-filled from last date + frequency';
+    _addRecLastDateChanged();
+  }
+}
+
+function _addRecLastDateChanged() {
+  const lastDate = document.getElementById('add-rec-lastdate')?.value;
+  const freq     = document.getElementById('add-rec-freq')?.value || 'monthly';
+  const nextEl   = document.getElementById('add-rec-nextest');
+  if (!nextEl || freq === 'irregular' || !lastDate) return;
+  const freqDays = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, annual: 365 };
+  const d = new Date(lastDate + 'T00:00:00');
+  d.setDate(d.getDate() + (freqDays[freq] || 30));
+  nextEl.value = d.toISOString().split('T')[0];
+}
+
+async function _submitAddRecurring() {
+  const merchant = document.getElementById('add-rec-merchant')?.value?.trim();
+  if (!merchant) { toast('Merchant name is required', 'error', 2000); return; }
+
+  const amtRaw  = document.getElementById('add-rec-amount')?.value;
+  const amount  = amtRaw !== '' ? parseFloat(amtRaw) : null;
+  const frequency      = document.getElementById('add-rec-freq')?.value || 'monthly';
+  const last_date      = document.getElementById('add-rec-lastdate')?.value || null;
+  const next_estimated = document.getElementById('add-rec-nextest')?.value || null;
+
+  try {
+    await api('POST', '/recurring/override', {
+      merchant, is_recurring: true,
+      label: merchant,
+      amount: (amount !== null && !isNaN(amount)) ? amount : null,
+      frequency, last_date, next_estimated,
+    });
+    toast(`Added "${merchant}" as recurring`, 'success', 2500);
+    _closeAddRecurringModal();
+    loadRecurringTransactions();
+  } catch (err) {
+    toast(`Failed to add: ${err.message}`, 'error');
+  }
+}
 
 async function pauseRecurringCharge(merchant) {
   try {
@@ -1450,20 +1594,8 @@ async function deleteRecurringCharge(merchant, isAuto) {
   }
 }
 
-/** Manual add from the input field at the bottom of the page. */
-async function manualMarkRecurring() {
-  const input = document.getElementById('recurring-manual-merchant');
-  const merchant = (input.value || '').trim();
-  if (!merchant) { toast('Enter a merchant name', 'error', 2000); return; }
-  try {
-    await api('POST', '/recurring/override', { merchant, is_recurring: true });
-    toast(`Marked "${merchant}" as recurring`, 'success', 2500);
-    loadRecurringTransactions();
-    input.value = '';
-  } catch (err) {
-    toast(`Override failed: ${err.message}`, 'error');
-  }
-}
+/** Legacy stub — replaced by _submitAddRecurring() modal. */
+async function manualMarkRecurring() { _openAddRecurringModal(); }
 
 // ── Annual Fee Suggestions ────────────────────────────────────
 
@@ -7053,9 +7185,10 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') e.target.blur();
     return;
   }
-  // Close any visible modal on Escape
+  // Close any visible modal or slide-over on Escape
   if (e.key === 'Escape') {
     document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
+    if (document.getElementById('rec-slideover')?.classList.contains('open')) _closeRecEditPanel();
     bulkClearSelection('credit_card');
     bulkClearSelection('bank');
     return;
