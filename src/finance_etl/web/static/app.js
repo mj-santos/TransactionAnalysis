@@ -5354,7 +5354,7 @@ const _NW_TYPE_LABELS = {
   checking: 'Checking', savings: 'Savings', investment: 'Investment',
   credit_card: 'Credit Card', loan: 'Loan', other: 'Other',
 };
-const _NW_ASSET_TYPES = new Set(['checking', 'savings', 'investment', 'other']);
+const _NW_ASSET_TYPES = new Set(['checking', 'savings', 'investment', 'retirement', 'digital_wallet', 'other']);
 
 function _renderNetWorthWidget(nw) {
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.innerHTML = val; };
@@ -5393,7 +5393,7 @@ async function _loadNwAccounts() {
       return;
     }
     list.innerHTML = accounts.map(a => {
-      const isAsset = _NW_ASSET_TYPES.has(a.acct_type);
+      const isAsset = a.is_asset ?? _NW_ASSET_TYPES.has(a.acct_type);
       const balColor = isAsset ? '#22c55e' : '#ef4444';
       const typeLabel = _NW_TYPE_LABELS[a.acct_type] || a.acct_type;
       return `<div class="nw-account-row">
