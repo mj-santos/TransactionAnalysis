@@ -1036,7 +1036,7 @@ let _recurringFilterState = {
   query: '',
   frequency: null,   // null = all
   source: null,      // null | 'auto' | 'manual'
-  sortCol: 'monthly_equivalent',
+  sortCol: 'monthly_net',
   sortDir: 'desc',
 };
 
@@ -1062,13 +1062,24 @@ async function loadRecurringTransactions() {
 
     _recurringPatterns = data.patterns || [];
 
-    // Top-level KPI (always reflects unfiltered total)
+    // Top-level KPI (net of reimbursements)
     totalEl.textContent = '$' + Number(data.monthly_total).toLocaleString(undefined,
       { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     countEl.textContent = `${data.count} recurring charge${data.count !== 1 ? 's' : ''} detected`;
 
+    const passthroughEl = document.getElementById('recurring-passthrough-label');
+    if (passthroughEl) {
+      if (data.monthly_passthrough > 0) {
+        const pt = Number(data.monthly_passthrough).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        passthroughEl.textContent = `+ $${pt}/mo pass-through (not your cost)`;
+        passthroughEl.style.display = '';
+      } else {
+        passthroughEl.style.display = 'none';
+      }
+    }
+
     // Cost breakdown card
-    _renderRecurringBreakdown(data.frequency_breakdown || {});
+    _renderRecurringBreakdown(data.frequency_breakdown || {}, data.monthly_passthrough || 0);
 
     // Render with current filter state
     _applyRecurringFilters();
@@ -1151,8 +1162,11 @@ function _applyRecurringFilters() {
     filtered = filtered.filter(p => p.merchant.toLowerCase().includes(query));
   }
 
-  // Sort
+  // Sort — pass-through items always go to the bottom regardless of sort column
   filtered = [...filtered].sort((a, b) => {
+    const aPass = a.reimbursement_type === 'full' ? 1 : 0;
+    const bPass = b.reimbursement_type === 'full' ? 1 : 0;
+    if (aPass !== bPass) return aPass - bPass;
     let av = a[sortCol] ?? 0;
     let bv = b[sortCol] ?? 0;
     if (typeof av === 'string') av = av.toLowerCase();
@@ -1181,7 +1195,7 @@ function _applyRecurringFilters() {
 
 // ── Breakdown card ────────────────────────────────────────────
 
-function _renderRecurringBreakdown(breakdown) {
+function _renderRecurringBreakdown(breakdown, monthlyPassthrough = 0) {
   const el = document.getElementById('recurring-breakdown');
   if (!el) return;
   const order = ['monthly', 'weekly', 'biweekly', 'quarterly', 'annual', 'irregular'];
@@ -1196,6 +1210,13 @@ function _renderRecurringBreakdown(breakdown) {
         <span style="color:var(--text);">${fmt2(breakdown[f])}/mo</span>
       </span>`;
     });
+  if (monthlyPassthrough > 0) {
+    lines.push(`<span style="display:inline-flex; align-items:center; gap:4px; margin-right:10px; margin-bottom:4px;">
+      <span style="width:8px; height:8px; border-radius:50%; background:#0d9488; display:inline-block;"></span>
+      <span style="font-weight:600; color:#0d9488;">Pass-through</span>
+      <span style="color:var(--text-muted);">${fmt2(monthlyPassthrough)}/mo (not your cost)</span>
+    </span>`);
+  }
   el.innerHTML = lines.length ? `<div style="display:flex; flex-wrap:wrap;">${lines.join('')}</div>` : '<span style="color:var(--text-muted);">No data</span>';
 }
 
@@ -1216,7 +1237,7 @@ function _renderRecurringList(patterns, container) {
   html += `<thead><tr style="border-bottom:2px solid var(--border); text-align:left;">
     ${th('Merchant', 'merchant')}
     ${th('Amount', 'median_amount')}
-    ${th('Mo. Equiv', 'monthly_equivalent')}
+    ${th('Mo. Net', 'monthly_net')}
     ${th('Frequency', 'frequency')}
     ${th('Last Charged', 'last_date')}
     ${th('Next Estimated', 'next_estimated')}
@@ -1245,14 +1266,33 @@ function _renderRecurringList(patterns, container) {
     const mKey  = p.merchant;
     const mEsc  = esc(mKey).replace(/'/g, "\\'");
     const menuId = `rec-menu-${i}`;
-    const moEquiv = p.monthly_equivalent != null
-      ? '$' + Number(p.monthly_equivalent).toFixed(2)
-      : '—';
+    const moNet = p.monthly_net != null ? '$' + Number(p.monthly_net).toFixed(2) : '—';
+
+    // Reimbursement badge
+    let reimbBadge = '';
+    if (p.reimbursement_type === 'full') {
+      reimbBadge = '<span style="font-size:10px; background:#ccfbf1; color:#0d9488; padding:1px 6px; border-radius:3px; margin-left:6px;">pass-through</span>';
+    } else if (p.reimbursement_type === 'partial') {
+      reimbBadge = '<span style="font-size:10px; background:#fef3c7; color:#d97706; padding:1px 6px; border-radius:3px; margin-left:6px;">partial</span>';
+    }
+
+    // Amount cell — two lines for reimbursed items
+    let amountCell;
+    if (p.reimbursement_type === 'full') {
+      amountCell = `<div style="font-weight:600; font-variant-numeric:tabular-nums; color:var(--text-muted); text-decoration:line-through;">$${Number(p.median_amount).toFixed(2)}</div>
+        <div style="font-size:11px; color:#0d9488;">Pass-through · $0.00</div>`;
+    } else if (p.reimbursement_type === 'partial' && p.reimbursed_amount != null) {
+      const yourShare = Math.max(0, p.median_amount - p.reimbursed_amount).toFixed(2);
+      amountCell = `<div style="font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</div>
+        <div style="font-size:11px; color:var(--text-muted);">Your share: $${yourShare}</div>`;
+    } else {
+      amountCell = `<div style="font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</div>`;
+    }
 
     html += `<tr id="rec-row-${CSS.escape(mKey)}" style="border-bottom:1px solid var(--border); cursor:default;">
-      <td style="padding:8px 10px; font-weight:500;">${esc(p.label || mKey)}${sourceBadge}${dueSoonBadge}</td>
-      <td style="padding:8px 10px; font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</td>
-      <td style="padding:8px 10px; font-variant-numeric:tabular-nums; color:var(--text-muted);">${moEquiv}</td>
+      <td style="padding:8px 10px; font-weight:500;">${esc(p.label || mKey)}${sourceBadge}${reimbBadge}${dueSoonBadge}</td>
+      <td style="padding:8px 10px;">${amountCell}</td>
+      <td style="padding:8px 10px; font-variant-numeric:tabular-nums; color:var(--text-muted);">${moNet}</td>
       <td style="padding:8px 10px;">
         <span style="background:${color}; color:#fff; font-size:11px; padding:2px 8px; border-radius:4px;">${esc(p.frequency)}</span>
       </td>
@@ -1359,6 +1399,14 @@ function _openRecEditPanel(merchant) {
   freqEl.value = p.frequency || 'monthly';
   _panelFreqChanged();  // disable next-est if irregular
 
+  // Reimbursement fields
+  const reimbType = p.reimbursement_type || 'none';
+  const reimbRadio = document.getElementById(`rec-panel-reimb-${reimbType}`);
+  if (reimbRadio) reimbRadio.checked = true;
+  const reimbAmountEl = document.getElementById('rec-panel-reimb-amount');
+  if (reimbAmountEl) reimbAmountEl.value = p.reimbursed_amount != null ? p.reimbursed_amount : '';
+  _panelReimbChanged();
+
   // Pause button label
   document.getElementById('rec-panel-pause-btn').textContent = p.paused ? 'Resume' : 'Pause';
 
@@ -1390,14 +1438,28 @@ function _closeRecEditPanel() {
 function _panelFreqChanged() {
   const freq   = document.getElementById('rec-panel-freq')?.value;
   const nextEl = document.getElementById('rec-panel-nextest');
-  if (!nextEl) return;
-  if (freq === 'irregular') {
-    nextEl.value = '';
-    nextEl.disabled = true;
-    nextEl.title = 'No predictable next date for irregular charges';
-  } else {
-    nextEl.disabled = false;
-    nextEl.title = '';
+  if (nextEl) {
+    if (freq === 'irregular') {
+      nextEl.value = '';
+      nextEl.disabled = true;
+      nextEl.title = 'No predictable next date for irregular charges';
+    } else {
+      nextEl.disabled = false;
+      nextEl.title = '';
+    }
+  }
+  const freqLabel = document.getElementById('rec-panel-reimb-freq-label');
+  if (freqLabel) freqLabel.textContent = `per ${freq || 'occurrence'}`;
+}
+
+function _panelReimbChanged() {
+  const type = document.querySelector('input[name="rec-panel-reimb"]:checked')?.value;
+  const row = document.getElementById('rec-panel-reimb-amount-row');
+  if (row) row.style.display = type === 'partial' ? '' : 'none';
+  const pauseBtn = document.getElementById('rec-panel-pause-btn');
+  if (pauseBtn) {
+    pauseBtn.disabled = type === 'full';
+    pauseBtn.title = type === 'full' ? 'Not needed — net cost is already $0' : '';
   }
 }
 
@@ -1421,12 +1483,20 @@ async function _saveRecEditPanel() {
   const last_date       = document.getElementById('rec-panel-lastdate')?.value || null;
   const next_estimated  = document.getElementById('rec-panel-nextest')?.value || null;
 
+  const reimbTypeRaw   = document.querySelector('input[name="rec-panel-reimb"]:checked')?.value || 'none';
+  const reimbAmtRaw    = document.getElementById('rec-panel-reimb-amount')?.value;
+  const reimbursement_type   = reimbTypeRaw === 'none' ? null : reimbTypeRaw;
+  const reimbursed_amount    = (reimbTypeRaw === 'partial' && reimbAmtRaw !== '')
+    ? parseFloat(reimbAmtRaw) : null;
+
   if (!label) { toast('Label is required', 'error', 2000); return; }
   try {
     await api('POST', '/recurring/override', {
       merchant: _recPanelMerchant, is_recurring: true,
       label, amount: (amount !== null && !isNaN(amount)) ? amount : null,
       frequency, last_date, next_estimated,
+      reimbursement_type,
+      reimbursed_amount: (reimbursed_amount !== null && !isNaN(reimbursed_amount)) ? reimbursed_amount : null,
     });
     toast(`Updated "${label}"`, 'success', 2500);
     _closeRecEditPanel();

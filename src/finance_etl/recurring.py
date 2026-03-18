@@ -51,8 +51,10 @@ class RecurringPattern:
     next_estimated: str | None  # ISO date estimate, or None if unpredictable
     is_auto: bool             # True = auto-detected; False = user override
     confidence: float         # 0.0–1.0
-    paused: bool = False      # True = user paused this charge
-    label: str | None = None  # User-set display label (overrides merchant in UI)
+    paused: bool = False                   # True = user paused this charge
+    label: str | None = None               # User-set display label (overrides merchant in UI)
+    reimbursement_type: str | None = None  # None | "partial" | "full"
+    reimbursed_amount: float | None = None # Dollar amount reimbursed per occurrence
 
 
 def _median(values: list[float]) -> float:
@@ -186,7 +188,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
         try:
             ov_rows = conn.execute(
                 "SELECT merchant_key, is_recurring, label, amount, frequency, "
-                "       paused, last_date, next_estimated "
+                "       paused, last_date, next_estimated, "
+                "       reimbursement_type, reimbursed_amount "
                 "FROM recurring_overrides"
             ).fetchall()
             for r in ov_rows:
@@ -196,6 +199,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                     "paused": bool(r[5]) if r[5] is not None else False,
                     "last_date": r[6],
                     "next_estimated": r[7],
+                    "reimbursement_type": r[8],
+                    "reimbursed_amount": float(r[9]) if r[9] is not None else None,
                 }
         except Exception:
             pass
@@ -219,6 +224,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
             pat.frequency = details["frequency"]
         if details.get("last_date"):
             pat.last_date = details["last_date"]
+        pat.reimbursement_type = details.get("reimbursement_type")
+        pat.reimbursed_amount = details.get("reimbursed_amount")
         if pat.frequency == "irregular":
             # irregular means no predictable next date
             pat.next_estimated = None
@@ -288,6 +295,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 confidence=1.0,
                 paused=is_paused,
                 label=details.get("label") or None,
+                reimbursement_type=details.get("reimbursement_type"),
+                reimbursed_amount=details.get("reimbursed_amount"),
             )))
         else:
             # No matching transactions — use stored override data
@@ -312,6 +321,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 confidence=1.0,
                 paused=is_paused,
                 label=details.get("label") or None,
+                reimbursement_type=details.get("reimbursement_type"),
+                reimbursed_amount=details.get("reimbursed_amount"),
             )))
 
     # Sort by median amount descending (biggest subscriptions first)
@@ -363,14 +374,45 @@ def _normalize_frequency(freq: str | None) -> str:
     return canonical
 
 
+VALID_REIMBURSEMENT_TYPES: frozenset[str] = frozenset({"partial", "full"})
+
+
+def _normalize_reimbursement_type(rtype: str | None) -> str | None:
+    """Return the canonical reimbursement type, or None if not set.
+
+    Raises ``ValueError`` for unrecognised values so the API can return 400.
+    Returns ``None`` when ``rtype`` is ``None`` or empty (meaning no reimbursement).
+    """
+    if not rtype:
+        return None
+    lower = rtype.strip().lower()
+    if lower not in VALID_REIMBURSEMENT_TYPES:
+        raise ValueError(
+            f"Invalid reimbursement_type '{rtype}'. "
+            f"Valid values: {sorted(VALID_REIMBURSEMENT_TYPES)}"
+        )
+    return lower
+
+
 def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:
     mult = _MONTHLY_MULTIPLIERS.get(p.frequency, 1.0)
-    monthly_equiv = round(p.median_amount * mult, 2)
+    monthly_gross = round(p.median_amount * mult, 2)
+
+    # Net monthly cost after reimbursement — must subtract before multiplying
+    if p.reimbursement_type == "full":
+        monthly_net = 0.0
+    elif p.reimbursement_type == "partial" and p.reimbursed_amount is not None:
+        net_per_occurrence = max(0.0, p.median_amount - p.reimbursed_amount)
+        monthly_net = round(net_per_occurrence * mult, 2)
+    else:
+        monthly_net = monthly_gross
+
     return {
         "merchant": p.merchant,
         "label": p.label or p.merchant,
         "median_amount": p.median_amount,
-        "monthly_equivalent": monthly_equiv,
+        "monthly_equivalent": monthly_gross,  # gross, kept for display/breakdown
+        "monthly_net": monthly_net,            # net of reimbursement, used for totals
         "frequency": p.frequency,
         "avg_interval_days": p.avg_interval_days,
         "occurrences": p.occurrences,
@@ -379,18 +421,22 @@ def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:
         "is_auto": p.is_auto,
         "confidence": p.confidence,
         "paused": p.paused,
+        "reimbursement_type": p.reimbursement_type,
+        "reimbursed_amount": p.reimbursed_amount,
     }
 
 
 def compute_monthly_recurring_total(patterns: list[dict[str, Any]]) -> float:
-    """Estimate total monthly cost from a list of recurring patterns.
+    """Estimate total net monthly cost from a list of recurring patterns.
 
-    Uses pre-computed ``monthly_equivalent`` if present, otherwise falls back
-    to multiplying median_amount by the frequency multiplier.
+    Uses ``monthly_net`` (net of reimbursement) when present, falling back to
+    ``monthly_equivalent`` (gross), then computing from median_amount directly.
     """
     total = 0.0
     for p in patterns:
-        if "monthly_equivalent" in p:
+        if "monthly_net" in p:
+            total += p["monthly_net"]
+        elif "monthly_equivalent" in p:
             total += p["monthly_equivalent"]
         else:
             mult = _MONTHLY_MULTIPLIERS.get(p.get("frequency", "monthly"), 1.0)

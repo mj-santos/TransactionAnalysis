@@ -386,6 +386,10 @@ CREATE TABLE IF NOT EXISTS annual_reports (
     # ── Recurring overrides: user-editable next_estimated ────────────────
     "ALTER TABLE recurring_overrides ADD COLUMN next_estimated TEXT",
 
+    # ── Recurring overrides: reimbursement tracking ───────────────────────
+    "ALTER TABLE recurring_overrides ADD COLUMN reimbursement_type TEXT",
+    "ALTER TABLE recurring_overrides ADD COLUMN reimbursed_amount DECIMAL(18,2)",
+
     # ── Recurring suggestion dismissals ──────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS recurring_dismissals (
         suggestion_id TEXT PRIMARY KEY,

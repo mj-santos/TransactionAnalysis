@@ -13,6 +13,9 @@ from finance_etl.utils.query_helpers import INCOME_FILTER
 # Keys: run_id  Values: {"status": "pending"|"running"|"success"|"failed", ...}
 # ---------------------------------------------------------------------------
 _async_runs: dict[str, dict] = {}
+
+# Sentinel for distinguishing "field not in request body" from "field explicitly set to None"
+_SENTINEL = object()
 _restore_in_progress: bool = False
 
 # ---------------------------------------------------------------------------
@@ -5536,16 +5539,20 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=500,
                                 detail=f"Recurring detection failed: {exc}") from exc
 
-        # Breakdown of monthly-equivalent cost by frequency bucket
+        # Breakdown of gross monthly-equivalent cost by frequency bucket
         breakdown: dict[str, float] = {}
+        monthly_passthrough = 0.0
         for p in active:
             freq = p.get("frequency", "irregular")
             breakdown[freq] = round(breakdown.get(freq, 0.0) + p.get("monthly_equivalent", 0.0), 2)
+            if p.get("reimbursement_type") == "full":
+                monthly_passthrough = round(monthly_passthrough + p.get("monthly_equivalent", 0.0), 2)
 
         return {
             "patterns": active,
             "paused": paused,
             "monthly_total": monthly_total,
+            "monthly_passthrough": monthly_passthrough,
             "frequency_breakdown": breakdown,
             "count": len(active),
         }
@@ -5600,6 +5607,9 @@ No cloud services, no external dependencies — all data stays on your machine.
         Setting ``is_recurring: true`` forces the merchant into the recurring
         list even if auto-detection didn't flag it.  Setting ``false`` removes
         it from the list even if auto-detected.
+
+        Partial updates are safe: fields absent from the body are preserved from
+        the existing record (prevents data loss on pause/resume toggle calls).
         """
         import datetime as _dt
         from finance_etl.db import get_connection as _gc
@@ -5610,22 +5620,63 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=400,
                                 detail="merchant and is_recurring are required.")
 
+        # Extract body fields; track which were explicitly provided
+        body_keys = set(body.keys())
         label = body.get("label")
         amount = body.get("amount")
         raw_frequency = body.get("frequency")
-        paused = body.get("paused", False)
+        paused = bool(body["paused"]) if "paused" in body_keys else None
         last_date = body.get("last_date")
         next_estimated = body.get("next_estimated")
+        raw_reimbursement_type = body.get("reimbursement_type") if "reimbursement_type" in body_keys else _SENTINEL
+        reimbursed_amount = body.get("reimbursed_amount") if "reimbursed_amount" in body_keys else _SENTINEL
 
-        from finance_etl.recurring import _normalize_frequency as _nf
+        from finance_etl.recurring import _normalize_frequency as _nf, _normalize_reimbursement_type as _nrt
         try:
             frequency = _nf(raw_frequency) if raw_frequency is not None else None
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        reimbursement_type_val = _SENTINEL
+        if raw_reimbursement_type is not _SENTINEL:
+            try:
+                reimbursement_type_val = _nrt(raw_reimbursement_type)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         now = _dt.datetime.utcnow().isoformat()
         try:
             conn = _gc(db_path)
+
+            # Read existing record so partial updates (e.g. pause toggle) don't
+            # null out fields that weren't included in the request body.
+            existing: dict = {}
+            row = conn.execute(
+                "SELECT label, amount, frequency, paused, last_date, next_estimated, "
+                "       reimbursement_type, reimbursed_amount "
+                "FROM recurring_overrides WHERE merchant_key = ?",
+                [merchant],
+            ).fetchone()
+            if row:
+                existing = {
+                    "label": row[0], "amount": row[1], "frequency": row[2],
+                    "paused": bool(row[3]) if row[3] is not None else False,
+                    "last_date": row[4], "next_estimated": row[5],
+                    "reimbursement_type": row[6],
+                    "reimbursed_amount": float(row[7]) if row[7] is not None else None,
+                }
+
+            # Merge: use body value when explicitly provided, else fall back to existing
+            final_label          = label          if label          is not None else existing.get("label")
+            final_amount         = float(amount)  if amount         is not None else existing.get("amount")
+            final_frequency      = frequency      if raw_frequency  is not None else existing.get("frequency")
+            final_paused         = paused         if paused         is not None else existing.get("paused", False)
+            final_last_date      = last_date      if last_date      is not None else existing.get("last_date")
+            final_next_estimated = next_estimated if next_estimated is not None else existing.get("next_estimated")
+            final_reimb_type     = reimbursement_type_val if reimbursement_type_val is not _SENTINEL else existing.get("reimbursement_type")
+            final_reimb_amount   = (float(reimbursed_amount) if reimbursed_amount is not None else None) \
+                                   if reimbursed_amount is not _SENTINEL else existing.get("reimbursed_amount")
+
             # Upsert: DuckDB doesn't support ON CONFLICT on all versions,
             # so delete-then-insert pattern is safest.
             conn.execute(
@@ -5635,11 +5686,13 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn.execute(
                 """INSERT INTO recurring_overrides
                    (merchant_key, is_recurring, label, amount, frequency,
-                    paused, last_date, next_estimated, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                [merchant, bool(is_recurring), label,
-                 float(amount) if amount is not None else None,
-                 frequency, bool(paused), last_date, next_estimated, now, now],
+                    paused, last_date, next_estimated,
+                    reimbursement_type, reimbursed_amount,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [merchant, bool(is_recurring), final_label, final_amount,
+                 final_frequency, bool(final_paused), final_last_date, final_next_estimated,
+                 final_reimb_type, final_reimb_amount, now, now],
             )
             conn.close()
         except Exception as exc:
@@ -6176,12 +6229,15 @@ No cloud services, no external dependencies — all data stays on your machine.
                 conn.execute(
                     """INSERT INTO recurring_overrides
                        (merchant_key, is_recurring, label, amount, frequency,
-                        paused, last_date, next_estimated, created_at, updated_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                        paused, last_date, next_estimated,
+                        reimbursement_type, reimbursed_amount,
+                        created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [r["merchant_key"], r.get("is_recurring", True),
                      r.get("label"), r.get("amount"),
                      r.get("frequency"), r.get("paused", False),
                      r.get("last_date"), r.get("next_estimated"),
+                     r.get("reimbursement_type"), r.get("reimbursed_amount"),
                      r.get("created_at", now), r.get("updated_at", now)],
                 )
 

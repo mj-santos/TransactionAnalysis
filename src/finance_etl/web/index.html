@@ -1436,6 +1436,7 @@
         <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Monthly Recurring Cost</div>
         <div id="recurring-monthly-total" style="font-size:28px; font-weight:700; margin-top:4px; color:var(--danger);">—</div>
         <div id="recurring-count-label" style="font-size:12px; color:var(--text-muted); margin-top:4px;"></div>
+        <div id="recurring-passthrough-label" style="font-size:11px; color:#0d9488; margin-top:2px; display:none;"></div>
       </div>
       <div class="card" style="padding:16px 20px;">
         <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Cost Breakdown</div>
@@ -1666,6 +1667,36 @@
               <label style="display:block; font-size:12px; font-weight:600; margin-bottom:5px;">Notes <span style="font-weight:400; color:var(--text-muted);">(optional)</span></label>
               <input type="text" id="rec-panel-notes" placeholder="Optional notes…"
                 style="width:100%; box-sizing:border-box; padding:8px 12px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+            </div>
+          </div>
+        </div>
+        <!-- Reimbursement section -->
+        <div>
+          <div style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin-bottom:10px;">Reimbursement</div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+              <input type="radio" name="rec-panel-reimb" id="rec-panel-reimb-none" value="none" onchange="_panelReimbChanged()" />
+              None — full cost (default)
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+              <input type="radio" name="rec-panel-reimb" id="rec-panel-reimb-partial" value="partial" onchange="_panelReimbChanged()" />
+              Partial — I get some back
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+              <input type="radio" name="rec-panel-reimb" id="rec-panel-reimb-full" value="full" onchange="_panelReimbChanged()" />
+              Pass-through — fully reimbursed ($0 net cost)
+            </label>
+            <div id="rec-panel-reimb-amount-row" style="display:none; margin-top:4px;">
+              <label style="display:block; font-size:12px; font-weight:600; margin-bottom:5px;">
+                Reimbursed amount
+                <span id="rec-panel-reimb-freq-label" style="font-weight:400; color:var(--text-muted);">(per occurrence)</span>
+              </label>
+              <div style="position:relative;">
+                <span style="position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:13px;">$</span>
+                <input type="number" id="rec-panel-reimb-amount" step="0.01" min="0"
+                  style="width:100%; box-sizing:border-box; padding:8px 12px 8px 22px; border:1px solid var(--border); border-radius:6px; font-size:13px;"
+                  placeholder="Amount reimbursed per charge" />
+              </div>
             </div>
           </div>
         </div>
