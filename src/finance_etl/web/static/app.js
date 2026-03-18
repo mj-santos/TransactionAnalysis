@@ -1250,7 +1250,7 @@ function _renderRecurringList(patterns, container) {
       : '—';
 
     html += `<tr id="rec-row-${CSS.escape(mKey)}" style="border-bottom:1px solid var(--border); cursor:default;">
-      <td style="padding:8px 10px; font-weight:500;">${esc(mKey)}${sourceBadge}${dueSoonBadge}</td>
+      <td style="padding:8px 10px; font-weight:500;">${esc(p.label || mKey)}${sourceBadge}${dueSoonBadge}</td>
       <td style="padding:8px 10px; font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</td>
       <td style="padding:8px 10px; font-variant-numeric:tabular-nums; color:var(--text-muted);">${moEquiv}</td>
       <td style="padding:8px 10px;">
@@ -1347,9 +1347,9 @@ function _openRecEditPanel(merchant) {
   _recPanelIsAuto   = !!p.is_auto;
 
   // Populate panel fields
-  document.getElementById('rec-panel-title').textContent    = p.merchant;
+  document.getElementById('rec-panel-title').textContent    = p.label || p.merchant;
   document.getElementById('rec-panel-subtitle').textContent = p.is_auto ? 'Auto-detected' : 'Manually added';
-  document.getElementById('rec-panel-label').value    = p.merchant;
+  document.getElementById('rec-panel-label').value    = p.label || p.merchant;
   document.getElementById('rec-panel-amount').value   = p.median_amount != null ? p.median_amount : '';
   document.getElementById('rec-panel-lastdate').value = p.last_date || '';
   document.getElementById('rec-panel-nextest').value  = p.next_estimated || '';

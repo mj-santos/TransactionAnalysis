@@ -42,7 +42,7 @@ MAX_AMOUNT_CV = 0.30
 @dataclass
 class RecurringPattern:
     """A detected (or user-overridden) recurring charge."""
-    merchant: str
+    merchant: str             # original key used for API calls / overrides
     median_amount: float
     frequency: str            # weekly | biweekly | monthly | quarterly | annual | irregular
     avg_interval_days: float
@@ -52,6 +52,7 @@ class RecurringPattern:
     is_auto: bool             # True = auto-detected; False = user override
     confidence: float         # 0.0–1.0
     paused: bool = False      # True = user paused this charge
+    label: str | None = None  # User-set display label (overrides merchant in UI)
 
 
 def _median(values: list[float]) -> float:
@@ -210,6 +211,8 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
         # Apply user overrides for pause, amount, frequency, dates
         details = override_details.get(merchant, {})
         pat.paused = details.get("paused", False)
+        if details.get("label"):
+            pat.label = details["label"]
         if details.get("amount") is not None:
             pat.median_amount = round(float(details["amount"]), 2)
         if details.get("frequency"):
@@ -284,6 +287,7 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 is_auto=False,
                 confidence=1.0,
                 paused=is_paused,
+                label=details.get("label") or None,
             )))
         else:
             # No matching transactions — use stored override data
@@ -307,6 +311,7 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 is_auto=False,
                 confidence=1.0,
                 paused=is_paused,
+                label=details.get("label") or None,
             )))
 
     # Sort by median amount descending (biggest subscriptions first)
@@ -363,6 +368,7 @@ def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:
     monthly_equiv = round(p.median_amount * mult, 2)
     return {
         "merchant": p.merchant,
+        "label": p.label or p.merchant,
         "median_amount": p.median_amount,
         "monthly_equivalent": monthly_equiv,
         "frequency": p.frequency,
