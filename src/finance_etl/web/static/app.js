@@ -1242,17 +1242,15 @@ function _renderRecurringList(patterns, container) {
       }
     }
 
+    const mKey  = p.merchant;
+    const mEsc  = esc(mKey).replace(/'/g, "\\'");
     const menuId = `rec-menu-${i}`;
-    const editId = `rec-edit-${i}`;
-    const mEsc = esc(p.merchant).replace(/'/g, "\\'");
-    const lastDateVal = p.last_date || '';
-    const nextEstVal  = p.next_estimated || '';
     const moEquiv = p.monthly_equivalent != null
       ? '$' + Number(p.monthly_equivalent).toFixed(2)
       : '—';
 
-    html += `<tr id="rec-row-${i}" style="border-bottom:1px solid var(--border); cursor:default;">
-      <td style="padding:8px 10px; font-weight:500;">${esc(p.merchant)}${sourceBadge}${dueSoonBadge}</td>
+    html += `<tr id="rec-row-${CSS.escape(mKey)}" style="border-bottom:1px solid var(--border); cursor:default;">
+      <td style="padding:8px 10px; font-weight:500;">${esc(mKey)}${sourceBadge}${dueSoonBadge}</td>
       <td style="padding:8px 10px; font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</td>
       <td style="padding:8px 10px; font-variant-numeric:tabular-nums; color:var(--text-muted);">${moEquiv}</td>
       <td style="padding:8px 10px;">
@@ -1270,7 +1268,7 @@ function _renderRecurringList(patterns, container) {
           <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
             background:none; cursor:pointer; color:var(--text,#1e293b);"
             onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
-            onclick="_toggleRecMenu('${menuId}'); _openRecEditPanel(${i})">Edit</button>
+            onclick="_toggleRecMenu('${menuId}'); _openRecEditPanel('${mEsc}')">Edit</button>
           <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none;
             background:none; cursor:pointer; color:var(--text,#1e293b);"
             onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
@@ -1341,8 +1339,8 @@ function filterRecurringCharges() { _onRecurringFilterChange(); }
 let _recPanelMerchant = null;  // original merchant key for the open panel
 let _recPanelIsAuto   = false;
 
-function _openRecEditPanel(idx) {
-  const p = _recurringPatterns[idx];
+function _openRecEditPanel(merchant) {
+  const p = _recurringPatterns.find(x => x.merchant === merchant);
   if (!p) return;
 
   _recPanelMerchant = p.merchant;
@@ -1368,9 +1366,9 @@ function _openRecEditPanel(idx) {
   document.getElementById('rec-panel-danger-confirm').style.display = 'none';
   document.getElementById('rec-panel-danger-delete-btn').style.display = '';
 
-  // Highlight active row
+  // Highlight active row (rows are keyed by merchant)
   document.querySelectorAll('tr.rec-row-active').forEach(r => r.classList.remove('rec-row-active'));
-  const row = document.getElementById(`rec-row-${idx}`);
+  const row = document.getElementById(`rec-row-${CSS.escape(p.merchant)}`);
   if (row) row.classList.add('rec-row-active');
 
   // Show overlay + panel
