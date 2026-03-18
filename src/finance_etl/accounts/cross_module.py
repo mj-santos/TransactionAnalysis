@@ -262,7 +262,7 @@ def get_balance_card_data(conn, linked_account_id: str, linked_bank_name: str | 
                credit_limit, interest_rate, liability_type, asset_type,
                account_class, last_verified_at, data_source,
                last_statement_balance, minimum_payment_amount,
-               last_statement_issue_date, status
+               last_statement_issue_date, status, monthly_payment
         FROM nw_accounts
         WHERE linked_account_id = ?
         AND (status = 'active' OR status IS NULL)
@@ -311,6 +311,7 @@ def get_balance_card_data(conn, linked_account_id: str, linked_bank_name: str | 
         "minimum_payment": round(float(row[13]), 2) if row[13] else None,
         "last_statement_date": row[14],
         "status": row[15] or "active",
+        "monthly_payment": round(float(row[16]), 2) if row[16] else None,
         "staleness_days": staleness,
         "staleness_level": staleness_level,
     }

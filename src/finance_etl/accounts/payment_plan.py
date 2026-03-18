@@ -92,14 +92,14 @@ def rollforward_plan(conn, from_month: str, to_month: str) -> dict:
     """Copy payment assignments from one month to another."""
     now = _now_iso()
     prev_plans = conn.execute(
-        "SELECT liability_id, source_id, strategy, notes FROM ap_payment_plan WHERE cycle_month = ?",
+        "SELECT liability_id, source_id, strategy, notes, planned_amount FROM ap_payment_plan WHERE cycle_month = ?",
         [from_month],
     ).fetchall()
 
     created = 0
     skipped = 0
     for row in prev_plans:
-        liability_id, source_id, strategy, notes = row
+        liability_id, source_id, strategy, notes, prev_planned_amount = row
         existing = conn.execute(
             "SELECT id FROM ap_payment_plan WHERE liability_id = ? AND cycle_month = ?",
             [liability_id, to_month],
@@ -108,7 +108,9 @@ def rollforward_plan(conn, from_month: str, to_month: str) -> dict:
             skipped += 1
             continue
 
-        # Get current statement balance for planned_amount calculation
+        # Derive planned_amount for the new cycle.
+        # - statement/minimum/full_balance: re-derive from current account state
+        # - fixed/extra_principal: user-specified amounts — carry forward from previous cycle
         acct = conn.execute(
             "SELECT last_statement_balance, minimum_payment_amount, balance FROM nw_accounts WHERE id = ?",
             [liability_id],
@@ -124,6 +126,8 @@ def rollforward_plan(conn, from_month: str, to_month: str) -> dict:
                 planned_amount = stmt_bal
             elif strategy == "full_balance" and balance:
                 planned_amount = abs(balance)
+            elif strategy in ("fixed", "extra_principal") and prev_planned_amount is not None:
+                planned_amount = float(prev_planned_amount)
 
         conn.execute(
             """INSERT INTO ap_payment_plan (

@@ -105,11 +105,16 @@ def get_utilization_breakdown(conn) -> list[dict]:
 def get_interest_cost(conn) -> dict:
     """
     Estimated monthly interest cost from APRs on each account.
-    Uses nw_accounts.interest_rate (annual %) and current balance.
+    For revolving credit (credit cards, HELOCs), uses last_statement_balance
+    as the interest-bearing balance, since interest accrues on the carried
+    balance from the prior statement, not on current charges.
+    For installment loans (mortgage, auto, student), uses current balance.
     """
+    _REVOLVING_TYPES = {"credit_card", "line_of_credit", "heloc", "personal_debt"}
+
     rows = conn.execute("""
         SELECT id, name, institution, last_four, liability_type,
-               balance, interest_rate
+               balance, interest_rate, last_statement_balance
         FROM nw_accounts
         WHERE (status = 'active' OR status IS NULL)
         AND is_asset = FALSE
@@ -120,13 +125,18 @@ def get_interest_cost(conn) -> dict:
     total_monthly = 0.0
     accounts = []
     for r in rows:
-        bal = abs(float(r[5])) if r[5] else 0
+        liability_type = r[4] or ""
+        current_bal = abs(float(r[5])) if r[5] else 0
         apr = float(r[6])
-        monthly_interest = round(bal * apr / 100.0 / 12.0, 2)
+        stmt_bal = abs(float(r[7])) if r[7] else 0
+        # Use statement balance for revolving credit when available
+        interest_bal = (stmt_bal if stmt_bal > 0 else current_bal) \
+            if liability_type in _REVOLVING_TYPES else current_bal
+        monthly_interest = round(interest_bal * apr / 100.0 / 12.0, 2)
         total_monthly += monthly_interest
         accounts.append({
             "id": r[0], "name": r[1], "institution": r[2], "last_four": r[3],
-            "liability_type": r[4], "balance": round(bal, 2),
+            "liability_type": liability_type, "balance": round(current_bal, 2),
             "apr": apr, "monthly_interest": monthly_interest,
             "annual_interest": round(monthly_interest * 12, 2),
         })
@@ -146,10 +156,15 @@ def get_payoff_projection(conn, strategy: str = "minimum") -> list[dict]:
 
     Returns estimated months to payoff and total interest (simplified).
     """
+    # Revolving credit types where bal*0.1 is a reasonable aggressive floor.
+    # Installment loans (mortgage, auto, student) have fixed amortisation
+    # schedules where 10% of balance per month is wildly unrealistic.
+    _REVOLVING_TYPES = {"credit_card", "line_of_credit", "heloc", "personal_debt"}
+
     rows = conn.execute("""
         SELECT id, name, institution, liability_type,
                balance, interest_rate, minimum_payment_amount,
-               last_statement_balance
+               last_statement_balance, monthly_payment
         FROM nw_accounts
         WHERE (status = 'active' OR status IS NULL)
         AND is_asset = FALSE
@@ -163,13 +178,23 @@ def get_payoff_projection(conn, strategy: str = "minimum") -> list[dict]:
         apr = float(r[5]) if r[5] else 0
         min_pay = float(r[6]) if r[6] else 0
         stmt_bal = abs(float(r[7])) if r[7] else 0
+        monthly_pay = float(r[8]) if r[8] else 0
+        liability_type = r[3] or ""
 
+        # For minimum strategy, prefer minimum_payment_amount, then monthly_payment
+        # (fixed recurring payment), then statement balance, then full balance.
         if strategy == "minimum":
-            payment = min_pay if min_pay > 0 else (stmt_bal if stmt_bal > 0 else bal)
+            payment = (min_pay or monthly_pay or stmt_bal or bal)
         elif strategy == "statement":
             payment = stmt_bal if stmt_bal > 0 else bal
         elif strategy == "aggressive":
-            payment = max(min_pay * 2, stmt_bal, bal * 0.1)
+            # bal*0.1 floor only applies to revolving credit — for installment
+            # loans it produces absurdly short projections.
+            if liability_type in _REVOLVING_TYPES:
+                payment = max(min_pay * 2, stmt_bal, bal * 0.1)
+            else:
+                base = max(min_pay, monthly_pay)
+                payment = max(base * 2, stmt_bal) if (base > 0 or stmt_bal > 0) else bal
         else:
             payment = min_pay if min_pay > 0 else bal
 
