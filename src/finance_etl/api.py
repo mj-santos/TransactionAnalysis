@@ -30,7 +30,9 @@ _REPORT_FIELDS = frozenset({
 # Fields that may be used in ORDER BY
 _SORT_FIELDS = frozenset({
     "transaction_date", "amount", "description", "merchant",
-    "category", "bank_name", "account_name",
+    "category", "category_normalized", "category_parent",
+    "bank_name", "account_name", "account_id",
+    "currency", "statement_type",
 })
 _REPORT_BUCKETS = frozenset({"day", "week", "month", "year"})
 
@@ -1545,7 +1547,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             where.append("LOWER(COALESCE(category_parent, category, '')) LIKE ?")
             params.append(f"%{category_parent.lower()}%")
         elif category:
-            where.append("LOWER(COALESCE(category, '')) LIKE ?")
+            where.append("LOWER(COALESCE(category_normalized, category, '')) LIKE ?")
             params.append(f"%{category.lower()}%")
         if merchant:
             where.append("LOWER(COALESCE(merchant, description)) LIKE ?")
