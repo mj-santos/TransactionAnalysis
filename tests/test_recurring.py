@@ -461,3 +461,58 @@ class TestOverrideLastDate:
         assert len(active) == 1
         assert active[0]["last_date"] == ""
         assert active[0]["next_estimated"] is None
+
+
+class TestFrequencyOverrideRespected:
+    """User-set frequency must win over auto-detected/computed frequency."""
+
+    def test_auto_detected_frequency_overridden_by_user(self):
+        """Auto-detected monthly charge that user changes to annual stays annual."""
+        txns = _make_monthly_txns("Gym", 50.0, "2024-01-01", 6)
+        overrides = [("Gym", True, "Gym", 50.0, "annual", False, None, None)]
+        conn = _FakeConn(txns, overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        r = next(x for x in active if x["merchant"] == "Gym")
+        assert r["frequency"] == "annual", "Override frequency must win over auto-detected"
+
+    def test_user_marked_with_transactions_frequency_overridden(self):
+        """User-marked merchant with ≥2 tx dates must use the stored frequency, not tx-computed one."""
+        # Transactions ~30 days apart → would classify as 'monthly' if auto-computed
+        txns = _make_monthly_txns("Consulting Fee", 200.0, "2024-01-01", 4)
+        # User explicitly set it to 'quarterly'
+        overrides = [("Consulting Fee", True, "Consulting Fee", 200.0, "quarterly", False, None, None)]
+        conn = _FakeConn(txns, overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        r = next(x for x in active if x["merchant"] == "Consulting Fee")
+        assert r["frequency"] == "quarterly", "User override frequency must win over tx-history frequency"
+
+    def test_irregular_override_clears_next_estimated(self):
+        """Setting frequency to 'irregular' must result in no next_estimated."""
+        txns = _make_monthly_txns("Ad Hoc Payment", 75.0, "2024-01-01", 4)
+        overrides = [("Ad Hoc Payment", True, "Ad Hoc Payment", 75.0, "irregular", False, None, None)]
+        conn = _FakeConn(txns, overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        r = next(x for x in active if x["merchant"] == "Ad Hoc Payment")
+        assert r["frequency"] == "irregular"
+        assert r["next_estimated"] is None, "irregular charges must have no next_estimated"
+
+    def test_auto_detected_irregular_changed_to_monthly(self):
+        """Auto-detected irregular charge overridden to monthly must show monthly."""
+        # Create transactions with an interval that doesn't match any bucket (~60 days)
+        rows = []
+        d = datetime.date.fromisoformat("2024-01-01")
+        for _ in range(4):
+            rows.append(("Odd Charge", d, 40.0))
+            d += datetime.timedelta(days=60)
+        # avg ~60 days → classified as 'irregular' by _classify_frequency
+        # but CV is low, so it passes auto-detection
+        overrides = [("Odd Charge", True, "Odd Charge", 40.0, "monthly", False, None, None)]
+        conn = _FakeConn(rows, overrides)
+        active, _ = detect_recurring(conn, include_overrides=True)
+
+        r = next((x for x in active if x["merchant"] == "Odd Charge"), None)
+        assert r is not None
+        assert r["frequency"] == "monthly"

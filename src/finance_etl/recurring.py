@@ -214,11 +214,19 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
             pat.frequency = details["frequency"]
         if details.get("last_date"):
             pat.last_date = details["last_date"]
-        if details.get("next_estimated"):
+        if pat.frequency == "irregular":
+            # irregular means no predictable next date
+            pat.next_estimated = None
+        elif details.get("next_estimated"):
             pat.next_estimated = details["next_estimated"]
         elif details.get("last_date"):
-            # Recompute next_estimated from overridden last_date
-            pat.next_estimated = _estimate_next(details["last_date"], pat.avg_interval_days) or pat.next_estimated
+            # Recompute next_estimated from overridden last_date using canonical interval
+            _freq_days_map = {
+                "annual": 365, "quarterly": 90, "monthly": 30,
+                "biweekly": 14, "weekly": 7,
+            }
+            est_interval = _freq_days_map.get(pat.frequency, pat.avg_interval_days)
+            pat.next_estimated = _estimate_next(details["last_date"], est_interval) or pat.next_estimated
         results.append(_pattern_to_dict(pat))
 
     # User-marked entries not in auto-detection
@@ -245,8 +253,18 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
                 date_objs = [datetime.date.fromisoformat(d) for d in dates]
                 intervals = [(date_objs[i + 1] - date_objs[i]).days for i in range(len(date_objs) - 1)]
                 avg_interval = sum(intervals) / len(intervals) if intervals else 30
-                freq = _classify_frequency(avg_interval)
-                next_est = user_next_est or _estimate_next(effective_last, avg_interval)
+                # Prefer user-set frequency; fall back to classifying from transaction history
+                freq = details.get("frequency") or _classify_frequency(avg_interval)
+                # For next_estimated: use the canonical interval for the chosen frequency
+                # so the estimate reflects what the user actually set, not raw tx intervals
+                _freq_days_map = {
+                    "annual": 365, "quarterly": 90, "monthly": 30,
+                    "biweekly": 14, "weekly": 7,
+                }
+                est_interval = _freq_days_map.get(freq, avg_interval) if details.get("frequency") else avg_interval
+                next_est = user_next_est or (
+                    _estimate_next(effective_last, est_interval) if freq != "irregular" else None
+                )
             else:
                 avg_interval = 30
                 freq = details.get("frequency") or "monthly"
