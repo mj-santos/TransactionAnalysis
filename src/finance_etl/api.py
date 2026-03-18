@@ -2307,6 +2307,30 @@ No cloud services, no external dependencies — all data stays on your machine.
     # Utilities
     # -----------------------------------------------------------------------
 
+    def _get_known_parents() -> list[str]:
+        """Return sorted list of all known parent groups (built-in + user-created)."""
+        from finance_etl.category_rules import BUILT_IN_CATEGORY_MAP
+        parents = {parent for _, (_, parent) in BUILT_IN_CATEGORY_MAP.items()}
+        conn = None
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                "SELECT DISTINCT parent FROM category_rules WHERE parent IS NOT NULL"
+                " UNION SELECT DISTINCT parent FROM custom_categories WHERE parent IS NOT NULL"
+            ).fetchall()
+            for (p,) in rows:
+                if p:
+                    parents.add(p)
+        except Exception:
+            pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return sorted(parents)
+
     @app.get("/utilities/categories", tags=["utilities"],
              summary="Full category taxonomy with transaction counts")
     def utilities_categories():
@@ -2319,13 +2343,20 @@ No cloud services, no external dependencies — all data stays on your machine.
         conn = None
         try:
             conn = get_connection(db_path, read_only=True)
-            # Also include any user-created categories from category_rules table
+            # Include categories from category_rules (user mapping rules)
             user_rules = conn.execute(
                 "SELECT DISTINCT category, parent FROM category_rules ORDER BY parent, category"
             ).fetchall()
             for cat, parent in user_rules:
                 if parent and cat:
                     taxonomy.setdefault(parent, set()).add(cat)
+            # Include custom taxonomy entries (not mapping rules)
+            custom = conn.execute(
+                "SELECT subcategory, parent FROM custom_categories ORDER BY parent, subcategory"
+            ).fetchall()
+            for subcat, parent in custom:
+                if parent and subcat:
+                    taxonomy.setdefault(parent, set()).add(subcat)
             # Get transaction counts per normalized category
             counts_raw = conn.execute(
                 """SELECT COALESCE(category_normalized, category, 'Uncategorized') AS cat,
@@ -2343,6 +2374,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 except Exception:
                     pass
         counts = {r[0]: r[1] for r in counts_raw}
+        parents = _get_known_parents()
         result = []
         for parent in sorted(taxonomy):
             subcats = []
@@ -2350,7 +2382,68 @@ No cloud services, no external dependencies — all data stays on your machine.
                 subcats.append({"name": sub, "count": counts.get(sub, 0)})
             parent_count = sum(s["count"] for s in subcats)
             result.append({"parent": parent, "count": parent_count, "subcategories": subcats})
-        return {"categories": result}
+        return {"categories": result, "parents": parents}
+
+    @app.post("/utilities/categories", tags=["utilities"],
+              summary="Create a custom category subcategory entry")
+    def create_custom_category(body: dict):
+        """Add a new subcategory under an existing parent to the taxonomy."""
+        subcategory = (body.get("subcategory") or "").strip()
+        parent      = (body.get("parent") or "").strip()
+        if not subcategory:
+            raise HTTPException(status_code=400, detail="subcategory is required")
+        if len(subcategory) > 100:
+            raise HTTPException(status_code=400, detail="subcategory must be 100 characters or fewer")
+        if not parent:
+            raise HTTPException(status_code=400, detail="parent is required")
+        known = _get_known_parents()
+        if parent not in known:
+            raise HTTPException(status_code=400, detail=f"Unknown parent '{parent}'. Must be one of: {', '.join(known)}")
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        conn = None
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                "INSERT INTO custom_categories (subcategory, parent, created_at) VALUES (?, ?, ?)",
+                [subcategory, parent, now],
+            )
+        except Exception as exc:
+            msg = str(exc)
+            if "UNIQUE" in msg.upper() or "duplicate" in msg.lower():
+                raise HTTPException(status_code=409, detail=f"'{subcategory}' already exists under '{parent}'") from exc
+            raise HTTPException(status_code=500, detail=msg) from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        return {"status": "ok", "subcategory": subcategory, "parent": parent}
+
+    @app.delete("/utilities/categories/{subcategory:path}", tags=["utilities"],
+                summary="Delete a custom category subcategory entry")
+    def delete_custom_category(subcategory: str, parent: str = Query(...)):
+        """Remove a user-created subcategory from the custom taxonomy."""
+        conn = None
+        try:
+            conn = get_connection(db_path)
+            result = conn.execute(
+                "DELETE FROM custom_categories WHERE subcategory = ? AND parent = ?",
+                [subcategory, parent],
+            )
+            deleted = result.rowcount if hasattr(result, 'rowcount') else None
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        if deleted == 0:
+            raise HTTPException(status_code=404, detail="Custom category not found")
+        return {"status": "ok"}
 
     @app.get("/utilities/merchants", tags=["utilities"],
              summary="Merchant summary list with counts and categories")

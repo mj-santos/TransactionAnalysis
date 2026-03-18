@@ -5734,13 +5734,22 @@ async function _submitInlineBalance(accountId) {
 // ── Budget form ────────────────────────────────────────────────
 
 function openBudgetForm() {
+  // Ensure parent dropdown is populated (dashboard loads before Utilities)
+  if (_knownParents.length === 0) {
+    api('GET', '/utilities/categories').then(d => {
+      _utilCatData = d.categories || _utilCatData;
+      _populateCategoryParentSelects(d.parents || _utilCatData.map(g => g.parent));
+    }).catch(() => {});
+  }
   document.getElementById('budget-form').style.display = '';
 }
 function closeBudgetForm() {
   document.getElementById('budget-form').style.display = 'none';
-  ['bf-parent','bf-category','bf-amount'].forEach(id => {
+  ['bf-parent','bf-amount'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
+  const bfCat = document.getElementById('bf-category');
+  if (bfCat) bfCat.innerHTML = '<option value="">— All in parent —</option>';
 }
 async function saveBudget() {
   const parent = document.getElementById('bf-parent').value.trim();
@@ -6066,6 +6075,14 @@ async function loadCategoryRules() {
   const tbody = document.getElementById('category-rules-tbody');
   if (!tbody) return;
   tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:24px">Loading…</td></tr>';
+  // Ensure crf-parent dropdown is populated (Category Rules page loads independently of Utilities)
+  if (_knownParents.length === 0) {
+    try {
+      const catData = await api('GET', '/utilities/categories');
+      _utilCatData = catData.categories || _utilCatData;
+      _populateCategoryParentSelects(catData.parents || _utilCatData.map(g => g.parent));
+    } catch (_) { /* non-fatal — dropdown will be empty but rule save will still work */ }
+  }
   try {
     const data = await api('GET', '/category-rules');
     _allCatRules = data.rules || [];
@@ -7817,6 +7834,37 @@ function onboardingGo(page) {
 
 // ── Utilities Tab ─────────────────────────────────────────────
 
+// -- Shared: populate all category-parent <select> elements from a parents list --
+let _knownParents = [];
+
+function _populateCategoryParentSelects(parents) {
+  _knownParents = parents || [];
+  const ids = ['util-cat-new-parent', 'crf-parent', 'bf-parent'];
+  ids.forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— Select parent —</option>' +
+      _knownParents.map(p => `<option${p === current ? ' selected' : ''}>${esc(p)}</option>`).join('');
+  });
+  // bf-category subcategory select — keep empty placeholder
+  const bfCat = document.getElementById('bf-category');
+  if (bfCat && !bfCat.dataset.populated) {
+    bfCat.innerHTML = '<option value="">— All in parent —</option>';
+  }
+}
+
+// Refresh bf-category options when bf-parent changes
+function _onBfParentChange() {
+  const parent = document.getElementById('bf-parent')?.value;
+  const catSel = document.getElementById('bf-category');
+  if (!catSel) return;
+  const group = _utilCatData.find(g => g.parent === parent);
+  const subs = group ? group.subcategories.map(s => s.name) : [];
+  catSel.innerHTML = '<option value="">— All in parent —</option>' +
+    subs.map(s => `<option>${esc(s)}</option>`).join('');
+}
+
 // -- Category List --
 let _utilCatData = [];
 async function loadUtilCategories() {
@@ -7826,11 +7874,38 @@ async function loadUtilCategories() {
   try {
     const data = await api('GET', '/utilities/categories');
     _utilCatData = data.categories || [];
+    _populateCategoryParentSelects(data.parents || _utilCatData.map(g => g.parent));
     _renderUtilCategories(_utilCatData);
     const total = _utilCatData.reduce((s, g) => s + g.subcategories.length, 0);
     _updateBadge('util-cat-count', total);
   } catch (err) {
     el.innerHTML = `<span style="color:var(--text-muted);">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+function _openAddCategoryForm() {
+  document.getElementById('util-cat-add-form').style.display = '';
+  document.getElementById('util-cat-new-name').value = '';
+  document.getElementById('util-cat-new-parent').value = '';
+  document.getElementById('util-cat-new-name').focus();
+}
+
+function _closeAddCategoryForm() {
+  document.getElementById('util-cat-add-form').style.display = 'none';
+}
+
+async function _saveNewCategory() {
+  const subcategory = (document.getElementById('util-cat-new-name')?.value || '').trim();
+  const parent      = document.getElementById('util-cat-new-parent')?.value || '';
+  if (!subcategory) { toast('Subcategory name is required.', 'error'); return; }
+  if (!parent)      { toast('Parent group is required.', 'error'); return; }
+  try {
+    await api('POST', '/utilities/categories', { subcategory, parent });
+    toast(`"${subcategory}" added under ${parent}.`, 'success');
+    _closeAddCategoryForm();
+    await loadUtilCategories();
+  } catch (err) {
+    toast(`Failed: ${err.message}`, 'error');
   }
 }
 

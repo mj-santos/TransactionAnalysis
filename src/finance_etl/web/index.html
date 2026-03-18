@@ -159,11 +159,15 @@
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
             <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
               Parent Group
-              <input type="text" id="bf-parent" placeholder="e.g. Food & Dining" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+              <select id="bf-parent" onchange="_onBfParentChange()" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
+                <option value="">— Select parent —</option>
+              </select>
             </label>
             <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
               Subcategory (optional)
-              <input type="text" id="bf-category" placeholder="e.g. Restaurants" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+              <select id="bf-category" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
+                <option value="">— All in parent —</option>
+              </select>
             </label>
             <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
               Monthly Budget ($)
@@ -1382,18 +1386,6 @@
           Parent Group
           <select id="crf-parent" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
             <option value="">— Select parent —</option>
-            <option>Food & Dining</option>
-            <option>Shopping</option>
-            <option>Travel</option>
-            <option>Transportation</option>
-            <option>Entertainment</option>
-            <option>Health & Wellness</option>
-            <option>Bills & Utilities</option>
-            <option>Financial</option>
-            <option>Education</option>
-            <option>Home</option>
-            <option>Gifts & Charity</option>
-            <option>Other</option>
           </select>
         </label>
       </div>
@@ -2850,9 +2842,32 @@
       </div>
       <div class="card-collapsible-body">
         <div class="card-body">
-          <input type="text" id="util-cat-search" placeholder="Search categories…"
-                 oninput="_filterUtilCategories()"
-                 style="width:100%; max-width:320px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; margin-bottom:12px;" />
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
+            <input type="text" id="util-cat-search" placeholder="Search categories…"
+                   oninput="_filterUtilCategories()"
+                   style="flex:1; min-width:200px; max-width:320px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px;" />
+            <button class="btn btn-primary btn-sm" onclick="_openAddCategoryForm()">+ Add Category</button>
+          </div>
+          <!-- Inline add-category form -->
+          <div id="util-cat-add-form" style="display:none; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:14px;">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+              <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+                Subcategory Name
+                <input type="text" id="util-cat-new-name" placeholder="e.g. Government Services"
+                       style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+              </label>
+              <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+                Parent Group
+                <select id="util-cat-new-parent" style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);">
+                  <option value="">— Select parent —</option>
+                </select>
+              </label>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button class="btn btn-primary btn-sm" onclick="_saveNewCategory()">Save</button>
+              <button class="btn btn-secondary btn-sm" onclick="_closeAddCategoryForm()">Cancel</button>
+            </div>
+          </div>
           <div id="util-cat-list" style="font-size:13px;">
             <span style="color:var(--text-muted);">Loading…</span>
           </div>

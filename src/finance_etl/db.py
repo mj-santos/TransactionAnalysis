@@ -407,6 +407,17 @@ CREATE TABLE IF NOT EXISTS annual_reports (
         suggestion_key TEXT PRIMARY KEY,
         dismissed_at   TEXT NOT NULL
     )""",
+
+    # ── Custom category taxonomy entries ──────────────────────────────────
+    # Stores user-created subcategory/parent pairs that appear in dropdowns
+    # and taxonomy views but do not map a raw bank category string.
+    # Isolated from category_rules to avoid polluting the rule engine.
+    """CREATE TABLE IF NOT EXISTS custom_categories (
+        subcategory TEXT NOT NULL,
+        parent      TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        UNIQUE(subcategory, parent)
+    )""",
 ]
 
 # ── Accounts & Liabilities module migrations ─────────────────────────────
