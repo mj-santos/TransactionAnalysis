@@ -1792,3 +1792,38 @@ tr.bulk-selected > td:first-child {
   margin-bottom: 4px;
 }
 @media (max-width: 640px) { .scroll-hint { display: block; } }
+
+/* ── Overview Liabilities / Assets tables ──────────────────── */
+.overview-table-wrap {
+  overflow: auto;
+  max-height: 480px;
+}
+.overview-table-wrap table {
+  min-width: 600px;
+  border-collapse: collapse;
+}
+.overview-sticky-th {
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+  z-index: 5;
+  box-shadow: 0 1px 0 var(--border);
+}
+.overview-filter-bar {
+  padding: 10px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.overview-filter-bar .filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.overview-filter-bar .filter-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  align-self: center;
+  margin-right: 2px;
+}

@@ -1622,14 +1622,53 @@
           <span class="collapse-icon">&#9660;</span>
         </div>
         <div class="card-collapsible-body">
-          <div class="card-body" style="overflow-x:auto;">
+          <!-- Filter toolbar -->
+          <div class="overview-filter-bar">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <div style="position:relative; flex:1; max-width:280px;">
+                <input id="liab-search" type="text" placeholder="Search liabilities…"
+                  oninput="_onLiabFilterChange()" onkeydown="if(event.key==='Escape'){this.value='';_onLiabFilterChange();}"
+                  style="width:100%; padding:5px 26px 5px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;" />
+                <button onclick="document.getElementById('liab-search').value='';_onLiabFilterChange();"
+                  style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:13px; color:var(--text-muted);">&times;</button>
+              </div>
+              <span id="liab-count" style="font-size:11px; color:var(--text-muted);"></span>
+            </div>
+            <div class="filter-row">
+              <span class="filter-label">Type:</span>
+              <button id="liab-pill-type-all"          class="rec-pill rec-pill-active" onclick="_setLiabTypeFilter(null)">All</button>
+              <button id="liab-pill-type-credit_card"  class="rec-pill" onclick="_setLiabTypeFilter('credit_card')">Credit Card</button>
+              <button id="liab-pill-type-mortgage"     class="rec-pill" onclick="_setLiabTypeFilter('mortgage')">Mortgage</button>
+              <button id="liab-pill-type-auto_loan"    class="rec-pill" onclick="_setLiabTypeFilter('auto_loan')">Auto Loan</button>
+              <button id="liab-pill-type-student_loan" class="rec-pill" onclick="_setLiabTypeFilter('student_loan')">Student Loan</button>
+              <button id="liab-pill-type-personal_debt"class="rec-pill" onclick="_setLiabTypeFilter('personal_debt')">Personal Debt</button>
+              <button id="liab-pill-type-other"        class="rec-pill" onclick="_setLiabTypeFilter('other')">Other</button>
+            </div>
+            <div class="filter-row" style="margin-bottom:10px;">
+              <span class="filter-label">Updated:</span>
+              <button id="liab-pill-stale-all"   class="rec-pill rec-pill-active" onclick="_setLiabStaleFilter(null)">All</button>
+              <button id="liab-pill-stale-fresh" class="rec-pill" onclick="_setLiabStaleFilter('fresh')">Fresh</button>
+              <button id="liab-pill-stale-aging" class="rec-pill" onclick="_setLiabStaleFilter('aging')">Aging</button>
+              <button id="liab-pill-stale-stale" class="rec-pill" onclick="_setLiabStaleFilter('stale')">Stale</button>
+            </div>
+          </div>
+          <!-- Scrollable table with sticky header -->
+          <div class="overview-table-wrap">
             <table style="width:100%;">
-              <thead><tr>
-                <th>Account</th><th>Institution</th><th style="text-align:right;">Balance</th>
-                <th style="text-align:right;">Statement</th><th style="text-align:right;">Min Due</th>
-                <th>Due Day</th><th style="text-align:right;">Credit Limit</th>
-                <th style="text-align:right;">Util %</th><th>Source</th><th>Last Updated</th>
-              </tr></thead>
+              <thead>
+                <tr>
+                  <th class="overview-sticky-th rec-th-sort" onclick="_sortLiab('name')">Account <span class="rec-sort-arrow" id="liab-sort-name"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" onclick="_sortLiab('institution')">Institution <span class="rec-sort-arrow" id="liab-sort-institution"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" style="text-align:right;" onclick="_sortLiab('balance')">Balance <span class="rec-sort-arrow" id="liab-sort-balance">▼</span></th>
+                  <th class="overview-sticky-th rec-th-sort" style="text-align:right;" onclick="_sortLiab('statement')">Statement <span class="rec-sort-arrow" id="liab-sort-statement"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" style="text-align:right;" onclick="_sortLiab('minDue')">Min Due <span class="rec-sort-arrow" id="liab-sort-minDue"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" style="text-align:right;" onclick="_sortLiab('dueDay')">Due Day <span class="rec-sort-arrow" id="liab-sort-dueDay"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" style="text-align:right;" onclick="_sortLiab('creditLimit')">Credit Limit <span class="rec-sort-arrow" id="liab-sort-creditLimit"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" style="text-align:right;" onclick="_sortLiab('util')">Util % <span class="rec-sort-arrow" id="liab-sort-util"></span></th>
+                  <th class="overview-sticky-th">Source</th>
+                  <th class="overview-sticky-th rec-th-sort" onclick="_sortLiab('lastUpdated')">Last Updated <span class="rec-sort-arrow" id="liab-sort-lastUpdated"></span></th>
+                </tr>
+              </thead>
               <tbody id="overview-liabilities-body">
                 <tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-muted);">Loading...</td></tr>
               </tbody>
@@ -1645,12 +1684,47 @@
           <span class="collapse-icon">&#9660;</span>
         </div>
         <div class="card-collapsible-body">
-          <div class="card-body" style="overflow-x:auto;">
+          <!-- Filter toolbar -->
+          <div class="overview-filter-bar">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <div style="position:relative; flex:1; max-width:280px;">
+                <input id="asset-search" type="text" placeholder="Search assets…"
+                  oninput="_onAssetFilterChange()" onkeydown="if(event.key==='Escape'){this.value='';_onAssetFilterChange();}"
+                  style="width:100%; padding:5px 26px 5px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;" />
+                <button onclick="document.getElementById('asset-search').value='';_onAssetFilterChange();"
+                  style="position:absolute; right:4px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:13px; color:var(--text-muted);">&times;</button>
+              </div>
+              <span id="asset-count" style="font-size:11px; color:var(--text-muted);"></span>
+            </div>
+            <div class="filter-row">
+              <span class="filter-label">Type:</span>
+              <button id="asset-pill-type-all"            class="rec-pill rec-pill-active" onclick="_setAssetTypeFilter(null)">All</button>
+              <button id="asset-pill-type-checking"       class="rec-pill" onclick="_setAssetTypeFilter('checking')">Checking</button>
+              <button id="asset-pill-type-savings"        class="rec-pill" onclick="_setAssetTypeFilter('savings')">Savings</button>
+              <button id="asset-pill-type-investment"     class="rec-pill" onclick="_setAssetTypeFilter('investment')">Investment</button>
+              <button id="asset-pill-type-retirement"     class="rec-pill" onclick="_setAssetTypeFilter('retirement')">Retirement</button>
+              <button id="asset-pill-type-digital_wallet" class="rec-pill" onclick="_setAssetTypeFilter('digital_wallet')">Wallet</button>
+            </div>
+            <div class="filter-row" style="margin-bottom:10px;">
+              <span class="filter-label">Updated:</span>
+              <button id="asset-pill-stale-all"   class="rec-pill rec-pill-active" onclick="_setAssetStaleFilter(null)">All</button>
+              <button id="asset-pill-stale-fresh" class="rec-pill" onclick="_setAssetStaleFilter('fresh')">Fresh</button>
+              <button id="asset-pill-stale-aging" class="rec-pill" onclick="_setAssetStaleFilter('aging')">Aging</button>
+              <button id="asset-pill-stale-stale" class="rec-pill" onclick="_setAssetStaleFilter('stale')">Stale</button>
+            </div>
+          </div>
+          <!-- Scrollable table with sticky header -->
+          <div class="overview-table-wrap">
             <table style="width:100%;">
-              <thead><tr>
-                <th>Account</th><th>Institution</th><th style="text-align:right;">Balance</th>
-                <th>Source Tag</th><th>Last Updated</th>
-              </tr></thead>
+              <thead>
+                <tr>
+                  <th class="overview-sticky-th rec-th-sort" onclick="_sortAsset('name')">Account <span class="rec-sort-arrow" id="asset-sort-name"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" onclick="_sortAsset('institution')">Institution <span class="rec-sort-arrow" id="asset-sort-institution"></span></th>
+                  <th class="overview-sticky-th rec-th-sort" style="text-align:right;" onclick="_sortAsset('balance')">Balance <span class="rec-sort-arrow" id="asset-sort-balance">▼</span></th>
+                  <th class="overview-sticky-th">Source Tag</th>
+                  <th class="overview-sticky-th rec-th-sort" onclick="_sortAsset('lastUpdated')">Last Updated <span class="rec-sort-arrow" id="asset-sort-lastUpdated"></span></th>
+                </tr>
+              </thead>
               <tbody id="overview-assets-body">
                 <tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-muted);">Loading...</td></tr>
               </tbody>

@@ -1059,54 +1059,230 @@ document.addEventListener('click', () => {
   document.querySelectorAll('.kpi-due-popover.open').forEach(p => p.classList.remove('open'));
 });
 
-function _renderOverviewTables(accounts) {
-  const liabilities = accounts.filter(a => a.account_class === 'liability' || a.is_asset === false);
-  const assets = accounts.filter(a => a.account_class === 'asset' || a.is_asset === true);
+// ── Overview Liabilities & Assets filter/sort state ─────────────────
 
-  // Liabilities
+let _overviewLiabilities = [];
+let _overviewAssets = [];
+
+let _liabFilterState = { query: '', type: null, stale: null, sortCol: 'balance', sortDir: 'desc' };
+let _assetFilterState = { query: '', type: null, stale: null, sortCol: 'balance', sortDir: 'desc' };
+
+function _stalenessLevel(lastVerifiedAt) {
+  if (!lastVerifiedAt) return 'stale';
+  const days = Math.floor((Date.now() - new Date(lastVerifiedAt)) / 86400000);
+  if (days > 14) return 'stale';
+  if (days > 7) return 'aging';
+  return 'fresh';
+}
+
+function _updateOverviewSortArrows(prefix, sortCol, sortDir) {
+  const cols = prefix === 'liab'
+    ? ['name', 'institution', 'balance', 'statement', 'minDue', 'dueDay', 'creditLimit', 'util', 'lastUpdated']
+    : ['name', 'institution', 'balance', 'lastUpdated'];
+  cols.forEach(c => {
+    const el = document.getElementById(`${prefix}-sort-${c}`);
+    if (!el) return;
+    el.textContent = c === sortCol ? (sortDir === 'asc' ? '▲' : '▼') : '';
+  });
+}
+
+function _onLiabFilterChange() {
+  _liabFilterState.query = (document.getElementById('liab-search').value || '').toLowerCase();
+  _applyLiabFilters();
+}
+
+function _setLiabTypeFilter(type) {
+  _liabFilterState.type = type;
+  document.querySelectorAll('[id^="liab-pill-type-"]').forEach(b => b.classList.remove('rec-pill-active'));
+  const id = type ? `liab-pill-type-${type}` : 'liab-pill-type-all';
+  document.getElementById(id)?.classList.add('rec-pill-active');
+  _applyLiabFilters();
+}
+
+function _setLiabStaleFilter(stale) {
+  _liabFilterState.stale = stale;
+  document.querySelectorAll('[id^="liab-pill-stale-"]').forEach(b => b.classList.remove('rec-pill-active'));
+  const id = stale ? `liab-pill-stale-${stale}` : 'liab-pill-stale-all';
+  document.getElementById(id)?.classList.add('rec-pill-active');
+  _applyLiabFilters();
+}
+
+function _sortLiab(col) {
+  if (_liabFilterState.sortCol === col) {
+    _liabFilterState.sortDir = _liabFilterState.sortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _liabFilterState.sortCol = col;
+    _liabFilterState.sortDir = 'desc';
+  }
+  _applyLiabFilters();
+}
+
+function _applyLiabFilters() {
+  const { query, type, stale, sortCol, sortDir } = _liabFilterState;
+  let rows = _overviewLiabilities.slice();
+
+  if (query) {
+    rows = rows.filter(a =>
+      (a.name || '').toLowerCase().includes(query) ||
+      (a.institution || '').toLowerCase().includes(query) ||
+      (a.payment_source_tag || '').toLowerCase().includes(query)
+    );
+  }
+  if (type) {
+    rows = rows.filter(a => (a.liability_type || 'other') === type);
+  }
+  if (stale) {
+    rows = rows.filter(a => _stalenessLevel(a.last_verified_at) === stale);
+  }
+
+  const numCol = ['balance', 'statement', 'minDue', 'dueDay', 'creditLimit', 'util'];
+  rows.sort((a, b) => {
+    let av, bv;
+    if (sortCol === 'name')        { av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase(); }
+    else if (sortCol === 'institution') { av = (a.institution || '').toLowerCase(); bv = (b.institution || '').toLowerCase(); }
+    else if (sortCol === 'balance')    { av = Math.abs(parseFloat(a.balance || 0)); bv = Math.abs(parseFloat(b.balance || 0)); }
+    else if (sortCol === 'statement')  { av = a.last_statement_balance != null ? Math.abs(parseFloat(a.last_statement_balance)) : -1; bv = b.last_statement_balance != null ? Math.abs(parseFloat(b.last_statement_balance)) : -1; }
+    else if (sortCol === 'minDue')     { av = a.minimum_payment_amount != null ? parseFloat(a.minimum_payment_amount) : -1; bv = b.minimum_payment_amount != null ? parseFloat(b.minimum_payment_amount) : -1; }
+    else if (sortCol === 'dueDay')     { av = a.due_day || 0; bv = b.due_day || 0; }
+    else if (sortCol === 'creditLimit'){ av = a.credit_limit ? parseFloat(a.credit_limit) : -1; bv = b.credit_limit ? parseFloat(b.credit_limit) : -1; }
+    else if (sortCol === 'util')       { const acl = a.credit_limit ? parseFloat(a.credit_limit) : 0; const bcl = b.credit_limit ? parseFloat(b.credit_limit) : 0; av = acl > 0 ? Math.abs(parseFloat(a.balance || 0)) / acl : -1; bv = bcl > 0 ? Math.abs(parseFloat(b.balance || 0)) / bcl : -1; }
+    else if (sortCol === 'lastUpdated'){ av = a.last_verified_at || ''; bv = b.last_verified_at || ''; }
+    else { av = 0; bv = 0; }
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  _updateOverviewSortArrows('liab', sortCol, sortDir);
+  _renderLiabTable(rows);
+}
+
+function _renderLiabTable(rows) {
   const liabBody = document.getElementById('overview-liabilities-body');
-  if (!liabilities.length) {
-    liabBody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-muted);">No liabilities</td></tr>';
+  if (!rows.length) {
+    liabBody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding:24px; color:var(--text-muted);">No liabilities match</td></tr>';
+    return;
+  }
+  liabBody.innerHTML = rows.map(a => {
+    const bal = Math.abs(parseFloat(a.balance || 0));
+    const stmt = a.last_statement_balance != null ? Math.abs(parseFloat(a.last_statement_balance)) : null;
+    const minDue = a.minimum_payment_amount != null ? parseFloat(a.minimum_payment_amount) : null;
+    const cl = a.credit_limit ? parseFloat(a.credit_limit) : null;
+    const util = cl && cl > 0 ? Math.round(bal / cl * 100) : null;
+    const utilStyle = util != null && util > 80 ? 'color:var(--danger); font-weight:600;' : util != null && util > 30 ? 'color:var(--warning);' : '';
+    const staleInfo = _staleBadge(a.last_verified_at);
+    return `<tr>
+      <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
+      <td>${esc(a.institution || '-')}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(bal)}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${stmt != null ? _fmt(stmt) : '-'}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${minDue != null ? _fmt(minDue) : '-'}</td>
+      <td style="text-align:right;">${a.due_day || '-'}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${cl != null ? _fmt(cl) : '-'}</td>
+      <td style="text-align:right; ${utilStyle}">${util != null ? util + '%' : '-'}</td>
+      <td><code style="font-size:11px;">${esc(a.payment_source_tag || '-')}</code></td>
+      <td style="font-size:12px;">${staleInfo}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _onAssetFilterChange() {
+  _assetFilterState.query = (document.getElementById('asset-search').value || '').toLowerCase();
+  _applyAssetFilters();
+}
+
+function _setAssetTypeFilter(type) {
+  _assetFilterState.type = type;
+  document.querySelectorAll('[id^="asset-pill-type-"]').forEach(b => b.classList.remove('rec-pill-active'));
+  const id = type ? `asset-pill-type-${type}` : 'asset-pill-type-all';
+  document.getElementById(id)?.classList.add('rec-pill-active');
+  _applyAssetFilters();
+}
+
+function _setAssetStaleFilter(stale) {
+  _assetFilterState.stale = stale;
+  document.querySelectorAll('[id^="asset-pill-stale-"]').forEach(b => b.classList.remove('rec-pill-active'));
+  const id = stale ? `asset-pill-stale-${stale}` : 'asset-pill-stale-all';
+  document.getElementById(id)?.classList.add('rec-pill-active');
+  _applyAssetFilters();
+}
+
+function _sortAsset(col) {
+  if (_assetFilterState.sortCol === col) {
+    _assetFilterState.sortDir = _assetFilterState.sortDir === 'asc' ? 'desc' : 'asc';
   } else {
-    liabBody.innerHTML = liabilities.map(a => {
-      const bal = Math.abs(parseFloat(a.balance || 0));
-      const stmt = a.last_statement_balance != null ? Math.abs(parseFloat(a.last_statement_balance)) : null;
-      const minDue = a.minimum_payment_amount != null ? parseFloat(a.minimum_payment_amount) : null;
-      const cl = a.credit_limit ? parseFloat(a.credit_limit) : null;
-      const util = cl && cl > 0 ? Math.round(bal / cl * 100) : null;
-      const utilStyle = util != null && util > 80 ? 'color:var(--danger); font-weight:600;' : util != null && util > 30 ? 'color:var(--warning);' : '';
-      const staleInfo = _staleBadge(a.last_verified_at);
-      return `<tr>
-        <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
-        <td>${esc(a.institution || '-')}</td>
-        <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(bal)}</td>
-        <td style="text-align:right; font-variant-numeric:tabular-nums;">${stmt != null ? _fmt(stmt) : '-'}</td>
-        <td style="text-align:right; font-variant-numeric:tabular-nums;">${minDue != null ? _fmt(minDue) : '-'}</td>
-        <td>${a.due_day || '-'}</td>
-        <td style="text-align:right; font-variant-numeric:tabular-nums;">${cl != null ? _fmt(cl) : '-'}</td>
-        <td style="text-align:right; ${utilStyle}">${util != null ? util + '%' : '-'}</td>
-        <td><code style="font-size:11px;">${esc(a.payment_source_tag || '-')}</code></td>
-        <td style="font-size:12px;">${staleInfo}</td>
-      </tr>`;
-    }).join('');
+    _assetFilterState.sortCol = col;
+    _assetFilterState.sortDir = 'desc';
+  }
+  _applyAssetFilters();
+}
+
+function _applyAssetFilters() {
+  const { query, type, stale, sortCol, sortDir } = _assetFilterState;
+  let rows = _overviewAssets.slice();
+
+  if (query) {
+    rows = rows.filter(a =>
+      (a.name || '').toLowerCase().includes(query) ||
+      (a.institution || '').toLowerCase().includes(query) ||
+      (a.payment_source_tag || '').toLowerCase().includes(query)
+    );
+  }
+  if (type) {
+    rows = rows.filter(a => (a.asset_type || 'other') === type);
+  }
+  if (stale) {
+    rows = rows.filter(a => _stalenessLevel(a.last_verified_at) === stale);
   }
 
-  // Assets
+  rows.sort((a, b) => {
+    let av, bv;
+    if (sortCol === 'name')        { av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase(); }
+    else if (sortCol === 'institution') { av = (a.institution || '').toLowerCase(); bv = (b.institution || '').toLowerCase(); }
+    else if (sortCol === 'balance')    { av = parseFloat(a.balance || 0); bv = parseFloat(b.balance || 0); }
+    else if (sortCol === 'lastUpdated'){ av = a.last_verified_at || ''; bv = b.last_verified_at || ''; }
+    else { av = 0; bv = 0; }
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  _updateOverviewSortArrows('asset', sortCol, sortDir);
+  _renderAssetTable(rows);
+}
+
+function _renderAssetTable(rows) {
   const assetBody = document.getElementById('overview-assets-body');
-  if (!assets.length) {
-    assetBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-muted);">No assets</td></tr>';
-  } else {
-    assetBody.innerHTML = assets.map(a => {
-      const staleInfo = _staleBadge(a.last_verified_at);
-      return `<tr>
-        <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
-        <td>${esc(a.institution || '-')}</td>
-        <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.balance)}</td>
-        <td><code style="font-size:11px;">${esc(a.payment_source_tag || '-')}</code></td>
-        <td style="font-size:12px;">${staleInfo}</td>
-      </tr>`;
-    }).join('');
+  if (!rows.length) {
+    assetBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:24px; color:var(--text-muted);">No assets match</td></tr>';
+    return;
   }
+  assetBody.innerHTML = rows.map(a => {
+    const staleInfo = _staleBadge(a.last_verified_at);
+    return `<tr>
+      <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
+      <td>${esc(a.institution || '-')}</td>
+      <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.balance)}</td>
+      <td><code style="font-size:11px;">${esc(a.payment_source_tag || '-')}</code></td>
+      <td style="font-size:12px;">${staleInfo}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _renderOverviewTables(accounts) {
+  _overviewLiabilities = accounts.filter(a => a.account_class === 'liability' || a.is_asset === false);
+  _overviewAssets      = accounts.filter(a => a.account_class === 'asset'     || a.is_asset === true);
+
+  // Reset filter state query (keep sort preferences)
+  _liabFilterState.query = '';
+  _assetFilterState.query = '';
+  const liabSearch = document.getElementById('liab-search');
+  if (liabSearch) liabSearch.value = '';
+  const assetSearch = document.getElementById('asset-search');
+  if (assetSearch) assetSearch.value = '';
+
+  _applyLiabFilters();
+  _applyAssetFilters();
 }
 
 function _staleBadge(lastVerifiedAt) {
