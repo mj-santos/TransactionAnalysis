@@ -1040,6 +1040,8 @@ let _recurringFilterState = {
   sortDir: 'desc',
 };
 
+// Canonical frequency set: weekly | biweekly | monthly | quarterly | annual | irregular
+// Must stay in sync with VALID_FREQUENCIES in recurring.py and the pill filter list.
 const _freqColors = {
   weekly: '#3b82f6', biweekly: '#6366f1', monthly: '#8b5cf6',
   quarterly: '#f59e0b', annual: '#22c55e', irregular: '#94a3b8',
@@ -1288,12 +1290,14 @@ function _renderRecurringList(patterns, container) {
           <label style="font-size:11px; color:var(--text-muted);">Amount</label>
           <input type="number" id="${editId}-amount" value="${p.median_amount}" step="0.01" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:100px;" />
           <label style="font-size:11px; color:var(--text-muted);">Frequency</label>
-          <select id="${editId}-freq" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
-            <option value="weekly"${p.frequency === 'weekly' ? ' selected' : ''}>Weekly</option>
-            <option value="biweekly"${p.frequency === 'biweekly' ? ' selected' : ''}>Biweekly</option>
+          <select id="${editId}-freq" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;"
+            onchange="_recalcNextEstimated('${editId}')">
             <option value="monthly"${p.frequency === 'monthly' ? ' selected' : ''}>Monthly</option>
-            <option value="quarterly"${p.frequency === 'quarterly' ? ' selected' : ''}>Quarterly</option>
             <option value="annual"${p.frequency === 'annual' ? ' selected' : ''}>Annual</option>
+            <option value="quarterly"${p.frequency === 'quarterly' ? ' selected' : ''}>Quarterly</option>
+            <option value="biweekly"${p.frequency === 'biweekly' ? ' selected' : ''}>Biweekly</option>
+            <option value="weekly"${p.frequency === 'weekly' ? ' selected' : ''}>Weekly</option>
+            <option value="irregular"${p.frequency === 'irregular' ? ' selected' : ''}>Irregular</option>
           </select>
           <label style="font-size:11px; color:var(--text-muted);">Last Charged</label>
           <input type="date" id="${editId}-lastdate" value="${lastDateVal}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;"
@@ -1366,8 +1370,17 @@ function _recalcNextEstimated(editId) {
   const lastDate = document.getElementById(`${editId}-lastdate`)?.value;
   const freqEl   = document.getElementById(`${editId}-freq`);
   const nextEl   = document.getElementById(`${editId}-nextest`);
-  if (!lastDate || !nextEl) return;
+  if (!nextEl) return;
   const freq = freqEl?.value || 'monthly';
+  if (freq === 'irregular') {
+    nextEl.value = '';
+    nextEl.disabled = true;
+    nextEl.title = 'No predictable next date for irregular charges';
+    return;
+  }
+  nextEl.disabled = false;
+  nextEl.title = '';
+  if (!lastDate) return;
   const freqDays = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, annual: 365 };
   const days = freqDays[freq] || 30;
   const d = new Date(lastDate + 'T00:00:00');
@@ -1498,9 +1511,12 @@ async function loadAnnualSuggestions() {
             <label style="font-size:11px; color:var(--text-muted);">Frequency</label>
             <select id="edit-freq-${esc(s.suggestion_id)}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px;"
               onchange="_recalcSuggestionNextEst('${esc(s.suggestion_id)}')">
-              <option value="annual" selected>Annual</option>
-              <option value="monthly">Monthly</option>
-              <option value="quarterly">Quarterly</option>
+              <option value="annual"${s.frequency === 'annual' ? ' selected' : ''}>Annual</option>
+              <option value="quarterly"${s.frequency === 'quarterly' ? ' selected' : ''}>Quarterly</option>
+              <option value="monthly"${s.frequency === 'monthly' ? ' selected' : ''}>Monthly</option>
+              <option value="biweekly"${s.frequency === 'biweekly' ? ' selected' : ''}>Biweekly</option>
+              <option value="weekly"${s.frequency === 'weekly' ? ' selected' : ''}>Weekly</option>
+              <option value="irregular"${s.frequency === 'irregular' ? ' selected' : ''}>Irregular</option>
             </select>
             <label style="font-size:11px; color:var(--text-muted);">Last Charged</label>
             <input type="date" id="edit-lastdate-${esc(s.suggestion_id)}" value="${s.last_date || ''}" style="font-size:12px; padding:4px 8px; border:1px solid var(--border); border-radius:4px; width:140px;"
@@ -1583,7 +1599,16 @@ function _recalcSuggestionNextEst(sid) {
   const lastDate = document.getElementById(`edit-lastdate-${sid}`)?.value;
   const freq = document.getElementById(`edit-freq-${sid}`)?.value || 'annual';
   const nextEl = document.getElementById(`edit-nextest-${sid}`);
-  if (!lastDate || !nextEl) return;
+  if (!nextEl) return;
+  if (freq === 'irregular') {
+    nextEl.value = '';
+    nextEl.disabled = true;
+    nextEl.title = 'No predictable next date for irregular charges';
+    return;
+  }
+  nextEl.disabled = false;
+  nextEl.title = '';
+  if (!lastDate) return;
   const freqDays = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, annual: 365 };
   const days = freqDays[freq] || 365;
   const d = new Date(lastDate + 'T00:00:00');

@@ -295,15 +295,44 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
     return active, paused
 
 
+# Canonical frequency vocabulary — these are the only values that should be
+# stored in recurring_overrides.frequency.  Any other value is invalid.
+# _freqColors in app.js, pill filters, and breakdown renderer all depend on this set.
+VALID_FREQUENCIES: frozenset[str] = frozenset({
+    "weekly", "biweekly", "monthly", "quarterly", "annual", "irregular",
+})
+
+# Legacy aliases: map old values → canonical.  Used by _normalize_frequency().
+_FREQ_ALIASES: dict[str, str] = {
+    "yearly": "annual",
+}
+
 _MONTHLY_MULTIPLIERS: dict[str, float] = {
     "weekly":    52 / 12,
     "biweekly":  26 / 12,
     "monthly":   1.0,
     "quarterly": 1 / 3,
     "annual":    1 / 12,
-    "yearly":    1 / 12,
     "irregular": 1.0,
 }
+
+
+def _normalize_frequency(freq: str | None) -> str:
+    """Return the canonical frequency string, resolving aliases.
+
+    Raises ``ValueError`` for unrecognised values so the API can return 400.
+    Defaults to ``'irregular'`` when ``freq`` is ``None`` or empty.
+    """
+    if not freq:
+        return "irregular"
+    lower = freq.strip().lower()
+    canonical = _FREQ_ALIASES.get(lower, lower)
+    if canonical not in VALID_FREQUENCIES:
+        raise ValueError(
+            f"Invalid frequency '{freq}'. "
+            f"Valid values: {sorted(VALID_FREQUENCIES)}"
+        )
+    return canonical
 
 
 def _pattern_to_dict(p: RecurringPattern) -> dict[str, Any]:

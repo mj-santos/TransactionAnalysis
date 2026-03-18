@@ -5550,6 +5550,45 @@ No cloud services, no external dependencies — all data stays on your machine.
             "count": len(active),
         }
 
+    @app.post("/recurring/migrate-frequencies", tags=["recurring"],
+              summary="One-time: normalize legacy frequency values in recurring_overrides")
+    def migrate_recurring_frequencies():
+        """Normalize any non-canonical frequency values stored in recurring_overrides.
+
+        Converts ``'yearly'`` → ``'annual'`` and clears any completely unknown
+        values to ``'irregular'``.  Safe to call multiple times (idempotent).
+        """
+        from finance_etl.db import get_connection as _gc
+        from finance_etl.recurring import VALID_FREQUENCIES, _FREQ_ALIASES
+
+        try:
+            conn = _gc(db_path)
+            rows = conn.execute(
+                "SELECT merchant_key, frequency FROM recurring_overrides"
+            ).fetchall()
+
+            updated = 0
+            for merchant_key, freq in rows:
+                if freq is None:
+                    continue
+                lower = freq.strip().lower()
+                canonical = _FREQ_ALIASES.get(lower, lower)
+                if canonical not in VALID_FREQUENCIES:
+                    canonical = "irregular"
+                if canonical != freq:
+                    conn.execute(
+                        "UPDATE recurring_overrides SET frequency = ? WHERE merchant_key = ?",
+                        [canonical, merchant_key],
+                    )
+                    updated += 1
+
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Migration failed: {exc}") from exc
+
+        return {"status": "ok", "rows_updated": updated}
+
     @app.post("/recurring/override", tags=["recurring"],
               summary="Mark or unmark a merchant as recurring")
     def set_recurring_override(body: dict):
@@ -5573,10 +5612,16 @@ No cloud services, no external dependencies — all data stays on your machine.
 
         label = body.get("label")
         amount = body.get("amount")
-        frequency = body.get("frequency")
+        raw_frequency = body.get("frequency")
         paused = body.get("paused", False)
         last_date = body.get("last_date")
         next_estimated = body.get("next_estimated")
+
+        from finance_etl.recurring import _normalize_frequency as _nf
+        try:
+            frequency = _nf(raw_frequency) if raw_frequency is not None else None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         now = _dt.datetime.utcnow().isoformat()
         try:
@@ -5682,12 +5727,18 @@ No cloud services, no external dependencies — all data stays on your machine.
         body = body or {}
         label = body.get("label", "").strip()
         amount = body.get("amount")
-        frequency = body.get("frequency", "annual")
+        raw_frequency = body.get("frequency", "annual")
         last_date = body.get("last_date")
         next_estimated = body.get("next_estimated")
 
         if not label:
             raise HTTPException(status_code=400, detail="label is required.")
+
+        from finance_etl.recurring import _normalize_frequency as _nf
+        try:
+            frequency = _nf(raw_frequency)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         now = _dt.datetime.utcnow().isoformat()
         try:

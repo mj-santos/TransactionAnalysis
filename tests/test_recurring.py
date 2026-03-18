@@ -78,10 +78,26 @@ class TestComputeMonthlyTotal:
         ]
         assert compute_monthly_recurring_total(patterns) == 25.0
 
-    def test_yearly_alias(self):
-        """'yearly' should be treated the same as 'annual' (÷12)."""
-        patterns = [{"median_amount": 120.0, "frequency": "yearly"}]
-        assert compute_monthly_recurring_total(patterns) == 10.0
+    def test_frequency_normalization(self):
+        """_normalize_frequency resolves aliases and rejects invalid values."""
+        from finance_etl.recurring import _normalize_frequency, VALID_FREQUENCIES
+        import pytest
+
+        # alias resolution
+        assert _normalize_frequency("yearly") == "annual"
+        assert _normalize_frequency("YEARLY") == "annual"
+
+        # all canonical values pass through unchanged
+        for f in VALID_FREQUENCIES:
+            assert _normalize_frequency(f) == f
+
+        # None / empty → irregular
+        assert _normalize_frequency(None) == "irregular"
+        assert _normalize_frequency("") == "irregular"
+
+        # unknown → ValueError
+        with pytest.raises(ValueError):
+            _normalize_frequency("never")
 
     def test_empty(self):
         assert compute_monthly_recurring_total([]) == 0.0
