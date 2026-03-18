@@ -207,9 +207,11 @@ def detect_recurring(conn, *, include_overrides: bool = True) -> list[dict[str, 
     for merchant, pat in auto_results.items():
         if overrides.get(merchant) is False:
             continue
-        # Apply user overrides for pause, dates
+        # Apply user overrides for pause, frequency, dates
         details = override_details.get(merchant, {})
         pat.paused = details.get("paused", False)
+        if details.get("frequency"):
+            pat.frequency = details["frequency"]
         if details.get("last_date"):
             pat.last_date = details["last_date"]
         if details.get("next_estimated"):
