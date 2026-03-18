@@ -1681,6 +1681,62 @@ tr.bulk-selected > td:first-child {
 [data-theme="dark"] .rec-slideover-overlay { background: rgba(0,0,0,.55); }
 tr.rec-row-active > td { background: color-mix(in srgb, var(--primary, #3b82f6) 8%, transparent); }
 
+/* ── Account wizard step pills ──────────────────────────────── */
+.acct-step-pill {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 14px; border-radius: 20px;
+  font-size: 12px; font-weight: 600;
+  background: var(--bg-secondary); color: var(--text-muted);
+  transition: background .2s, color .2s;
+  white-space: nowrap;
+}
+.acct-step-pill[style*="background: var(--primary)"],
+.acct-step-pill.active {
+  background: var(--primary, #3b82f6); color: #fff;
+}
+.acct-step-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: rgba(255,255,255,.25); font-size: 11px; font-weight: 700;
+  flex-shrink: 0;
+}
+.acct-step-connector {
+  flex: 1; height: 2px; background: var(--border); min-width: 12px;
+}
+/* Shared input style for add/edit forms */
+.acct-field-label {
+  display: block; font-size: 12px; font-weight: 600;
+  margin-bottom: 5px; color: var(--text);
+}
+.acct-required { color: var(--danger); }
+.acct-input {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  font-size: 13px; background: var(--card-bg); color: var(--text);
+}
+.acct-input:focus {
+  outline: none; border-color: var(--primary, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+}
+[data-theme="dark"] .acct-input { background: var(--bg-secondary); color: var(--text); }
+/* Edit panel sections */
+.edit-panel-section {
+  padding: 16px 0 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.edit-panel-section:last-of-type { border-bottom: none; }
+.edit-panel-section-title {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-muted); margin-bottom: 12px;
+}
+/* Active row highlight when edit panel is open */
+tr.acct-row-active > td {
+  background: color-mix(in srgb, var(--primary, #3b82f6) 7%, transparent);
+}
+
 /* ── Recurring filter pills ─────────────────────────────────── */
 .rec-pill {
   font-size: 11px;

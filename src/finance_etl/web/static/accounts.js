@@ -50,7 +50,8 @@ function _renderAccountsTable(accounts) {
     const typeLabel = _typeLabel(a);
     const statusBadge = _statusBadge(a.status || 'active');
     const updatedAt = a.updated_at ? new Date(a.updated_at).toLocaleDateString() : '-';
-    return `<tr>
+    const menuId = `acct-menu-${a.id}`;
+    return `<tr data-account-id="${a.id}">
       <td><input type="checkbox" class="acct-select-cb" data-account-id="${a.id}" onchange="_updateAcctBulkBar()" /></td>
       <td><strong>${esc(a.name)}</strong>${a.last_four ? ' <span style="color:var(--text-muted);">(' + esc(a.last_four) + ')</span>' : ''}</td>
       <td>${esc(a.institution || '-')}</td>
@@ -58,14 +59,38 @@ function _renderAccountsTable(accounts) {
       <td style="text-align:right; font-variant-numeric:tabular-nums;">${bal}</td>
       <td>${statusBadge}</td>
       <td style="color:var(--text-muted); font-size:13px;">${updatedAt}</td>
-      <td>
-        <button class="btn btn-secondary btn-sm" onclick="openEditAccount(${a.id})" title="Edit">Edit</button>
-        ${a.status !== 'closed' ? `<button class="btn btn-danger btn-sm" onclick="closeAccount(${a.id})" title="Close" style="margin-left:4px;">Close</button>` : ''}
-        <button class="btn btn-sm" onclick="deleteAccount(${a.id})" title="Delete" style="margin-left:4px; color:var(--danger); background:none; border:1px solid var(--danger);">Delete</button>
+      <td style="position:relative; white-space:nowrap;">
+        <button class="btn btn-secondary btn-sm" onclick="openEditAccount(${a.id})">Edit</button>
+        <button class="btn btn-secondary btn-sm" style="padding:2px 8px; margin-left:4px; font-size:14px; line-height:1;"
+          onclick="event.stopPropagation(); _toggleAcctMenu('${menuId}')">&#x22EF;</button>
+        <div id="${menuId}" style="display:none; position:absolute; right:0; top:calc(100% - 2px); z-index:50;
+          background:var(--card-bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12);
+          min-width:130px; overflow:hidden;">
+          ${a.status !== 'closed' ? `<button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none; background:none; cursor:pointer; color:var(--text);"
+            onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
+            onclick="_toggleAcctMenu('${menuId}'); closeAccount(${a.id})">Close Account</button>` : ''}
+          <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none; background:none; cursor:pointer; color:var(--danger);"
+            onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
+            onclick="_toggleAcctMenu('${menuId}'); deleteAccount(${a.id})">Delete</button>
+        </div>
       </td>
     </tr>`;
   }).join('');
 }
+
+function _toggleAcctMenu(menuId) {
+  document.querySelectorAll('[id^="acct-menu-"]').forEach(el => {
+    if (el.id !== menuId) el.style.display = 'none';
+  });
+  const menu = document.getElementById(menuId);
+  if (menu) menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('[id^="acct-menu-"]') && !e.target.closest('button')) {
+    document.querySelectorAll('[id^="acct-menu-"]').forEach(el => el.style.display = 'none');
+  }
+});
 
 function _typeLabel(a) {
   const labels = {
@@ -321,15 +346,19 @@ function _setupClassToggle() {
 function _updateStepIndicators(step) {
   document.querySelectorAll('.account-step').forEach(el => {
     const s = parseInt(el.dataset.step);
+    const numEl = el.querySelector('.acct-step-num');
     if (s === step) {
       el.style.background = 'var(--primary)';
       el.style.color = 'white';
+      if (numEl) numEl.textContent = s;
     } else if (s < step) {
       el.style.background = '#22c55e';
       el.style.color = 'white';
+      if (numEl) numEl.textContent = '✓';
     } else {
       el.style.background = 'var(--bg-secondary)';
       el.style.color = 'var(--text-muted)';
+      if (numEl) numEl.textContent = s;
     }
   });
 }
@@ -635,56 +664,128 @@ function _onEditClassChange() {
   const cls = document.getElementById('edit-acct-class').value;
   const defaults = cls === 'asset' ? 'checking' : 'credit_card';
   _populateSubtypeDropdown(cls, defaults);
+  _onEditSubtypeChange();
+}
+
+function _onEditSubtypeChange() {
+  const cls     = document.getElementById('edit-acct-class').value;
+  const subtype = document.getElementById('edit-acct-subtype').value;
+  const conditionalFields = [
+    'edit-field-credit-limit', 'edit-field-interest-rate', 'edit-field-due-day',
+    'edit-field-origination-principal', 'edit-field-origination-date',
+    'edit-field-loan-term', 'edit-field-escrow',
+  ];
+  conditionalFields.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  if (cls === 'liability') {
+    if (subtype === 'credit_card') {
+      ['edit-field-credit-limit', 'edit-field-interest-rate', 'edit-field-due-day'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.style.display = '';
+      });
+    } else if (['mortgage', 'auto_loan', 'student_loan'].includes(subtype)) {
+      ['edit-field-interest-rate', 'edit-field-origination-principal',
+       'edit-field-origination-date', 'edit-field-loan-term'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.style.display = '';
+      });
+      if (subtype === 'mortgage') {
+        const el = document.getElementById('edit-field-escrow'); if (el) el.style.display = '';
+      }
+    } else if (subtype === 'utility') {
+      const el = document.getElementById('edit-field-due-day'); if (el) el.style.display = '';
+    }
+  }
 }
 
 function openEditAccount(id) {
   const acct = _accountsCache.find(a => a.id === id);
   if (!acct) return;
 
-  document.getElementById('add-account-modal').style.display = 'flex';
-  document.getElementById('add-account-modal-title').textContent = 'Edit Account';
-  document.getElementById('account-steps').style.display = 'none';
-  document.getElementById('account-step-1').style.display = 'none';
-  document.getElementById('account-step-2').style.display = 'none';
-  document.getElementById('account-step-3').style.display = 'none';
-  document.getElementById('account-edit-form').style.display = '';
+  // Populate header context
+  document.getElementById('edit-panel-name').textContent = acct.name || 'Account';
+  document.getElementById('edit-panel-type-badge').textContent = _typeLabel(acct);
+  const bal = acct.balance != null
+    ? parseFloat(acct.balance).toLocaleString('en-US', {style:'currency', currency:'USD'})
+    : '$0.00';
+  document.getElementById('edit-panel-balance').textContent = bal;
 
-  document.getElementById('edit-account-id').value = acct.id;
-  document.getElementById('edit-acct-name').value = acct.name || '';
-  document.getElementById('edit-acct-institution').value = acct.institution || '';
-  document.getElementById('edit-acct-last-four').value = acct.last_four || '';
-  document.getElementById('edit-acct-due-day').value = acct.due_day || '';
-  document.getElementById('edit-acct-balance').value = acct.balance != null ? acct.balance : '';
-  document.getElementById('edit-acct-credit-limit').value = acct.credit_limit || '';
-  document.getElementById('edit-acct-interest-rate').value = acct.interest_rate || '';
-  document.getElementById('edit-acct-payment-source-tag').value = acct.payment_source_tag || '';
+  // Identity
+  document.getElementById('edit-account-id').value          = acct.id;
+  document.getElementById('edit-acct-name').value           = acct.name || '';
+  document.getElementById('edit-acct-institution').value    = acct.institution || '';
+  document.getElementById('edit-acct-last-four').value      = acct.last_four || '';
+  document.getElementById('edit-acct-open-date').value      = acct.open_date || '';
+  document.getElementById('edit-acct-responsibility').value = acct.responsibility || 'individual';
 
-  // Populate account class + subtype dropdowns
+  // Classification
   const acctClass = acct.account_class || (acct.is_asset ? 'asset' : 'liability');
   document.getElementById('edit-acct-class').value = acctClass;
   const currentSubtype = acctClass === 'asset' ? acct.asset_type : acct.liability_type;
   _populateSubtypeDropdown(acctClass, currentSubtype || (acctClass === 'asset' ? 'checking' : 'credit_card'));
+  _onEditSubtypeChange();
 
-  // Annual fee checkbox + fields
+  // Terms
+  document.getElementById('edit-acct-balance').value        = acct.balance != null ? acct.balance : '';
+  document.getElementById('edit-acct-credit-limit').value   = acct.credit_limit || '';
+  document.getElementById('edit-acct-interest-rate').value  = acct.interest_rate || '';
+  document.getElementById('edit-acct-due-day').value        = acct.due_day || '';
+  document.getElementById('edit-acct-origination-principal').value = acct.origination_principal || '';
+  document.getElementById('edit-acct-origination-date').value     = acct.origination_date || '';
+  document.getElementById('edit-acct-loan-term').value            = acct.loan_term || '';
+  document.getElementById('edit-acct-escrow-balance').value       = acct.escrow_balance || '';
+
+  // Annual fee
   const hasAnnualFee = acct.annual_fee != null && parseFloat(acct.annual_fee) > 0;
-  const feeCb = document.getElementById('edit-acct-has-annual-fee');
-  feeCb.checked = hasAnnualFee;
-  document.getElementById('edit-acct-annual-fee').value = hasAnnualFee ? acct.annual_fee : '';
+  document.getElementById('edit-acct-has-annual-fee').checked = hasAnnualFee;
+  document.getElementById('edit-acct-annual-fee').value       = hasAnnualFee ? acct.annual_fee : '';
   document.getElementById('edit-acct-annual-fee-month').value = acct.annual_fee_month || '';
-  document.getElementById('edit-field-annual-fee').style.display = hasAnnualFee ? '' : 'none';
+  document.getElementById('edit-field-annual-fee').style.display       = hasAnnualFee ? '' : 'none';
   document.getElementById('edit-field-annual-fee-month').style.display = hasAnnualFee ? '' : 'none';
 
-  // Monthly payment checkbox + field
+  // Monthly payment
   const hasMonthlyPay = acct.monthly_payment != null && parseFloat(acct.monthly_payment) > 0;
   const mpCb = document.getElementById('edit-acct-has-recurring-pay');
   if (mpCb) {
     mpCb.checked = hasMonthlyPay;
-    document.getElementById('edit-acct-monthly-payment').value = hasMonthlyPay ? acct.monthly_payment : '';
+    document.getElementById('edit-acct-monthly-payment').value        = hasMonthlyPay ? acct.monthly_payment : '';
     document.getElementById('edit-field-recurring-pay').style.display = hasMonthlyPay ? '' : 'none';
   }
 
-  // Populate linked transaction source dropdown
+  // Linking
+  document.getElementById('edit-acct-payment-source-tag').value = acct.payment_source_tag || '';
   _populateLinkedSourceDropdown(acct);
+
+  // Reset danger zone
+  document.getElementById('edit-panel-delete-confirm').style.display = 'none';
+  document.getElementById('edit-panel-delete-btn').style.display     = '';
+
+  // Highlight active row
+  document.querySelectorAll('tr.acct-row-active').forEach(r => r.classList.remove('acct-row-active'));
+  const row = document.querySelector(`#accounts-table-body tr[data-account-id="${id}"]`);
+  if (row) row.classList.add('acct-row-active');
+
+  // Open slide-over
+  document.getElementById('edit-account-slideover-overlay').style.display = '';
+  const panel = document.getElementById('edit-account-slideover');
+  panel.style.transform = 'translateX(100%)';
+  panel.offsetHeight; // force reflow
+  panel.classList.add('open');
+}
+
+function closeEditAccountPanel() {
+  const panel = document.getElementById('edit-account-slideover');
+  if (panel) panel.classList.remove('open');
+  const overlay = document.getElementById('edit-account-slideover-overlay');
+  if (overlay) overlay.style.display = 'none';
+  document.querySelectorAll('tr.acct-row-active').forEach(r => r.classList.remove('acct-row-active'));
+}
+
+async function _confirmDeleteFromEditPanel() {
+  const id = parseInt(document.getElementById('edit-account-id').value);
+  if (!id) return;
+  closeEditAccountPanel();
+  await deleteAccount(id);
 }
 
 async function submitEditAccount() {
@@ -703,10 +804,17 @@ async function submitEditAccount() {
     payload.liability_type = subtype;
   }
 
+  // Identity fields
   const inst = document.getElementById('edit-acct-institution').value.trim();
   if (inst) payload.institution = inst;
   const lf = document.getElementById('edit-acct-last-four').value.trim();
   if (lf) payload.last_four = lf;
+  const openDate = document.getElementById('edit-acct-open-date').value;
+  if (openDate) payload.open_date = openDate;
+  const responsibility = document.getElementById('edit-acct-responsibility').value;
+  if (responsibility) payload.responsibility = responsibility;
+
+  // Terms fields
   const dd = document.getElementById('edit-acct-due-day').value;
   if (dd) payload.due_day = parseInt(dd);
   const bal = document.getElementById('edit-acct-balance').value;
@@ -715,8 +823,16 @@ async function submitEditAccount() {
   if (cl) payload.credit_limit = parseFloat(cl);
   const ir = document.getElementById('edit-acct-interest-rate').value;
   if (ir) payload.interest_rate = parseFloat(ir);
-  const tag = document.getElementById('edit-acct-payment-source-tag').value.trim();
-  if (tag) payload.payment_source_tag = tag;
+
+  // Loan-specific fields
+  const op = document.getElementById('edit-acct-origination-principal').value;
+  if (op) payload.origination_principal = parseFloat(op);
+  const od = document.getElementById('edit-acct-origination-date').value;
+  if (od) payload.origination_date = od;
+  const lt = document.getElementById('edit-acct-loan-term').value;
+  if (lt) payload.loan_term = parseInt(lt);
+  const eb = document.getElementById('edit-acct-escrow-balance').value;
+  if (eb) payload.escrow_balance = parseFloat(eb);
 
   // Annual fee
   const hasAnnualFee = document.getElementById('edit-acct-has-annual-fee').checked;
@@ -726,7 +842,6 @@ async function submitEditAccount() {
     const afm = document.getElementById('edit-acct-annual-fee-month').value;
     if (afm) payload.annual_fee_month = parseInt(afm);
   } else {
-    // Explicitly clear annual fee fields
     payload.annual_fee = 0;
     payload.annual_fee_month = null;
   }
@@ -740,7 +855,9 @@ async function submitEditAccount() {
     payload.monthly_payment = null;
   }
 
-  // Handle linked transaction source
+  // Linking
+  const tag = document.getElementById('edit-acct-payment-source-tag').value.trim();
+  if (tag) payload.payment_source_tag = tag;
   const linkedSelect = document.getElementById('edit-acct-linked-source');
   if (linkedSelect) {
     const linkedVal = linkedSelect.value;
@@ -757,10 +874,9 @@ async function submitEditAccount() {
   try {
     const result = await api('PUT', `/accounts/${id}`, payload);
     toast('Account updated', 'success');
-    // Sync annual fee and monthly payment to recurring tab
     _syncAnnualFeeRecurring(result);
     _syncMonthlyPaymentRecurring(result);
-    closeAddAccountModal();
+    closeEditAccountPanel();
     loadAccounts();
   } catch (e) {
     toast('Failed to update account: ' + e.message, 'error');

@@ -7187,6 +7187,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
     if (document.getElementById('rec-slideover')?.classList.contains('open')) _closeRecEditPanel();
+    if (document.getElementById('edit-account-slideover')?.classList.contains('open')) closeEditAccountPanel();
     bulkClearSelection('credit_card');
     bulkClearSelection('bank');
     return;
