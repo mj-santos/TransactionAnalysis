@@ -5701,7 +5701,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
         return {"status": "ok", "merchant": merchant, "is_recurring": is_recurring}
 
-    @app.delete("/recurring/override/{merchant}", tags=["recurring"],
+    @app.delete("/recurring/override/{merchant:path}", tags=["recurring"],
                 summary="Remove a recurring override")
     def delete_recurring_override(merchant: str):
         """Remove a user override, reverting to auto-detection for this merchant."""

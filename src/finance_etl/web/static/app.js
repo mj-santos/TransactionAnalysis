@@ -1347,7 +1347,7 @@ function _renderPausedList(patterns, container) {
         <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 8px;"
           onclick="resumeRecurringCharge('${mEsc}')">Resume</button>
         <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 8px; color:var(--danger); margin-left:4px;"
-          onclick="deleteRecurringCharge('${mEsc}', false)">Delete</button>
+          onclick="deleteRecurringCharge('${mEsc}', ${p.is_auto})">Delete</button>
       </td>
     </tr>`;
   }
