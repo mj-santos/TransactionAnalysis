@@ -5,6 +5,17 @@
 let _accountsCache = [];
 let _currentAccountsSubtab = 'manage';
 
+// Tab data cache — prevents redundant API calls on rapid tab switching.
+// Each entry: { loadedAt: Date.now() }. Stale after 60 seconds.
+const _tabCache = {};
+const _TAB_TTL_MS = 60_000;
+function _tabIsStale(tab) {
+  const t = _tabCache[tab];
+  return !t || (Date.now() - t.loadedAt) > _TAB_TTL_MS;
+}
+function _markTabLoaded(tab) { _tabCache[tab] = { loadedAt: Date.now() }; }
+function _invalidateTabCache(tab) { delete _tabCache[tab]; }
+
 // ── Load Accounts ────────────────────────────────────────────────────
 async function loadAccounts() {
   try {
@@ -249,9 +260,9 @@ function switchAccountsSubtab(tab) {
   if (plannerView) plannerView.style.display = tab === 'planner' ? '' : 'none';
   if (trendsView) trendsView.style.display = tab === 'trends' ? '' : 'none';
 
-  if (tab === 'overview') _loadOverviewData();
-  if (tab === 'planner') _initPlanner();
-  if (tab === 'trends') _loadTrendsData();
+  if (tab === 'overview' && _tabIsStale('overview')) { _loadOverviewData(); _markTabLoaded('overview'); }
+  if (tab === 'planner') _initPlanner();   // planner always refreshes (month may have changed)
+  if (tab === 'trends' && _tabIsStale('trends')) { _loadTrendsData(); _markTabLoaded('trends'); }
 }
 
 // ── Add Account Modal ────────────────────────────────────────────────
@@ -963,15 +974,90 @@ function _renderKPIs(s) {
   document.getElementById('kpi-cash-at-hand').textContent = _fmt(s.cash_at_hand);
   document.getElementById('kpi-investments').textContent = _fmt(s.total_investments);
   document.getElementById('kpi-total-liabilities').textContent = _fmt(s.total_liabilities_excl_personal);
+
   const liquidEl = document.getElementById('kpi-liquid-net');
   liquidEl.textContent = _fmt(s.liquid_net);
   liquidEl.style.color = s.liquid_net >= 0 ? 'var(--success)' : 'var(--danger)';
+
+  const pct = s.credit_utilization_pct || 0;
   const utilEl = document.getElementById('kpi-utilization');
-  utilEl.textContent = s.credit_utilization_pct + '%';
-  utilEl.style.color = s.credit_utilization_pct > 80 ? 'var(--danger)' : s.credit_utilization_pct > 30 ? 'var(--warning)' : 'var(--success)';
+  utilEl.textContent = pct + '%';
+  const utilColor = pct > 80 ? 'var(--danger)' : pct > 30 ? 'var(--warning)' : 'var(--success)';
+  utilEl.style.color = utilColor;
+  const bar = document.getElementById('kpi-util-bar');
+  if (bar) { bar.style.width = Math.min(pct, 100) + '%'; bar.style.background = utilColor; }
+
   document.getElementById('kpi-due-this-week').textContent = s.due_this_week;
   document.getElementById('kpi-monthly-interest').textContent = _fmt(s.est_monthly_interest);
+
+  // Pre-build due-this-week popover from cached account data
+  _buildDuePopover();
 }
+
+// ── KPI click handlers ───────────────────────────────────────
+
+function _kpiScrollTo(elementId) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  // Ensure parent card is expanded (collapsed cards have display:none body)
+  const collapsibleBody = el.closest('.card-collapsible-body');
+  if (collapsibleBody && collapsibleBody.style.display === 'none') {
+    const toggle = collapsibleBody.previousElementSibling;
+    if (toggle) toggle.click();
+  }
+  el.closest('table, .card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function _kpiGoToTrendsSection(sectionId) {
+  // Switch to trends tab (cache handles whether to reload), then scroll
+  switchAccountsSubtab('trends');
+  setTimeout(() => {
+    const el = document.getElementById(sectionId);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 150);
+}
+
+function _buildDuePopover() {
+  const popover = document.getElementById('kpi-due-popover');
+  if (!popover) return;
+  const today = new Date();
+  const in7 = new Date(today); in7.setDate(today.getDate() + 7);
+  const due = _accountsCache.filter(a => {
+    if (!a.payment_due_date) return false;
+    const d = new Date(a.payment_due_date);
+    return d >= today && d <= in7;
+  }).sort((a, b) => new Date(a.payment_due_date) - new Date(b.payment_due_date));
+
+  if (!due.length) {
+    popover.innerHTML = '<div style="color:var(--text-muted);">No accounts due in the next 7 days.</div>';
+    return;
+  }
+  popover.innerHTML = due.map(a => {
+    const minDue = a.minimum_payment_amount ? _fmt(a.minimum_payment_amount) : '—';
+    const daysLeft = Math.round((new Date(a.payment_due_date) - today) / 86400000);
+    const dayLabel = daysLeft === 0 ? 'Today' : daysLeft === 1 ? 'Tomorrow' : `In ${daysLeft}d`;
+    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid var(--border);">
+      <span style="font-weight:600;">${esc(a.name)}</span>
+      <span style="color:var(--text-muted); margin:0 8px;">${dayLabel}</span>
+      <span style="color:var(--danger);">${minDue}</span>
+    </div>`;
+  }).join('') + `<div style="margin-top:8px; color:var(--text-muted); font-size:11px; cursor:pointer;" onclick="switchAccountsSubtab('planner');document.getElementById('kpi-due-popover').classList.remove('open')">Open Payment Planner →</div>`;
+}
+
+function _kpiToggleDuePopover(e) {
+  e.stopPropagation();
+  const popover = document.getElementById('kpi-due-popover');
+  if (!popover) return;
+  const isOpen = popover.classList.contains('open');
+  // Close any other open popovers first
+  document.querySelectorAll('.kpi-due-popover.open').forEach(p => p.classList.remove('open'));
+  if (!isOpen) popover.classList.add('open');
+}
+
+// Close due popover when clicking outside
+document.addEventListener('click', () => {
+  document.querySelectorAll('.kpi-due-popover.open').forEach(p => p.classList.remove('open'));
+});
 
 function _renderOverviewTables(accounts) {
   const liabilities = accounts.filter(a => a.account_class === 'liability' || a.is_asset === false);
@@ -1229,6 +1315,13 @@ function _renderAssignmentGrid(plan, capacityList) {
     return `<option value="${a.id}">${esc(a.name)}${tag}</option>`;
   }).join('');
 
+  const strategyLabels = {
+    statement: 'Statement — pay statement balance in full',
+    minimum: 'Minimum — pay the minimum required amount',
+    full_balance: 'Full Balance — pay off entire current balance',
+    fixed: 'Fixed — pay a specific amount each month',
+    extra_principal: 'Extra Principal — minimum + extra toward principal',
+  };
   const strategies = ['statement', 'minimum', 'full_balance', 'fixed', 'extra_principal'];
 
   tbody.innerHTML = liabilities.map(l => {
@@ -1244,13 +1337,14 @@ function _renderAssignmentGrid(plan, capacityList) {
     </select>`;
 
     const strategySelect = `<select class="plan-strategy" data-lid="${l.id}" onchange="planStrategyChanged(${l.id})" style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-size:12px;">
-      ${strategies.map(s => `<option value="${s}" ${s === selectedStrategy ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}
+      ${strategies.map(s => `<option value="${s}" ${s === selectedStrategy ? 'selected' : ''} title="${strategyLabels[s] || s}">${s.replace(/_/g, ' ')}</option>`).join('')}
     </select>`;
 
     const statusBadge = status ? _cycleBadge(status) : '<span style="color:var(--text-muted); font-size:11px;">unassigned</span>';
     const canPay = selectedSource && status !== 'completed';
+    const rowClass = status === 'overdue' ? 'planner-row-overdue' : (status === 'completed' ? 'planner-row-paid' : '');
 
-    return `<tr>
+    return `<tr class="${rowClass}">
       <td><strong>${esc(l.name)}</strong>${l.last_four ? ` <span style="color:var(--text-muted);">(${esc(l.last_four)})</span>` : ''}</td>
       <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(l.balance)}</td>
       <td style="text-align:right; font-variant-numeric:tabular-nums;">${l.last_statement_balance != null ? _fmt(l.last_statement_balance) : '-'}</td>
@@ -1263,6 +1357,21 @@ function _renderAssignmentGrid(plan, capacityList) {
       </td>
     </tr>`;
   }).join('');
+
+  // Totals footer
+  const totalPlanned = liabilities.reduce((sum, l) => {
+    const p = planMap[l.id];
+    return sum + (p && p.planned_amount != null ? parseFloat(p.planned_amount) : 0);
+  }, 0);
+  const totalBalance = liabilities.reduce((sum, l) => sum + Math.abs(parseFloat(l.balance || 0)), 0);
+  const tfoot = tbody.closest('table').tFoot || tbody.closest('table').createTFoot();
+  tfoot.innerHTML = `<tr class="planner-totals-footer">
+    <td>Totals</td>
+    <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(totalBalance)}</td>
+    <td></td><td></td><td></td>
+    <td style="text-align:right; font-variant-numeric:tabular-nums;">${totalPlanned > 0 ? _fmt(totalPlanned) : '—'}</td>
+    <td colspan="2"></td>
+  </tr>`;
 
   // Set selected source values after DOM render
   liabilities.forEach(l => {
@@ -1469,11 +1578,34 @@ function _renderNetWorthChart(data) {
   const chartH = 180;
   const maxVal = Math.max(...data.flatMap(d => [d.total_assets, d.total_liabilities]), 1);
 
-  el.innerHTML = data.map(d => {
+  // Net worth delta headline
+  const latest = data[data.length - 1];
+  const prev = data.length >= 2 ? data[data.length - 2] : null;
+  let deltaHtml = '';
+  if (prev && latest) {
+    const delta = latest.net_worth - prev.net_worth;
+    const sign = delta >= 0 ? '+' : '';
+    const color = delta >= 0 ? 'var(--success)' : 'var(--danger)';
+    deltaHtml = `<div style="font-size:13px; margin-bottom:8px;">
+      Net worth <strong style="font-size:18px;">${_fmt(latest.net_worth)}</strong>
+      <span style="color:${color}; margin-left:8px;">${sign}${_fmt(delta)} vs last snapshot</span>
+    </div>`;
+  }
+  el.insertAdjacentHTML('beforebegin', deltaHtml);
+
+  el.innerHTML = data.map((d, i) => {
     const assH = Math.max(Math.round(d.total_assets / maxVal * chartH), 2);
     const liabH = Math.max(Math.round(d.total_liabilities / maxVal * chartH), 2);
     const label = d.date ? String(d.date).slice(0, 7) : '?';
-    return `<div style="flex:1; display:flex; flex-direction:column; align-items:center; min-width:24px;" title="${label}\nAssets: ${_fmt(d.total_assets)}\nLiabilities: ${_fmt(d.total_liabilities)}\nNet: ${_fmt(d.net_worth)}">
+    const tooltipHtml = `<div class="nw-bar-tooltip">
+      <div style="font-weight:700; margin-bottom:4px;">${label}</div>
+      <div style="color:#22c55e;">Assets: ${_fmt(d.total_assets)}</div>
+      <div style="color:#ef4444;">Liabilities: ${_fmt(d.total_liabilities)}</div>
+      <div style="border-top:1px solid var(--border); margin-top:4px; padding-top:4px; font-weight:600;">Net: ${_fmt(d.net_worth)}</div>
+    </div>`;
+    return `<div class="nw-bar-group" style="flex:1; display:flex; flex-direction:column; align-items:center; min-width:24px;"
+        onclick="this.classList.toggle('tip-open')" onmouseleave="this.classList.remove('tip-open')">
+      ${tooltipHtml}
       <div style="display:flex; gap:1px; align-items:flex-end; height:${chartH}px;">
         <div style="width:10px; height:${assH}px; background:#22c55e; border-radius:2px 2px 0 0;"></div>
         <div style="width:10px; height:${liabH}px; background:#ef4444; border-radius:2px 2px 0 0;"></div>
@@ -1568,6 +1700,13 @@ function _renderInterestCost(data) {
 
 async function loadPayoffProjection() {
   const strategy = document.getElementById('trends-payoff-strategy')?.value || 'statement';
+  const hints = {
+    minimum: 'Slowest payoff, highest total interest.',
+    statement: 'Pays statement balance in full — avoids interest on revolving credit.',
+    aggressive: 'Doubles the minimum payment; reduces term significantly.',
+  };
+  const hintEl = document.getElementById('trends-payoff-strategy-hint');
+  if (hintEl) hintEl.textContent = hints[strategy] || '';
   try {
     const data = await api('GET', `/accounts/analytics/payoff-projection?strategy=${strategy}`);
     _renderPayoffProjection(data);
@@ -1586,7 +1725,15 @@ function _renderPayoffProjection(data) {
   }
 
   tbody.innerHTML = data.map(a => {
-    const monthsLabel = a.months_to_payoff != null ? `${a.months_to_payoff} mo` : '<span style="color:var(--danger);">Never</span>';
+    let monthsLabel;
+    if (a.months_to_payoff == null) {
+      monthsLabel = '<span style="color:var(--danger);">Never</span>';
+    } else if (a.months_to_payoff >= 24) {
+      const yrs = (a.months_to_payoff / 12).toFixed(1);
+      monthsLabel = `<span title="${a.months_to_payoff} months">${yrs} yrs</span>`;
+    } else {
+      monthsLabel = `${a.months_to_payoff} mo`;
+    }
     return `<tr>
       <td>${esc(a.name)}</td>
       <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.balance)}</td>
@@ -2089,7 +2236,10 @@ async function submitBulkBalanceUpdate() {
     toast(`Updated ${result.updated} account(s). Snapshot saved.`, 'success');
     closeUpdateBalancesGrid();
     loadAccounts();
-    if (_currentAccountsSubtab === 'overview') _loadOverviewData();
+    _invalidateTabCache('overview');
+    _invalidateTabCache('trends');
+    if (_currentAccountsSubtab === 'overview') { _loadOverviewData(); _markTabLoaded('overview'); }
+    if (_currentAccountsSubtab === 'trends') { _loadTrendsData(); _markTabLoaded('trends'); }
   } catch (e) {
     toast('Failed to save balances: ' + e.message, 'error');
   }

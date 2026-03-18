@@ -1562,34 +1562,49 @@
       </div>
       <!-- KPI cards -->
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:16px;">
-        <div class="card" style="padding:16px; text-align:center;">
+        <div class="kpi-card card" style="padding:16px; text-align:center;" tabindex="0" role="button"
+             aria-label="Cash at Hand — click to view asset accounts"
+             onclick="_kpiScrollTo('overview-assets-body')" onkeydown="if(event.key==='Enter'||event.key===' ')_kpiScrollTo('overview-assets-body')">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Cash at Hand</div>
           <div id="kpi-cash-at-hand" style="font-size:22px; font-weight:700; color:var(--success); margin-top:4px;">$0</div>
           <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Checking + Savings + Wallets</div>
         </div>
-        <div class="card" style="padding:16px; text-align:center;">
+        <div class="kpi-card card" style="padding:16px; text-align:center;" tabindex="0" role="button"
+             aria-label="Investments — click to view investment accounts"
+             onclick="_kpiScrollTo('overview-assets-body')" onkeydown="if(event.key==='Enter'||event.key===' ')_kpiScrollTo('overview-assets-body')">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Investments</div>
           <div id="kpi-investments" style="font-size:22px; font-weight:700; color:#6366f1; margin-top:4px;">$0</div>
           <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Brokerage + Retirement</div>
         </div>
-        <div class="card" style="padding:16px; text-align:center;">
+        <div class="kpi-card card" style="padding:16px; text-align:center;" tabindex="0" role="button"
+             aria-label="Total Liabilities — click to view liability accounts"
+             onclick="_kpiScrollTo('overview-liabilities-body')" onkeydown="if(event.key==='Enter'||event.key===' ')_kpiScrollTo('overview-liabilities-body')">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Total Liabilities</div>
           <div id="kpi-total-liabilities" style="font-size:22px; font-weight:700; color:var(--danger); margin-top:4px;">$0</div>
+          <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">All active debts</div>
         </div>
         <div class="card" style="padding:16px; text-align:center;">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Liquid Net</div>
           <div id="kpi-liquid-net" style="font-size:22px; font-weight:700; margin-top:4px;">$0</div>
           <div style="font-size:10px; color:var(--text-muted); margin-top:2px;">Cash at Hand &minus; Liabilities</div>
         </div>
-        <div class="card" style="padding:16px; text-align:center;">
+        <div class="kpi-card card" style="padding:16px; text-align:center;" tabindex="0" role="button"
+             aria-label="Credit Utilization — click to view utilization breakdown"
+             onclick="_kpiGoToTrendsSection('trends-utilization-aggregate')" onkeydown="if(event.key==='Enter'||event.key===' ')_kpiGoToTrendsSection('trends-utilization-aggregate')">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Credit Utilization</div>
           <div id="kpi-utilization" style="font-size:22px; font-weight:700; margin-top:4px;">0%</div>
+          <div class="kpi-util-bar-wrap"><div id="kpi-util-bar" class="kpi-util-bar" style="width:0%; background:var(--success);"></div></div>
         </div>
-        <div class="card" style="padding:16px; text-align:center;">
+        <div class="kpi-card card" style="padding:16px; text-align:center; position:relative;" tabindex="0" role="button"
+             aria-label="Due This Week — click to see which accounts are due"
+             onclick="_kpiToggleDuePopover(event)" onkeydown="if(event.key==='Enter'||event.key===' ')_kpiToggleDuePopover(event)">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Due This Week</div>
           <div id="kpi-due-this-week" style="font-size:22px; font-weight:700; margin-top:4px;">0</div>
+          <div id="kpi-due-popover" class="kpi-due-popover" role="region" aria-label="Accounts due this week"></div>
         </div>
-        <div class="card" style="padding:16px; text-align:center;">
+        <div class="kpi-card card" style="padding:16px; text-align:center;" tabindex="0" role="button"
+             aria-label="Est. Monthly Interest — click to view interest cost breakdown"
+             onclick="_kpiGoToTrendsSection('trends-interest-summary')" onkeydown="if(event.key==='Enter'||event.key===' ')_kpiGoToTrendsSection('trends-interest-summary')">
           <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.04em;">Est. Monthly Interest</div>
           <div id="kpi-monthly-interest" style="font-size:22px; font-weight:700; color:var(--warning); margin-top:4px;">$0</div>
         </div>
@@ -1843,6 +1858,7 @@
           <button class="btn btn-primary btn-sm" onclick="savePlanAssignments()">Save Assignments</button>
         </div>
         <div class="card-body" style="overflow-x:auto;">
+          <div class="scroll-hint">← scroll to see all columns →</div>
           <table style="width:100%;">
             <thead>
               <tr>
@@ -1945,7 +1961,7 @@
               <thead>
                 <tr>
                   <th>Account</th>
-                  <th style="text-align:right;">Balance</th>
+                  <th style="text-align:right;" title="Statement balance for revolving credit; current balance for installment loans">Interest Basis</th>
                   <th style="text-align:right;">APR</th>
                   <th style="text-align:right;">Monthly Interest</th>
                   <th style="text-align:right;">Annual Interest</th>
@@ -1965,13 +1981,14 @@
         </div>
         <div class="card-collapsible-body">
           <div class="card-body">
-            <div style="margin-bottom:12px;">
-              <label style="font-weight:600; margin-right:8px;">Strategy:</label>
+            <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <label for="trends-payoff-strategy" style="font-weight:600;">Strategy:</label>
               <select id="trends-payoff-strategy" onchange="loadPayoffProjection()" style="padding:4px 8px; border:1px solid var(--border); border-radius:4px;">
-                <option value="minimum">Minimum Payment</option>
-                <option value="statement" selected>Statement Balance</option>
-                <option value="aggressive">Aggressive (2x)</option>
+                <option value="minimum" title="Pay only the minimum required amount each month">Minimum Payment</option>
+                <option value="statement" selected title="Pay the full statement balance each month">Statement Balance</option>
+                <option value="aggressive" title="Pay 2× the minimum (or 10% of balance for revolving) — fastest payoff">Aggressive (2×)</option>
               </select>
+              <span id="trends-payoff-strategy-hint" style="font-size:12px; color:var(--text-muted);"></span>
             </div>
             <div style="overflow-x:auto;">
               <table style="width:100%;">
