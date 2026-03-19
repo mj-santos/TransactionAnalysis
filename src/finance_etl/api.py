@@ -6483,8 +6483,8 @@ No cloud services, no external dependencies — all data stays on your machine.
                     "ORDER BY merchant"
                 ))
                 category_rules_rows = _rows_to_dicts(conn.execute(
-                    "SELECT id, pattern, match_type, category, parent, priority, "
-                    "conditions, logic FROM category_rules ORDER BY priority DESC, id ASC"
+                    "SELECT id, raw_category, category, parent, conditions "
+                    "FROM category_rules ORDER BY id ASC"
                 ))
                 custom_categories_rows = _rows_to_dicts(conn.execute(
                     "SELECT subcategory, parent, created_at FROM custom_categories "
@@ -6643,29 +6643,28 @@ No cloud services, no external dependencies — all data stays on your machine.
 
             # ── Category rules ────────────────────────────────────────────
             existing_cat_rules = {
-                (r[0].lower(), r[1], r[2])
+                r[0].lower()
                 for r in conn.execute(
-                    "SELECT pattern, match_type, category FROM category_rules"
+                    "SELECT raw_category FROM category_rules"
                 ).fetchall()
             }
             new_cat_rules = []
             for rule in payload.get("category_rules", []):
-                key = (rule["pattern"].lower(), rule["match_type"], rule["category"])
+                key = rule["raw_category"].lower()
                 if key not in existing_cat_rules:
                     conditions_json = (
                         _json.dumps(rule["conditions"]) if rule.get("conditions") else None
                     )
                     new_cat_rules.append([
-                        rule["pattern"], rule["match_type"], rule["category"],
-                        rule.get("parent"), rule.get("priority", 10),
-                        conditions_json, rule.get("logic", "AND"),
+                        rule["raw_category"], rule["category"],
+                        rule.get("parent"), conditions_json, now, now,
                     ])
                     existing_cat_rules.add(key)
             if new_cat_rules:
                 conn.executemany(
                     "INSERT INTO category_rules "
-                    "(pattern, match_type, category, parent, priority, conditions, logic) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "(raw_category, category, parent, conditions, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     new_cat_rules,
                 )
                 result["category_rules_added"] = len(new_cat_rules)
