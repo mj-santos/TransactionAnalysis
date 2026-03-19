@@ -2060,6 +2060,57 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=500, detail=f"Update failed: {exc}") from exc
         return {"updated": updated, "categorized": categorized}
 
+    @app.patch(
+        "/transactions/bulk-assign-category",
+        tags=["transactions"],
+        summary="Assign a category to multiple transactions by fingerprint",
+    )
+    def bulk_assign_category(body: dict):
+        """
+        Update category_normalized, category_parent, category_override on selected transactions.
+        Captures previous values first so the caller can undo.
+
+        Body: {"fingerprints": [...], "category_normalized": str, "category_parent": str, "category_override": bool}
+        Returns: {"updated": N, "failed": N, "previous_values": [{"fingerprint": ..., "category_normalized": ..., "category_parent": ...}, ...]}
+        """
+        fingerprints = body.get("fingerprints", [])
+        category_normalized = body.get("category_normalized", "").strip()
+        category_parent = body.get("category_parent", "").strip()
+        category_override = bool(body.get("category_override", True))
+        if not fingerprints:
+            raise HTTPException(status_code=400, detail="fingerprints required")
+        try:
+            conn = get_connection(db_path)
+            placeholders = ", ".join(["?"] * len(fingerprints))
+            # Capture previous values for undo
+            prev_rows = conn.execute(
+                f"SELECT transaction_fingerprint, category_normalized, category_parent "
+                f"FROM transactions_norm WHERE transaction_fingerprint IN ({placeholders})",
+                fingerprints,
+            ).fetchall()
+            previous_values = [
+                {"fingerprint": r[0], "category_normalized": r[1], "category_parent": r[2]}
+                for r in prev_rows
+            ]
+            # Bulk update
+            conn.execute(
+                f"UPDATE transactions_norm "
+                f"SET category_normalized = ?, category_parent = ?, category_override = ? "
+                f"WHERE transaction_fingerprint IN ({placeholders})",
+                [category_normalized, category_parent, category_override] + fingerprints,
+            )
+            count_row = conn.execute(
+                f"SELECT COUNT(*) FROM transactions_norm "
+                f"WHERE transaction_fingerprint IN ({placeholders})",
+                fingerprints,
+            ).fetchone()
+            updated = int(count_row[0]) if count_row else 0
+            failed = len(fingerprints) - updated
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return {"updated": updated, "failed": failed, "previous_values": previous_values}
+
     # ── Merchant search (type-ahead) ────────────────────────────────────────
     @app.get("/merchants/search", tags=["merchant"],
              summary="Search distinct merchants by name for type-ahead")

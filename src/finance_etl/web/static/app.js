@@ -7805,6 +7805,7 @@ function _focusSearchField() {
 // ── Bulk Actions ───────────────────────────────────────────────
 
 const _bulkSelected = { credit_card: new Set(), bank: new Set() };
+const _bulkUndoPending = {};  // keyed by type: { previousValues, catLabel, timer }
 
 function _updateRowHighlight(cb) {
   const tr = cb.closest('tr');
@@ -7885,42 +7886,151 @@ async function bulkMarkReviewed(type) {
 function bulkAssignCategory(type) {
   const fps = Array.from(_bulkSelected[type]);
   if (!fps.length) return;
-  const prefix = type === 'credit_card' ? 'cc' : 'bk';
-  const panel = document.getElementById(`${prefix}-bulk-category-panel`);
-  const countEl = document.getElementById(`${prefix}-bulk-cat-n`);
-  const anchor = document.getElementById(`${prefix}-bulk-cat-anchor`);
-  if (countEl) countEl.textContent = fps.length;
-  if (panel) panel.style.display = 'block';
-
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const oldPanel = document.getElementById(`${p}-bulk-category-panel`);
+  if (oldPanel) oldPanel.style.display = 'none';
+  const anchor = document.getElementById(`${p}-bulk-cat-anchor`);
   openCategoryPicker(anchor, {
     currentCategory: '',
     allowRemove: false,
     allowCustom: true,
     placeholder: 'Search categories…',
     onSave: async (cat) => {
-      try {
-        for (const fp of fps) {
-          await api('PATCH', `/transactions/${encodeURIComponent(fp)}`, {
-            category_normalized: cat.subcategory,
-            category_parent: cat.parent,
-            category_override: true,
-          });
-        }
-        toast(`Category "${cat.subcategory}" assigned to ${fps.length} transaction${fps.length !== 1 ? 's' : ''}.`, 'success');
-        if (panel) panel.style.display = 'none';
-        bulkClearSelection(type);
-        loadTxnTab(type);
-      } catch (err) {
-        toast('Failed: ' + err.message, 'error');
-      }
+      await _bulkCatRun(type, fps, cat);
     },
   });
 }
 
 function bulkAssignCategoryCancel(type) {
-  const prefix = type === 'credit_card' ? 'cc' : 'bk';
-  const panel = document.getElementById(`${prefix}-bulk-category-panel`);
-  if (panel) panel.style.display = 'none';
+  _bulkBarReset(type, false);
+}
+
+async function _bulkCatRun(type, fps, cat) {
+  _bulkBarSetState(type, 'processing');
+  try {
+    const data = await api('PATCH', '/transactions/bulk-assign-category', {
+      fingerprints: fps,
+      category_normalized: cat.subcategory,
+      category_parent: cat.parent,
+      category_override: true,
+    });
+    if (data.failed > 0) {
+      // Highlight failed rows: fingerprints that are in fps but missing from previous_values found set
+      const updatedFps = new Set((data.previous_values || []).slice(0, data.updated).map(r => r.fingerprint));
+      const failedFps = fps.filter(fp => !updatedFps.has(fp));
+      failedFps.forEach(fp => {
+        const tr = document.querySelector(`tr[data-fp="${fp}"]`);
+        if (tr) tr.style.cssText += ';border-left:3px solid #f59e0b;';
+      });
+      _bulkBarSetState(type, 'failure', { updated: data.updated, failed: data.failed });
+    } else {
+      const catLabel = cat.subcategory || cat.parent || 'category';
+      _bulkUndoPending[type] = {
+        previousValues: data.previous_values || [],
+        catLabel,
+        timer: setTimeout(() => _bulkBarReset(type, true), 4000),
+      };
+      _bulkBarSetState(type, 'success', { updated: data.updated, catLabel });
+    }
+  } catch (err) {
+    _bulkBarSetState(type, 'failure', { updated: 0, failed: fps.length });
+  }
+}
+
+function _bulkBarSetState(type, state, data) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const bar = document.getElementById(`${p}-bulk-bar`);
+  const statusRow = document.getElementById(`${p}-bulk-status`);
+  const progressBar = document.getElementById(`${p}-bulk-progress`);
+  if (!bar) return;
+
+  // Remove all state classes
+  bar.classList.remove('bulk-processing', 'bulk-success', 'bulk-failure');
+
+  if (state === 'processing') {
+    bar.classList.add('bulk-processing');
+    bar.querySelectorAll('button').forEach(b => { b.style.display = 'none'; });
+    bar.style.pointerEvents = 'none';
+    if (statusRow) { statusRow.style.display = ''; statusRow.textContent = 'Updating…'; }
+    if (progressBar) progressBar.classList.add('active');
+
+  } else if (state === 'success') {
+    bar.classList.add('bulk-success');
+    bar.style.pointerEvents = '';
+    if (progressBar) progressBar.classList.remove('active');
+    if (statusRow) {
+      statusRow.style.display = '';
+      const n = data.updated;
+      const label = data.catLabel || 'category';
+      statusRow.innerHTML = `<span>&#10003;&nbsp; ${n} transaction${n !== 1 ? 's' : ''} &rarr; &ldquo;${esc(label)}&rdquo;</span>` +
+        `<button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;padding:3px 10px;" onclick="_bulkCatUndo('${type}')">Undo</button>`;
+    }
+
+  } else if (state === 'failure') {
+    bar.classList.add('bulk-failure');
+    bar.style.pointerEvents = '';
+    if (progressBar) progressBar.classList.remove('active');
+    if (statusRow) {
+      statusRow.style.display = '';
+      const u = data.updated, f = data.failed;
+      statusRow.innerHTML = `<span>&#9888;&nbsp; ${u} updated &middot; ${f} failed &mdash; rows highlighted below</span>` +
+        `<button class="btn btn-secondary btn-sm" style="margin-left:auto;font-size:11px;padding:3px 10px;" onclick="_bulkBarReset('${type}',false)">Dismiss</button>`;
+    }
+  }
+}
+
+function _bulkBarReset(type, doReload) {
+  const p = type === 'credit_card' ? 'cc' : 'bk';
+  const bar = document.getElementById(`${p}-bulk-bar`);
+  const statusRow = document.getElementById(`${p}-bulk-status`);
+  const progressBar = document.getElementById(`${p}-bulk-progress`);
+  if (bar) {
+    bar.classList.remove('bulk-processing', 'bulk-success', 'bulk-failure');
+    bar.style.pointerEvents = '';
+    bar.querySelectorAll('button').forEach(b => { b.style.display = ''; });
+  }
+  if (statusRow) { statusRow.style.display = 'none'; statusRow.innerHTML = ''; }
+  if (progressBar) progressBar.classList.remove('active');
+  if (_bulkUndoPending[type]) {
+    clearTimeout(_bulkUndoPending[type].timer);
+    delete _bulkUndoPending[type];
+  }
+  if (doReload) {
+    bulkClearSelection(type);
+    loadTxnTab(type);
+  }
+}
+
+async function _bulkCatUndo(type) {
+  const pending = _bulkUndoPending[type];
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  delete _bulkUndoPending[type];
+
+  // Group previous values by (category_normalized, category_parent)
+  const groups = {};
+  for (const r of pending.previousValues) {
+    const key = `${r.category_normalized || ''}||${r.category_parent || ''}`;
+    if (!groups[key]) groups[key] = { category_normalized: r.category_normalized || '', category_parent: r.category_parent || '', fingerprints: [] };
+    groups[key].fingerprints.push(r.fingerprint);
+  }
+
+  _bulkBarSetState(type, 'processing');
+  try {
+    for (const g of Object.values(groups)) {
+      await api('PATCH', '/transactions/bulk-assign-category', {
+        fingerprints: g.fingerprints,
+        category_normalized: g.category_normalized,
+        category_parent: g.category_parent,
+        category_override: false,
+      });
+    }
+    _bulkBarReset(type, true);
+    toast('Category assignment undone', 'info', 2500);
+  } catch (err) {
+    _bulkBarReset(type, false);
+    toast('Undo failed: ' + err.message, 'error');
+  }
 }
 
 async function bulkExclude(type) {
