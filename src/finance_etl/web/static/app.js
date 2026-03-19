@@ -3592,9 +3592,9 @@ async function loadTxnTab(type, reset = true) {
 
     if (reset) {
       _renderTxnHeaders(p, cols, type);
-      _renderTxnBody(p, rows, cols, false);
+      _renderTxnBody(p, rows, cols, false, type);
     } else {
-      _renderTxnBody(p, rows, cols, true);   // append rows for Load more
+      _renderTxnBody(p, rows, cols, true, type);   // append rows for Load more
     }
     // Load tag chips for visible transaction rows
     _loadVisibleTagChips();
@@ -3874,7 +3874,7 @@ function _clearColFacet(type, col) {
  * Render (or append to) the <tbody> rows.
  * Numeric columns are right-aligned and monospaced for readability.
  */
-function _renderTxnBody(p, rows, cols, append) {
+function _renderTxnBody(p, rows, cols, append, type) {
   const tbody = document.getElementById(`${p}-tbody`);
   if (!tbody) return;
   const span = cols.length || 10;
@@ -3911,8 +3911,8 @@ function _renderTxnBody(p, rows, cols, append) {
     // Group-by drill-down: clicking the row navigates to filtered transactions
     const drillAttrs = groupByVal ? (() => {
       const groupColVal = row[groupByVal] ?? '';
-      const groupJson = JSON.stringify(String(groupColVal));
-      return `style="cursor:pointer;" title="Click to filter by this group" onclick="_drillIntoGroup('${type}','${esc(groupByVal)}',${groupJson.replace(/'/g,"\\'")})"`;
+      const groupValEsc = String(groupColVal).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      return `style="cursor:pointer;" title="Click to filter by this group" onclick="_drillIntoGroup('${type}','${esc(groupByVal)}','${groupValEsc}')"`;
     })() : '';
     const cells = visibleCols.map(c => {
       const val = row[c] != null ? String(row[c]) : '';
