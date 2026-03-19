@@ -653,6 +653,7 @@ async function confirmDeleteRun() {
 async function loadReports() {
   const grid = document.getElementById('reports-grid');
   grid.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div>Loading…</div>';
+  loadSavedReports();
 
   try {
     const data = await api('GET', '/reports');
@@ -687,6 +688,101 @@ async function loadReports() {
     grid.innerHTML = `<div class="empty">Error: ${esc(err.message)}</div>`;
   }
   document.getElementById('chart-area').style.display = 'none';
+}
+
+async function loadSavedReports() {
+  const section = document.getElementById('saved-reports-section');
+  const grid    = document.getElementById('saved-reports-grid');
+  if (!section || !grid) return;
+  try {
+    const data = await api('GET', '/saved-reports');
+    const reports = data.reports || [];
+    _updateBadge('saved-reports-count', reports.length);
+    if (!reports.length) { section.style.display = 'none'; return; }
+    section.style.display = '';
+    grid.innerHTML = reports.map(r => {
+      const typeBadge = r.stmt_type === 'credit_card' ? '💳 Credit Cards'
+                      : r.stmt_type === 'bank'         ? '🏦 Bank'
+                      : '📊 Both';
+      const updated = r.updated_at ? new Date(r.updated_at).toLocaleDateString() : '';
+      return `<div class="report-card">
+        <div class="rc-icon">📋</div>
+        <div class="rc-name">${esc(r.name)}</div>
+        <div class="rc-desc">${esc(r.description || '')}
+          <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">${esc(typeBadge)}${updated ? ' · ' + updated : ''}</span>
+        </div>
+        <div class="rc-actions">
+          <button class="btn btn-primary btn-sm" onclick="_runSavedReport(${r.id})">▶ Run</button>
+          <button class="btn btn-secondary btn-sm" onclick="_editSavedReport(${r.id})">✏ Edit</button>
+          <button class="btn btn-secondary btn-sm" style="color:var(--danger);" onclick="_deleteSavedReport(${r.id}, '${esc(r.name).replace(/'/g,"\\'")}')">🗑</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    if (section) section.style.display = 'none';
+  }
+}
+
+function _loadSavedReportIntoBuilder(r) {
+  import_json = typeof r.filters_json === 'string' ? JSON.parse(r.filters_json || '[]') : (r.filters_json || []);
+  const group_by = typeof r.group_by_json === 'string' ? JSON.parse(r.group_by_json || '[]') : (r.group_by_json || []);
+  const card = document.getElementById('custom-report-card');
+  card.style.display = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  document.querySelectorAll('input[name="report-stmt-type"]').forEach(radio => {
+    radio.checked = (radio.value === (r.stmt_type || 'both'));
+  });
+  document.getElementById('report-filter-rows').innerHTML = '';
+  import_json.forEach(f => {
+    addReportFilter();
+    const rows = document.getElementById('report-filter-rows').children;
+    const last = rows[rows.length - 1];
+    if (last) {
+      const fld = last.querySelector('.rf-field');
+      const op  = last.querySelector('.rf-op');
+      const val = last.querySelector('.rf-val');
+      if (fld) fld.value = f.field || '';
+      if (op)  op.value  = f.op    || '=';
+      if (val) val.value = Array.isArray(f.value) ? f.value.join(', ') : (f.value ?? '');
+    }
+  });
+  const groupSel = document.getElementById('report-group-by');
+  [...groupSel.options].forEach(o => { o.selected = group_by.includes(o.value); });
+  document.getElementById('report-bucket').value = r.bucket || '';
+  if (r.date_from) document.getElementById('report-date-from').value = r.date_from;
+  if (r.date_to)   document.getElementById('report-date-to').value   = r.date_to;
+}
+
+async function _runSavedReport(id) {
+  try {
+    const data = await api('GET', '/saved-reports');
+    const r = (data.reports || []).find(x => x.id === id);
+    if (!r) { toast('Report not found.', 'error'); return; }
+    _loadSavedReportIntoBuilder(r);
+    await runCustomReport();
+  } catch (err) { toast(`Failed: ${err.message}`, 'error'); }
+}
+
+async function _editSavedReport(id) {
+  try {
+    const data = await api('GET', '/saved-reports');
+    const r = (data.reports || []).find(x => x.id === id);
+    if (!r) { toast('Report not found.', 'error'); return; }
+    _loadSavedReportIntoBuilder(r);
+    document.getElementById('save-report-panel').dataset.editId = id;
+    document.getElementById('save-report-name').value = r.name;
+    document.getElementById('save-report-desc').value = r.description || '';
+    document.getElementById('save-report-panel').style.display = '';
+  } catch (err) { toast(`Failed: ${err.message}`, 'error'); }
+}
+
+async function _deleteSavedReport(id, name) {
+  if (!confirm(`Delete saved report "${name}"?`)) return;
+  try {
+    await api('DELETE', `/saved-reports/${id}`);
+    toast('Report deleted.', 'success');
+    loadSavedReports();
+  } catch (err) { toast(`Failed: ${err.message}`, 'error'); }
 }
 
 async function regenerateReports() {
@@ -861,6 +957,64 @@ function toggleCustomReport() {
   card.style.display = card.style.display === 'none' ? '' : 'none';
 }
 
+function onReportStmtTypeChange() {
+  // no-op for now — stmt_type is read at run time from the radio
+}
+
+function _toggleSaveReportPanel() {
+  const panel = document.getElementById('save-report-panel');
+  if (!panel) return;
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : '';
+  if (!visible) {
+    delete panel.dataset.editId;
+    document.getElementById('save-report-name').value = '';
+    document.getElementById('save-report-desc').value = '';
+    document.getElementById('save-report-name').focus();
+  }
+}
+
+async function _saveCustomReport() {
+  const name = (document.getElementById('save-report-name')?.value || '').trim();
+  const desc = (document.getElementById('save-report-desc')?.value || '').trim();
+  if (!name) { toast('Report name is required.', 'error'); return; }
+
+  const filters = [];
+  document.querySelectorAll('#report-filter-rows > div').forEach(row => {
+    if (row.querySelector('.rf-all')?.checked) return;
+    const field = row.querySelector('.rf-field')?.value;
+    const op    = row.querySelector('.rf-op')?.value;
+    const val   = row.querySelector('.rf-val')?.value;
+    if (field && op) {
+      let value = val;
+      if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
+      if (op === 'between') value = val.split(',').map(s => s.trim());
+      if (op === 'is_null' || op === 'not_null') value = null;
+      filters.push({ field, op, value });
+    }
+  });
+  const groupByEl = document.getElementById('report-group-by');
+  const group_by  = [...groupByEl.selectedOptions].map(o => o.value);
+  const bucket    = document.getElementById('report-bucket').value || null;
+  const date_from = document.getElementById('report-date-from').value || null;
+  const date_to   = document.getElementById('report-date-to').value   || null;
+  const stmt_type = document.querySelector('input[name="report-stmt-type"]:checked')?.value || 'both';
+
+  const panel  = document.getElementById('save-report-panel');
+  const editId = panel?.dataset.editId;
+  try {
+    if (editId) {
+      await api('PUT', `/saved-reports/${editId}`, { name, description: desc, stmt_type, filters, group_by, bucket, date_from, date_to });
+      toast('Report updated.', 'success');
+    } else {
+      await api('POST', '/saved-reports', { name, description: desc, stmt_type, filters, group_by, bucket, date_from, date_to });
+      toast(`Report "${name}" saved.`, 'success');
+    }
+    _toggleSaveReportPanel();
+    loadSavedReports();
+  } catch (err) { toast(`Failed: ${err.message}`, 'error'); }
+}
+
 function addReportFilter() {
   const container = document.getElementById('report-filter-rows');
   const idx = container.children.length;
@@ -943,25 +1097,48 @@ async function runCustomReport() {
   }
 }
 
-function downloadReportResults() {
-  const head = document.getElementById('custom-report-head');
-  const body = document.getElementById('custom-report-body');
-  if (!head || !body) return;
-  const headers = [...head.querySelectorAll('th')].map(th => th.textContent.replace(/\s*ℹ\s*$/, '').trim());
-  const dataRows = [...body.querySelectorAll('tr')].map(tr =>
-    [...tr.querySelectorAll('td')].map(td => td.textContent.trim())
-  ).filter(r => r.length);
-  if (!headers.length || !dataRows.length) { toast('No results to download.', 'info', 2000); return; }
-  const csvLines = [headers, ...dataRows].map(r =>
-    r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
-  );
-  const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `custom_report_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+async function downloadReportResults() {
+  const filters = [];
+  document.querySelectorAll('#report-filter-rows > div').forEach(row => {
+    if (row.querySelector('.rf-all')?.checked) return;
+    const field = row.querySelector('.rf-field')?.value;
+    const op    = row.querySelector('.rf-op')?.value;
+    const val   = row.querySelector('.rf-val')?.value;
+    if (field && op) {
+      let value = val;
+      if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
+      if (op === 'between') value = val.split(',').map(s => s.trim());
+      if (op === 'is_null' || op === 'not_null') value = null;
+      filters.push({ field, op, value });
+    }
+  });
+  const groupByEl = document.getElementById('report-group-by');
+  const group_by  = [...(groupByEl?.selectedOptions || [])].map(o => o.value);
+  const bucket    = document.getElementById('report-bucket')?.value || null;
+  const date_from = document.getElementById('report-date-from')?.value || null;
+  const date_to   = document.getElementById('report-date-to')?.value   || null;
+  const stmt_type = document.querySelector('input[name="report-stmt-type"]:checked')?.value || 'both';
+
+  if (!filters.length && !group_by.length && !date_from && !date_to) {
+    toast('Configure filters or grouping before exporting.', 'info'); return;
+  }
+  try {
+    toast('Preparing export…', 'info', 2000);
+    const data = await api('POST', '/reports/query', { filters, group_by, bucket, date_from, date_to, stmt_type, limit: 50000 });
+    const cols = data.columns || (data.rows?.length ? Object.keys(data.rows[0]) : []);
+    if (!cols.length || !data.rows?.length) { toast('No data to export.', 'info'); return; }
+    const csvLines = [cols, ...data.rows.map(row => cols.map(c => row[c] ?? ''))].map(r =>
+      r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+    );
+    const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `report_export_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${data.rows.length} rows.`, 'success');
+  } catch (err) { toast(`Export failed: ${err.message}`, 'error'); }
 }
 
 // ── Settings page ──────────────────────────────────────────────
@@ -3227,6 +3404,91 @@ const _srcCtrl = {
   bank:        makeSourceDropdown('bk-source-ctrl', 'bank',        () => loadTxnTab('bank')),
 };
 
+/** Account picker for CC and Bank tabs — same pattern as source dropdown */
+function _makeAcctDropdown(containerId, type, onChange) {
+  const container = document.getElementById(containerId);
+  if (!container) return { load: async () => {}, reset: () => {}, value: () => '' };
+
+  let _selected = '';
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'source-trigger';
+  const panel = document.createElement('div');
+  panel.className = 'source-panel';
+  panel.setAttribute('role', 'listbox');
+  panel.style.display = 'none';
+  container.appendChild(trigger);
+  container.appendChild(panel);
+
+  function _label() { return _selected || 'All Accounts'; }
+  function _updateTrigger() {
+    trigger.innerHTML = '';
+    trigger.appendChild(document.createTextNode(_label()));
+    const arrow = document.createElement('span');
+    arrow.className = 'source-arrow';
+    arrow.textContent = '▼';
+    trigger.appendChild(arrow);
+  }
+  function _close() {
+    panel.style.display = 'none';
+    trigger.setAttribute('aria-expanded', 'false');
+  }
+  function _open() {
+    panel.style.display = 'block';
+    trigger.setAttribute('aria-expanded', 'true');
+  }
+  function _select(val) {
+    _selected = val;
+    _close();
+    _updateTrigger();
+    onChange(val);
+  }
+
+  trigger.addEventListener('click', e => {
+    e.stopPropagation();
+    panel.style.display === 'none' ? _open() : _close();
+  });
+  document.addEventListener('click', e => {
+    if (!container.contains(e.target)) _close();
+  });
+
+  function _render(accounts) {
+    panel.innerHTML = '';
+    const allOpt = document.createElement('label');
+    allOpt.className = 'source-option';
+    allOpt.innerHTML = `<input type="radio" name="acct-${containerId}" value=""> <span class="source-option-content"><span class="source-option-label">All Accounts</span></span>`;
+    allOpt.querySelector('input').checked = (_selected === '');
+    allOpt.querySelector('input').addEventListener('change', () => _select(''));
+    panel.appendChild(allOpt);
+
+    accounts.forEach(a => {
+      const opt = document.createElement('label');
+      opt.className = 'source-option';
+      opt.innerHTML = `<input type="radio" name="acct-${containerId}" value="${esc(a.account_name)}"> <span class="source-option-content"><span class="source-option-label">${esc(a.account_name)}</span><span class="source-option-meta"><span class="source-option-count">${a.count} txns</span></span></span>`;
+      opt.querySelector('input').checked = (a.account_name === _selected);
+      opt.querySelector('input').addEventListener('change', () => _select(a.account_name));
+      panel.appendChild(opt);
+    });
+    _updateTrigger();
+  }
+
+  async function load() {
+    try {
+      const data = await api('GET', `/transactions/accounts?type=${encodeURIComponent(type)}`);
+      _render(data.accounts || []);
+    } catch (e) { _render([]); }
+  }
+  function reset() { _selected = ''; _updateTrigger(); }
+  function value() { return _selected; }
+  _updateTrigger();
+  return { load, reset, value };
+}
+
+const _acctCtrl = {
+  credit_card: _makeAcctDropdown('cc-acct-ctrl', 'credit_card', () => loadTxnTab('credit_card')),
+  bank:        _makeAcctDropdown('bk-acct-ctrl', 'bank',        () => loadTxnTab('bank')),
+};
+
 /** Read current filter values from the DOM for the given tab type. */
 function _txnFilters(type) {
   const p = _pfx(type);
@@ -3234,7 +3496,9 @@ function _txnFilters(type) {
     source:          _srcCtrl[type].value(),                                   // from radio-dropdown
     date_from:       document.getElementById(`${p}-date-from`)?.value || '',
     date_to:         document.getElementById(`${p}-date-to`)?.value   || '',
-    account:         (document.getElementById(`${p}-account`)?.value  || '').trim(),
+    account:         (_acctCtrl[type]?.value() || ''),
+    amount_min:      document.getElementById(`${p}-amount-min`)?.value || '',
+    amount_max:      document.getElementById(`${p}-amount-max`)?.value || '',
     category:        (document.getElementById(`${p}-category`)?.value || '').trim(),
     merchant:        (document.getElementById(`${p}-merchant`)?.value || '').trim(),
     subtype:         document.getElementById(`${p}-subtype`)?.value   || '',  // CC only
@@ -3281,6 +3545,8 @@ async function loadTxnTab(type, reset = true) {
   if (f.no_merchant)     qs.set('no_merchant', 'true');
   if (f.no_category)     qs.set('no_category', 'true');
   if (f.tag)       qs.set('tag', f.tag);
+  if (f.amount_min) qs.set('amount_min', f.amount_min);
+  if (f.amount_max) qs.set('amount_max', f.amount_max);
 
   // Totals endpoint uses the same filter params (no pagination or sort)
   const tqs = new URLSearchParams({ type });
@@ -3295,6 +3561,8 @@ async function loadTxnTab(type, reset = true) {
   if (f.no_merchant)     tqs.set('no_merchant', 'true');
   if (f.no_category)     tqs.set('no_category', 'true');
   if (f.tag)       tqs.set('tag', f.tag);
+  if (f.amount_min) tqs.set('amount_min', f.amount_min);
+  if (f.amount_max) tqs.set('amount_max', f.amount_max);
 
   if (reset) {
     document.getElementById(`${p}-tbody`).innerHTML =
@@ -3304,6 +3572,8 @@ async function loadTxnTab(type, reset = true) {
     document.getElementById(`${p}-load-more`).style.display = 'none';
     // Populate source dropdown (table_controls.js) on every tab switch
     await _srcCtrl[type].load();
+    // Load account picker
+    await _acctCtrl[type].load();
     // Ensure tag filter dropdown is populated
     _populateTagDropdowns();
     // Load balance card from Accounts module if account filter is active
@@ -3336,6 +3606,7 @@ async function loadTxnTab(type, reset = true) {
       document.getElementById(`${p}-tfoot`), totals, type, cols.length || 10,
       document.getElementById(`${p}-totals-warn`),
     );
+    _renderFilterChips(type);
 
     // Render Card Financial Summary panel for credit card tab
     if (type === 'credit_card') _renderCcFinancialSummary(totals);
@@ -3388,7 +3659,61 @@ function clearTxnFilters(type) {
   if (noCat) noCat.checked = false;
   _txnState[type].sortBy  = 'transaction_date';
   _txnState[type].sortDir = 'desc';
+  _acctCtrl[type]?.reset();
+  const p2 = _pfx(type);
+  ['amount-min','amount-max'].forEach(s => {
+    const el = document.getElementById(`${p2}-${s}`); if (el) el.value = '';
+  });
   loadTxnTab(type);
+}
+
+let _saveTxnReportType = null;
+
+function _saveTxnFilterAsReport(type) {
+  _saveTxnReportType = type;
+  const modal = document.getElementById('save-txn-report-modal');
+  if (!modal) return;
+  document.getElementById('strm-name').value = '';
+  document.getElementById('strm-desc').value = '';
+  modal.classList.remove('hidden');
+  document.getElementById('strm-name').focus();
+}
+
+function _closeSaveTxnReportModal() {
+  document.getElementById('save-txn-report-modal')?.classList.add('hidden');
+  _saveTxnReportType = null;
+}
+
+async function _confirmSaveTxnReport() {
+  const name = (document.getElementById('strm-name')?.value || '').trim();
+  const desc = (document.getElementById('strm-desc')?.value || '').trim();
+  if (!name) { toast('Report name is required.', 'error'); return; }
+  const type = _saveTxnReportType || 'both';
+  const f    = _txnFilters(type);
+
+  const filters = [];
+  if (f.category)  filters.push({ field: 'category_normalized', op: 'contains', value: f.category });
+  if (f.merchant)  filters.push({ field: 'merchant',            op: 'contains', value: f.merchant });
+  if (f.subtype)   filters.push({ field: 'transaction_subtype', op: '=',        value: f.subtype });
+  if (f.amount_min) filters.push({ field: 'amount', op: '>=', value: f.amount_min });
+  if (f.amount_max) filters.push({ field: 'amount', op: '<=', value: f.amount_max });
+  if (f.account)   filters.push({ field: 'account_name', op: '=', value: f.account });
+  if (f.no_category)  filters.push({ field: 'category_normalized', op: 'is_null', value: null });
+  if (f.no_merchant)  filters.push({ field: 'merchant',            op: 'is_null', value: null });
+  const group_by = f.group_by ? [f.group_by] : [];
+
+  try {
+    await api('POST', '/saved-reports', {
+      name, description: desc,
+      stmt_type: type,
+      filters, group_by,
+      bucket: null,
+      date_from: f.date_from || null,
+      date_to:   f.date_to   || null,
+    });
+    toast(`Report "${name}" saved. View it in the Reports tab.`, 'success');
+    _closeSaveTxnReportModal();
+  } catch (err) { toast(`Failed: ${err.message}`, 'error'); }
 }
 
 /** Append the next page of results (called by the "Load more" button). */
@@ -3410,7 +3735,11 @@ function _renderTxnHeaders(p, cols, type) {
   thead.innerHTML = selectAllCb + cols.filter(c => !HIDDEN_COLS.has(c)).map(c => {
     const isSorted = c === st.sortBy;
     const arrow    = isSorted ? (st.sortDir === 'asc' ? ' \u25b2' : ' \u25bc') : '';
-    return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}</th>`;
+    const facetCols = new Set(['category_normalized','category_parent','merchant','account_name','statement_type','currency']);
+    const filterIcon = facetCols.has(c)
+      ? ` <span class="col-filter-icon" title="Filter by ${esc(c)}" onclick="event.stopPropagation();_openColFacet('${type}','${c}',this)" style="cursor:pointer;opacity:0.5;font-size:10px;margin-left:2px;">▼</span>`
+      : '';
+    return `<th style="cursor:pointer;user-select:none;" onclick="_txnSort('${type}','${c}')">${esc(c)}${arrow}${filterIcon}</th>`;
   }).join('') + '<th class="text-center" style="min-width:40px;">Notes</th><th class="text-center" style="min-width:100px;">Tags</th><th class="text-center" style="min-width:90px;">Review</th><th class="text-center" style="min-width:70px;">Split</th>';
 }
 
@@ -3426,6 +3755,118 @@ function _txnSort(type, col) {
     st.sortBy  = col;
     st.sortDir = 'desc';
   }
+  loadTxnTab(type);
+}
+
+// ── Column facet popovers ─────────────────────────────────────
+
+const _facetCache = {};
+const _colFilters = { credit_card: {}, bank: {} };
+let   _facetPopoverEl = null;
+
+function _facetCacheKey(type, col, f) {
+  return `${type}|${col}|${f.date_from}|${f.date_to}|${f.category}|${f.merchant}|${f.account}|${f.subtype}`;
+}
+
+async function _openColFacet(type, col, iconEl) {
+  _closeColFacet();
+
+  const f   = _txnFilters(type);
+  const key = _facetCacheKey(type, col, f);
+  let values;
+  if (_facetCache[key]) {
+    values = _facetCache[key];
+  } else {
+    const qs = new URLSearchParams({ type, column: col });
+    if (f.date_from) qs.set('date_from', f.date_from);
+    if (f.date_to)   qs.set('date_to',   f.date_to);
+    if (f.account)   qs.set('account',   f.account);
+    if (f.category)  qs.set('category',  f.category);
+    if (f.merchant)  qs.set('merchant',  f.merchant);
+    if (f.subtype)   qs.set('subtype',   f.subtype);
+    try {
+      const data = await api('GET', `/transactions/facets?${qs}`);
+      values = data.values || [];
+      _facetCache[key] = values;
+    } catch (e) { toast('Could not load filter values.', 'error'); return; }
+  }
+
+  const current = _colFilters[type][col] || '';
+  const pop = document.createElement('div');
+  pop.id = 'col-facet-popover';
+  pop.style.cssText = 'position:absolute;z-index:9999;background:var(--surface,#fff);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.15);padding:8px;min-width:200px;max-width:300px;';
+  pop.innerHTML = `
+    <input id="col-facet-search" type="text" placeholder="Search…" autocomplete="off"
+           style="width:100%;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;margin-bottom:6px;box-sizing:border-box;" />
+    <div id="col-facet-list" style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;"></div>
+    <div style="display:flex;gap:6px;margin-top:8px;">
+      <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="_clearColFacet('${type}','${col}')">Clear</button>
+      <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="_closeColFacet()">Close</button>
+    </div>`;
+
+  function _renderFacetList(filter) {
+    const list = pop.querySelector('#col-facet-list');
+    const filtered = filter ? values.filter(v => v.value.toLowerCase().includes(filter.toLowerCase())) : values;
+    list.innerHTML = filtered.map(v =>
+      `<label style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;border-radius:4px;cursor:pointer;font-size:12px;${v.value===current?'background:var(--primary-light,#dbeafe);':''}">
+        <span><input type="radio" name="col-facet-${col}" value="${esc(v.value)}" ${v.value===current?'checked':''} style="margin-right:4px;" onchange="_applyColFacet('${type}','${col}','${esc(v.value).replace(/'/g,"\\'")}')"> ${esc(v.value || '(blank)')}</span>
+        <span style="font-size:10px;color:var(--text-muted);">${v.count}</span>
+      </label>`
+    ).join('');
+  }
+  _renderFacetList('');
+  pop.querySelector('#col-facet-search').addEventListener('input', e => _renderFacetList(e.target.value));
+
+  document.body.appendChild(pop);
+  _facetPopoverEl = pop;
+  const rect = iconEl.getBoundingClientRect();
+  pop.style.top  = (rect.bottom + window.scrollY + 4) + 'px';
+  pop.style.left = Math.max(0, rect.left + window.scrollX - 60) + 'px';
+
+  setTimeout(() => {
+    document.addEventListener('click', _colFacetOutsideClick);
+    pop.querySelector('#col-facet-search').focus();
+  }, 10);
+}
+
+function _colFacetOutsideClick(e) {
+  if (_facetPopoverEl && !_facetPopoverEl.contains(e.target)) _closeColFacet();
+}
+
+function _closeColFacet() {
+  if (_facetPopoverEl) { _facetPopoverEl.remove(); _facetPopoverEl = null; }
+  document.removeEventListener('click', _colFacetOutsideClick);
+}
+
+function _applyColFacet(type, col, value) {
+  _colFilters[type][col] = value;
+  _closeColFacet();
+  const p = _pfx(type);
+  const colToInput = {
+    category_normalized: `${p}-category`,
+    category_parent:     `${p}-category`,
+    merchant:            `${p}-merchant`,
+  };
+  if (colToInput[col]) {
+    const el = document.getElementById(colToInput[col]);
+    if (el) { el.value = value; }
+  }
+  loadTxnTab(type);
+}
+
+function _clearColFacet(type, col) {
+  delete _colFilters[type][col];
+  const p = _pfx(type);
+  const colToInput = {
+    category_normalized: `${p}-category`,
+    category_parent:     `${p}-category`,
+    merchant:            `${p}-merchant`,
+  };
+  if (colToInput[col]) {
+    const el = document.getElementById(colToInput[col]);
+    if (el) el.value = '';
+  }
+  _closeColFacet();
   loadTxnTab(type);
 }
 
@@ -3452,6 +3893,9 @@ function _renderTxnBody(p, rows, cols, append) {
 
   const visibleCols = cols.filter(c => !HIDDEN_COLS.has(c));
 
+  // If group_by is active, make each row clickable to drill into its transactions
+  const groupByVal = document.getElementById(`${p}-group-by`)?.value || '';
+
   const html = rows.map(row => {
     // DuckDB may serialize booleans as true or 'true' depending on driver version
     const isUnreviewed = row.unreviewed === true || row.unreviewed === 'true';
@@ -3464,6 +3908,12 @@ function _renderTxnBody(p, rows, cols, append) {
       : '<td></td>';
     // Split badge prepended to description
     const splitBadge = isSplitChild ? '<span class="split-badge" title="Split transaction">split</span> ' : '';
+    // Group-by drill-down: clicking the row navigates to filtered transactions
+    const drillAttrs = groupByVal ? (() => {
+      const groupColVal = row[groupByVal] ?? '';
+      const groupJson = JSON.stringify(String(groupColVal));
+      return `style="cursor:pointer;" title="Click to filter by this group" onclick="_drillIntoGroup('${type}','${esc(groupByVal)}',${groupJson.replace(/'/g,"\\'")})"`;
+    })() : '';
     const cells = visibleCols.map(c => {
       const val = row[c] != null ? String(row[c]) : '';
       const cls = NUMERIC_COLS.has(c) ? ' class="mono text-right"' : '';
@@ -3518,7 +3968,7 @@ function _renderTxnBody(p, rows, cols, append) {
         <button class="btn btn-secondary btn-sm" style="padding:2px 6px; font-size:10px;" onclick="openSplitModal('${esc(fp)}')" title="Split this transaction across multiple categories">&#9889; Split</button>
       </td>`;
     }
-    return `<tr${rowCls} data-fp="${esc(fp)}">${checkCell}${cells}${notesCell}${tagCell}${reviewCell}${splitCell}</tr>`;
+    return `<tr${rowCls} data-fp="${esc(fp)}" ${drillAttrs}>${checkCell}${cells}${notesCell}${tagCell}${reviewCell}${splitCell}</tr>`;
   }).join('');
 
   if (append) {
@@ -3526,6 +3976,23 @@ function _renderTxnBody(p, rows, cols, append) {
   } else {
     tbody.innerHTML = html;
   }
+}
+
+function _drillIntoGroup(type, col, value) {
+  const p = _pfx(type);
+  const groupSel = document.getElementById(`${p}-group-by`);
+  if (groupSel) groupSel.value = '';
+  const colToInput = {
+    category_normalized: `${p}-category`,
+    category_parent:     `${p}-category`,
+    category:            `${p}-category`,
+    merchant:            `${p}-merchant`,
+  };
+  if (colToInput[col]) {
+    const el = document.getElementById(colToInput[col]);
+    if (el) el.value = value;
+  }
+  loadTxnTab(type);
 }
 
 // ── Transaction Review ────────────────────────────────────────
@@ -7925,6 +8392,54 @@ function _renderUtilCategories(cats) {
         <span class="mono" style="font-size:11px; color:var(--text-muted);">${g.count}</span>
       </div>${subs}</div>`;
   }).join('');
+}
+
+// ── Transaction Filter Chips ──────────────────────────────────
+
+const _CHIP_LABELS = {
+  date_from: 'From', date_to: 'To', account: 'Account',
+  category: 'Category', merchant: 'Merchant', subtype: 'Type',
+  amount_min: 'Min $', amount_max: 'Max $', tag: 'Tag',
+};
+
+function _renderFilterChips(type) {
+  const p = _pfx(type);
+  const bar = document.getElementById(`${p}-filter-chips`);
+  if (!bar) return;
+  const f = _txnFilters(type);
+  const chips = [];
+  const skip = new Set(['source', 'group_by', 'unreviewed_only', 'no_merchant', 'no_category']);
+  Object.entries(f).forEach(([k, v]) => {
+    if (skip.has(k) || !v) return;
+    const label = _CHIP_LABELS[k] || k;
+    chips.push({ key: k, label, value: String(v) });
+  });
+  if (f.unreviewed_only) chips.push({ key: 'unreviewed_only', label: 'Unreviewed', value: '' });
+  if (f.no_merchant)     chips.push({ key: 'no_merchant',     label: 'No Merchant', value: '' });
+  if (f.no_category)     chips.push({ key: 'no_category',     label: 'No Category', value: '' });
+
+  if (!chips.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = 'flex';
+  bar.innerHTML = '<span style="font-size:11px; color:var(--text-muted); align-self:center; margin-right:2px;">Filters:</span>' +
+    chips.map(c => `<span style="display:inline-flex; align-items:center; gap:4px; background:var(--primary,#3b82f6); color:#fff; font-size:11px; padding:2px 8px; border-radius:12px;">
+      ${esc(c.label)}${c.value ? ': ' + esc(c.value) : ''}
+      <button onclick="_clearFilterChip('${type}','${c.key}')" style="background:none;border:none;color:#fff;cursor:pointer;padding:0;font-size:13px;line-height:1;" title="Remove filter">✕</button>
+    </span>`).join('');
+}
+
+function _clearFilterChip(type, key) {
+  const p = _pfx(type);
+  const checkboxKeys = { unreviewed_only: `${p}-unreviewed-only`, no_merchant: `${p}-no-merchant`, no_category: `${p}-no-category` };
+  if (checkboxKeys[key]) {
+    const el = document.getElementById(checkboxKeys[key]); if (el) el.checked = false;
+  } else if (key === 'account') {
+    _acctCtrl[type]?.reset();
+  } else if (key === 'amount_min' || key === 'amount_max') {
+    const el = document.getElementById(`${p}-${key.replace('_','-')}`); if (el) el.value = '';
+  } else {
+    const el = document.getElementById(`${p}-${key.replace('_','-')}`); if (el) el.value = '';
+  }
+  loadTxnTab(type);
 }
 
 function _filterUtilCategories() {

@@ -472,9 +472,9 @@
           <label for="cc-date-to" style="font-size:11px;">Date to</label>
           <input type="date" id="cc-date-to" onchange="onDateManualChange('credit_card')" />
         </div>
-        <div class="form-group" style="margin:0; min-width:150px;">
-          <label for="cc-account" style="font-size:11px;">Account</label>
-          <input type="text" id="cc-account" placeholder="Account name or ID" oninput="debounceTxn('credit_card')" />
+        <div class="form-group" style="margin:0; min-width:170px;">
+          <label style="font-size:11px;">Account</label>
+          <div id="cc-acct-ctrl" class="source-ctrl-wrap"></div>
         </div>
         <div class="form-group" style="margin:0; min-width:140px;">
           <label for="cc-category" style="font-size:11px;">Category</label>
@@ -483,6 +483,18 @@
         <div class="form-group" style="margin:0; min-width:160px;">
           <label for="cc-merchant" style="font-size:11px;">Merchant / Description</label>
           <input type="text" id="cc-merchant" placeholder="Search…" oninput="debounceTxn('credit_card')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:190px;">
+          <label style="font-size:11px;">Amount Range ($)</label>
+          <div style="display:flex; gap:4px; align-items:center;">
+            <input type="number" id="cc-amount-min" placeholder="Min" step="0.01"
+                   oninput="debounceTxn('credit_card')"
+                   style="width:80px; padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
+            <span style="font-size:11px; color:var(--text-muted);">–</span>
+            <input type="number" id="cc-amount-max" placeholder="Max" step="0.01"
+                   oninput="debounceTxn('credit_card')"
+                   style="width:80px; padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
+          </div>
         </div>
         <div class="form-group" style="margin:0; min-width:130px;">
           <label for="cc-subtype" style="font-size:11px;">Amount Type</label>
@@ -527,8 +539,11 @@
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('credit_card')">✕ Clear</button>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('credit_card')">↻ Refresh</button>
         <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('credit_card')">Mark All Reviewed</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="_saveTxnFilterAsReport('credit_card')" title="Save current filters as a reusable report">💾 Save Report</button>
       </div>
     </div>
+    <!-- Active filter chips -->
+    <div id="cc-filter-chips" style="display:none; flex-wrap:wrap; gap:6px; padding:6px 0 2px; align-items:center;"></div>
     <!-- Bulk action bar (hidden by default) -->
     <div id="cc-bulk-bar" class="bulk-bar" style="display:none;">
       <span id="cc-bulk-count" style="font-weight:600;">0 selected</span>
@@ -625,9 +640,9 @@
           <label for="bk-date-to" style="font-size:11px;">Date to</label>
           <input type="date" id="bk-date-to" onchange="onDateManualChange('bank')" />
         </div>
-        <div class="form-group" style="margin:0; min-width:150px;">
-          <label for="bk-account" style="font-size:11px;">Account</label>
-          <input type="text" id="bk-account" placeholder="Account name or ID" oninput="debounceTxn('bank')" />
+        <div class="form-group" style="margin:0; min-width:170px;">
+          <label style="font-size:11px;">Account</label>
+          <div id="bk-acct-ctrl" class="source-ctrl-wrap"></div>
         </div>
         <div class="form-group" style="margin:0; min-width:140px;">
           <label for="bk-category" style="font-size:11px;">Category</label>
@@ -636,6 +651,18 @@
         <div class="form-group" style="margin:0; min-width:160px;">
           <label for="bk-merchant" style="font-size:11px;">Merchant / Description</label>
           <input type="text" id="bk-merchant" placeholder="Search…" oninput="debounceTxn('bank')" />
+        </div>
+        <div class="form-group" style="margin:0; min-width:190px;">
+          <label style="font-size:11px;">Amount Range ($)</label>
+          <div style="display:flex; gap:4px; align-items:center;">
+            <input type="number" id="bk-amount-min" placeholder="Min" step="0.01"
+                   oninput="debounceTxn('bank')"
+                   style="width:80px; padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
+            <span style="font-size:11px; color:var(--text-muted);">–</span>
+            <input type="number" id="bk-amount-max" placeholder="Max" step="0.01"
+                   oninput="debounceTxn('bank')"
+                   style="width:80px; padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
+          </div>
         </div>
         <div class="form-group" style="margin:0; min-width:140px;">
           <label for="bk-group-by" style="font-size:11px;">Group by</label>
@@ -669,9 +696,12 @@
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="clearTxnFilters('bank')">✕ Clear</button>
         <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="loadTxnTab('bank')">↻ Refresh</button>
         <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('bank')">Mark All Reviewed</button>
+        <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="_saveTxnFilterAsReport('bank')" title="Save current filters as a reusable report">💾 Save Report</button>
       </div>
     </div>
     <!-- Bulk action bar (hidden by default) -->
+    <!-- Active filter chips -->
+    <div id="bk-filter-chips" style="display:none; flex-wrap:wrap; gap:6px; padding:6px 0 2px; align-items:center;"></div>
     <div id="bk-bulk-bar" class="bulk-bar" style="display:none;">
       <span id="bk-bulk-count" style="font-weight:600;">0 selected</span>
       <button class="btn btn-sm" onclick="bulkAssignCategory('bank')">Assign Category</button>
@@ -818,7 +848,15 @@
 
         <!-- Filters -->
         <div>
-          <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px;">Filters</div>
+          <div style="display:flex; align-items:center; gap:16px; margin-bottom:8px; flex-wrap:wrap;">
+            <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em;">Filters</div>
+            <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+              <span style="color:var(--text-muted);">Statement:</span>
+              <label style="cursor:pointer;"><input type="radio" name="report-stmt-type" value="both" checked onchange="onReportStmtTypeChange()"> Both</label>
+              <label style="cursor:pointer;"><input type="radio" name="report-stmt-type" value="credit_card" onchange="onReportStmtTypeChange()"> Credit Cards</label>
+              <label style="cursor:pointer;"><input type="radio" name="report-stmt-type" value="bank" onchange="onReportStmtTypeChange()"> Bank</label>
+            </div>
+          </div>
           <div id="report-filter-rows" style="display:flex; flex-direction:column; gap:6px;"></div>
           <button class="btn btn-secondary btn-sm" style="margin-top:6px;" onclick="addReportFilter()">+ Add filter</button>
         </div>
@@ -868,9 +906,29 @@
           </div>
         </div>
 
-        <div style="display:flex; gap:8px; align-items:center;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" onclick="runCustomReport()">▶ Run report</button>
           <button class="btn btn-secondary btn-sm" onclick="downloadReportResults()" title="Download current results as CSV">⬇ Download results</button>
+          <button class="btn btn-secondary btn-sm" onclick="_toggleSaveReportPanel()" title="Save this report definition for reuse">💾 Save as Report</button>
+        </div>
+        <!-- Save report inline panel -->
+        <div id="save-report-panel" style="display:none; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:2px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+            <label style="display:flex; flex-direction:column; gap:4px; font-size:13px; grid-column:1/-1;">
+              Report Name
+              <input type="text" id="save-report-name" placeholder="e.g. Monthly Groceries YTD"
+                     style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+            </label>
+            <label style="display:flex; flex-direction:column; gap:4px; font-size:13px; grid-column:1/-1;">
+              Description (optional)
+              <input type="text" id="save-report-desc" placeholder="What this report shows…"
+                     style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+            </label>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-primary btn-sm" onclick="_saveCustomReport()">Save</button>
+            <button class="btn btn-secondary btn-sm" onclick="_toggleSaveReportPanel()">Cancel</button>
+          </div>
         </div>
 
         <!-- Results -->
@@ -887,6 +945,21 @@
       </div>
     </div>
 
+    <!-- My Saved Reports -->
+    <div id="saved-reports-section" style="margin-bottom:20px; display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h3 style="font-size:14px; font-weight:700; color:var(--text); margin:0;">
+          My Saved Reports
+          <span class="badge-count" id="saved-reports-count" style="display:none;"></span>
+        </h3>
+      </div>
+      <div class="reports-grid" id="saved-reports-grid"></div>
+    </div>
+
+    <!-- Auto-generated Reports -->
+    <div style="margin-bottom:8px;">
+      <h3 style="font-size:14px; font-weight:700; color:var(--text); margin:0 0 8px 0;">Auto-generated Reports</h3>
+    </div>
     <div class="reports-grid" id="reports-grid">
       <div class="empty"><div class="empty-icon">📊</div>No reports yet. Run an import first.</div>
     </div>
@@ -3347,5 +3420,31 @@
 <script src="/static/table_controls.js"></script>
 <script src="/static/accounts.js"></script>
 <script src="/static/app.js"></script>
+
+  <!-- Save Transaction Filters as Report modal -->
+  <div id="save-txn-report-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="strm-title">
+    <div class="modal-box" style="max-width:440px;">
+      <div class="modal-header">
+        <span id="strm-title" style="font-weight:700; font-size:15px;">Save as Report</span>
+        <button class="btn btn-secondary btn-sm" onclick="_closeSaveTxnReportModal()">✕</button>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px; padding:4px 0;">
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Report Name
+          <input type="text" id="strm-name" placeholder="e.g. Chase Groceries Q1"
+                 style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+        <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
+          Description (optional)
+          <input type="text" id="strm-desc" placeholder="What this report shows…"
+                 style="padding:6px 8px; border-radius:6px; border:1px solid var(--border);" />
+        </label>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button class="btn btn-primary btn-sm" onclick="_confirmSaveTxnReport()">Save</button>
+        <button class="btn btn-secondary btn-sm" onclick="_closeSaveTxnReportModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

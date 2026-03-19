@@ -418,6 +418,22 @@ CREATE TABLE IF NOT EXISTS annual_reports (
         created_at  TEXT NOT NULL,
         UNIQUE(subcategory, parent)
     )""",
+
+    # ── Saved reports (user-defined reusable filter+groupby presets) ──────
+    "CREATE SEQUENCE IF NOT EXISTS seq_saved_reports_id",
+    """CREATE TABLE IF NOT EXISTS saved_reports (
+        id          BIGINT DEFAULT nextval('seq_saved_reports_id') PRIMARY KEY,
+        name        TEXT NOT NULL,
+        description TEXT,
+        stmt_type   TEXT NOT NULL DEFAULT 'both',
+        filters_json TEXT NOT NULL DEFAULT '[]',
+        group_by_json TEXT NOT NULL DEFAULT '[]',
+        bucket      TEXT,
+        date_from   TEXT,
+        date_to     TEXT,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""",
 ]
 
 # ── Accounts & Liabilities module migrations ─────────────────────────────

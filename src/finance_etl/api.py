@@ -194,6 +194,7 @@ try:
         date_from: Optional[str] = Field(None, description="ISO date lower bound (inclusive)")
         date_to:   Optional[str] = Field(None, description="ISO date upper bound (inclusive)")
         limit:     int           = Field(500, le=2000, description="Max rows (capped at 2000)")
+        stmt_type: Optional[str] = Field(None, description="Filter by statement type: credit_card or bank")
 
     class SettingsResponse(BaseModel):
         verbose_logs: bool = Field(..., description="Enable verbose API error details in responses")
@@ -321,6 +322,10 @@ def _build_report_sql(payload: Any) -> tuple[list, list, list[str]]:
         where.append("transaction_date >= ?"); params.append(payload.date_from)
     if payload.date_to:
         where.append("transaction_date <= ?"); params.append(payload.date_to)
+
+    _stmt_type = getattr(payload, "stmt_type", None)
+    if _stmt_type in ("credit_card", "bank"):
+        where.append("statement_type = ?"); params.append(_stmt_type)
 
     group_fields = [f for f in (getattr(payload, "group_by", None) or []) if f in _REPORT_FIELDS]
     safe_bucket  = (getattr(payload, "bucket", None) or "")
@@ -1530,6 +1535,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         type, date_from, date_to, account, category, merchant, source, subtype=None,
         unreviewed_only=False, tag=None, category_parent=None,
         no_merchant=False, no_category=False,
+        amount_min: float | None = None, amount_max: float | None = None,
     ) -> tuple[list, list]:
         """Build shared WHERE clause + params for /transactions and /transactions/totals."""
         where, params = [], []
@@ -1552,6 +1558,12 @@ No cloud services, no external dependencies — all data stays on your machine.
         if merchant:
             where.append("LOWER(COALESCE(merchant, description)) LIKE ?")
             params.append(f"%{merchant.lower()}%")
+        if amount_min is not None:
+            where.append("COALESCE(amount, 0) >= ?")
+            params.append(amount_min)
+        if amount_max is not None:
+            where.append("COALESCE(amount, 0) <= ?")
+            params.append(amount_max)
         if subtype and subtype in ("spending", "payment", "adjustment"):
             where.append("transaction_subtype = ?"); params.append(subtype)
         # source filter: specific run_id; 'all' or absent → no additional filter
@@ -1600,6 +1612,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         no_merchant: bool        = Query(False,           description="Show only transactions with no merchant"),
         no_category: bool        = Query(False,           description="Show only transactions with no category"),
         tag:       Optional[int] = Query(None,            description="Filter by tag ID"),
+        amount_min: Optional[float] = Query(None,         description="Minimum amount filter"),
+        amount_max: Optional[float] = Query(None,         description="Maximum amount filter"),
     ):
         """
         Filtered transaction list.
@@ -1609,7 +1623,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Pass `source=<run_id>` to filter by a specific import; omit or pass `source=all`
         to show all rows for the given type.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, category_parent=category_parent, no_merchant=no_merchant, no_category=no_category)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, category_parent=category_parent, no_merchant=no_merchant, no_category=no_category, amount_min=amount_min, amount_max=amount_max)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         group_fields = [f.strip() for f in (group_by or "").split(",")
@@ -1793,6 +1807,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         no_merchant: bool        = Query(False, description="Show only transactions with no merchant"),
         no_category: bool        = Query(False, description="Show only transactions with no category"),
         tag:       Optional[int] = Query(None,  description="Filter by tag ID"),
+        amount_min: Optional[float] = Query(None, description="Minimum amount filter"),
+        amount_max: Optional[float] = Query(None, description="Maximum amount filter"),
     ):
         """
         Return aggregate totals for the filtered set (without fetching all rows).
@@ -1806,7 +1822,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Division-by-zero safety: SUM returns NULL for empty sets → COALESCE to 0.
         source: specific run_id to scope to one import; omit or 'all' for all rows.
         """
-        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, no_merchant=no_merchant, no_category=no_category)
+        where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype, unreviewed_only=unreviewed_only, tag=tag, no_merchant=no_merchant, no_category=no_category, amount_min=amount_min, amount_max=amount_max)
 
         where_sql = (" WHERE " + " AND ".join(where)) if where else ""
         _ns = "COALESCE(amount, 0)"
@@ -1866,6 +1882,83 @@ No cloud services, no external dependencies — all data stays on your machine.
             "cc_conflict_count":  int(row[8]  or 0),
             "cc_legacy_count":    int(row[9]  or 0),
         }
+
+    @app.get("/transactions/accounts", tags=["transactions"],
+             summary="Distinct accounts for a given statement type")
+    def get_transaction_accounts(
+        type: str = Query("credit_card", description="credit_card or bank"),
+    ):
+        """Return distinct account names + counts for the given statement type."""
+        conn = None
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """SELECT account_name, COUNT(*) AS cnt
+                   FROM transactions_norm
+                   WHERE statement_type = ?
+                     AND account_name IS NOT NULL
+                     AND COALESCE(excluded, FALSE) = FALSE
+                   GROUP BY account_name
+                   ORDER BY cnt DESC""",
+                [type],
+            ).fetchall()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
+        return {"accounts": [{"account_name": r[0], "count": r[1]} for r in rows]}
+
+    @app.get("/transactions/facets", tags=["transactions"],
+             summary="Distinct values for a column under current filter state")
+    def get_transaction_facets(
+        type:      str           = Query("credit_card"),
+        column:    str           = Query(..., description="Column to enumerate: category_normalized, category_parent, merchant, account_name, statement_type, currency"),
+        date_from: Optional[str] = Query(None),
+        date_to:   Optional[str] = Query(None),
+        account:   Optional[str] = Query(None),
+        category:  Optional[str] = Query(None),
+        merchant:  Optional[str] = Query(None),
+        subtype:   Optional[str] = Query(None),
+        tag:       Optional[str] = Query(None),
+    ):
+        """Return top 200 distinct values + counts for the given column, filtered by current state."""
+        _FACET_COLS = frozenset({
+            "category_normalized", "category_parent", "merchant",
+            "account_name", "statement_type", "currency",
+        })
+        if column not in _FACET_COLS:
+            raise HTTPException(status_code=400, detail=f"column must be one of: {', '.join(sorted(_FACET_COLS))}")
+        where, params = _build_txn_where(
+            type, date_from, date_to, account, category, merchant, None, subtype, tag=tag
+        )
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        sql = (
+            f"SELECT COALESCE({column}, '') AS val, COUNT(*) AS cnt"
+            f" FROM transactions_norm{where_sql}"
+            f" WHERE COALESCE(excluded, FALSE) = FALSE"
+            f" GROUP BY val ORDER BY cnt DESC LIMIT 200"
+        )
+        # If we already have a WHERE clause, use AND instead
+        if where_sql:
+            sql = (
+                f"SELECT COALESCE({column}, '') AS val, COUNT(*) AS cnt"
+                f" FROM transactions_norm{where_sql}"
+                f" AND COALESCE(excluded, FALSE) = FALSE"
+                f" GROUP BY val ORDER BY cnt DESC LIMIT 200"
+            )
+        conn = None
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(sql, params).fetchall()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
+        return {"column": column, "values": [{"value": r[0], "count": r[1]} for r in rows]}
 
     # -----------------------------------------------------------------------
     # Transaction Review
@@ -2443,6 +2536,121 @@ No cloud services, no external dependencies — all data stays on your machine.
                     pass
         if deleted == 0:
             raise HTTPException(status_code=404, detail="Custom category not found")
+        return {"status": "ok"}
+
+    # -----------------------------------------------------------------------
+    # Saved Reports
+    # -----------------------------------------------------------------------
+
+    @app.get("/saved-reports", tags=["reports"],
+             summary="List all saved report definitions")
+    def list_saved_reports():
+        conn = None
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """SELECT id, name, description, stmt_type, filters_json,
+                          group_by_json, bucket, date_from, date_to,
+                          created_at, updated_at
+                   FROM saved_reports ORDER BY updated_at DESC"""
+            ).fetchall()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
+        cols = ["id","name","description","stmt_type","filters_json","group_by_json",
+                "bucket","date_from","date_to","created_at","updated_at"]
+        return {"reports": [dict(zip(cols, r)) for r in rows]}
+
+    @app.post("/saved-reports", tags=["reports"],
+              summary="Create a saved report definition")
+    def create_saved_report(body: dict):
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        import json as _json
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        stmt_type    = body.get("stmt_type", "both") or "both"
+        filters_json = _json.dumps(body.get("filters") or [])
+        group_by_json= _json.dumps(body.get("group_by") or [])
+        bucket       = body.get("bucket") or None
+        date_from    = body.get("date_from") or None
+        date_to      = body.get("date_to") or None
+        description  = (body.get("description") or "").strip() or None
+        conn = None
+        try:
+            conn = get_connection(db_path)
+            conn.execute(
+                """INSERT INTO saved_reports
+                   (name, description, stmt_type, filters_json, group_by_json,
+                    bucket, date_from, date_to, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                [name, description, stmt_type, filters_json, group_by_json,
+                 bucket, date_from, date_to, now, now],
+            )
+            row = conn.execute(
+                "SELECT id FROM saved_reports WHERE name=? AND created_at=?", [name, now]
+            ).fetchone()
+            new_id = row[0] if row else None
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
+        return {"status": "ok", "id": new_id, "name": name}
+
+    @app.put("/saved-reports/{report_id}", tags=["reports"],
+             summary="Update a saved report definition")
+    def update_saved_report(report_id: int, body: dict):
+        import json as _json
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
+        stmt_type    = body.get("stmt_type", "both") or "both"
+        filters_json = _json.dumps(body.get("filters") or [])
+        group_by_json= _json.dumps(body.get("group_by") or [])
+        bucket       = body.get("bucket") or None
+        date_from    = body.get("date_from") or None
+        date_to      = body.get("date_to") or None
+        description  = (body.get("description") or "").strip() or None
+        conn = None
+        try:
+            conn = get_connection(db_path)
+            result = conn.execute(
+                """UPDATE saved_reports SET
+                   name=?, description=?, stmt_type=?, filters_json=?,
+                   group_by_json=?, bucket=?, date_from=?, date_to=?, updated_at=?
+                   WHERE id=?""",
+                [name, description, stmt_type, filters_json, group_by_json,
+                 bucket, date_from, date_to, now, report_id],
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
+        return {"status": "ok", "id": report_id}
+
+    @app.delete("/saved-reports/{report_id}", tags=["reports"],
+                summary="Delete a saved report definition")
+    def delete_saved_report(report_id: int):
+        conn = None
+        try:
+            conn = get_connection(db_path)
+            conn.execute("DELETE FROM saved_reports WHERE id=?", [report_id])
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
         return {"status": "ok"}
 
     @app.get("/utilities/merchants", tags=["utilities"],
