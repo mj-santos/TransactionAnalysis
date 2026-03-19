@@ -7883,13 +7883,13 @@ async function bulkMarkReviewed(type) {
   }
 }
 
-function bulkAssignCategory(type) {
+function bulkAssignCategory(type, anchorEl) {
   const fps = Array.from(_bulkSelected[type]);
   if (!fps.length) return;
   const p = type === 'credit_card' ? 'cc' : 'bk';
   const oldPanel = document.getElementById(`${p}-bulk-category-panel`);
   if (oldPanel) oldPanel.style.display = 'none';
-  const anchor = document.getElementById(`${p}-bulk-cat-anchor`);
+  const anchor = anchorEl || document.getElementById(`${p}-bulk-cat-anchor`);
   openCategoryPicker(anchor, {
     currentCategory: '',
     allowRemove: false,
