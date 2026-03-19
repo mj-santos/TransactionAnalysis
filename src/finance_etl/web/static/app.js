@@ -66,7 +66,7 @@ function navigate(page) {
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
   if (page === 'accounts')           { loadAccounts(); }
-  if (page === 'utilities')          { loadUtilCategories(); loadUtilMerchants(); loadUtilDuplicates(); loadUtilHealth(); }
+  if (page === 'utilities')          { loadUtilCategories(); loadUtilMerchants(); loadUtilDuplicates(); loadUtilHealth(); _showImproveStats(); }
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -8423,6 +8423,151 @@ function onboardingGo(page) {
 }
 
 // ── Utilities Tab ─────────────────────────────────────────────
+
+// ── Improve My Data ───────────────────────────────────────────
+
+async function improveMyData() {
+  const btn = document.getElementById('improve-run-btn');
+  const statusEl = document.getElementById('improve-status');
+  const labelEl = document.getElementById('improve-status-label');
+  const fillEl = document.getElementById('improve-progress-fill');
+  const resultEl = document.getElementById('improve-result');
+
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  statusEl.style.display = 'block';
+  resultEl.textContent = '';
+  fillEl.style.width = '0%';
+  labelEl.textContent = 'Starting normalization job…';
+
+  const _done = (ok, label, detail) => {
+    labelEl.textContent = label;
+    if (detail) resultEl.innerHTML = detail;
+    btn.disabled = false;
+    btn.textContent = '⚡ Improve My Data';
+    if (ok) _showImproveStats();
+  };
+
+  let jobId;
+  try {
+    const res = await api('POST', '/normalize/apply', {});
+    if (res.status === 'success') {
+      fillEl.style.width = '100%';
+      _done(true, '✓ Complete', `Updated ${res.transactions_updated ?? 0} transactions.`);
+      return;
+    }
+    jobId = res.job_id;
+  } catch (err) {
+    _done(false, '✗ Failed to start job', err.message);
+    return;
+  }
+
+  // Poll until done — max 500 attempts (~10 min at 1200ms), stop after 5 consecutive errors
+  let attempts = 0, consecutiveErrors = 0;
+  const MAX_ATTEMPTS = 500, MAX_ERRORS = 5;
+
+  const poll = setInterval(async () => {
+    if (++attempts > MAX_ATTEMPTS) {
+      clearInterval(poll);
+      _done(false, '✗ Timed out', 'Job is taking too long. Check the History tab for status.');
+      return;
+    }
+    try {
+      const job = await api('GET', `/normalize/${jobId}`);
+      consecutiveErrors = 0;
+      const total = job.rows_total || 0;
+      const done = job.rows_done || 0;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      fillEl.style.width = pct + '%';
+      labelEl.textContent = total > 0
+        ? `Processing… ${done.toLocaleString()} / ${total.toLocaleString()} transactions`
+        : 'Processing…';
+
+      if (job.status === 'success') {
+        clearInterval(poll);
+        fillEl.style.width = '100%';
+        const viewLink = `<a href="#" onclick="event.preventDefault();navigate('cc');" style="color:var(--primary);">View transactions →</a>`;
+        _done(true, '✓ Complete',
+          `Applied all rules to ${done.toLocaleString()} transactions. ${viewLink}`);
+        toast('Data improved — all rules applied.', 'success');
+      } else if (job.status === 'error' || job.status === 'failed') {
+        clearInterval(poll);
+        _done(false, '✗ Job failed', job.error || 'Unknown error.');
+      }
+    } catch (_) {
+      if (++consecutiveErrors >= MAX_ERRORS) {
+        clearInterval(poll);
+        _done(false, '✗ Connection lost', 'Could not reach the server. Try again.');
+      }
+    }
+  }, 1200);
+}
+
+async function exportLearning() {
+  try {
+    const resp = await fetch('/learning/export');
+    if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+    const blob = await resp.blob();
+    const cd = resp.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : 'spendly_learning.json';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    toast('Learning exported.', 'success');
+  } catch (err) {
+    toast('Export failed: ' + err.message, 'error');
+  }
+}
+
+async function importLearning(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/learning/import', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+
+    if (data.total_added === 0) {
+      toast('Nothing new — all rules in this file already exist in your database.', 'info');
+    } else {
+      const parts = [];
+      if (data.merchant_rules_added)       parts.push(`${data.merchant_rules_added} merchant rules`);
+      if (data.merchant_category_map_added) parts.push(`${data.merchant_category_map_added} category assignments`);
+      if (data.category_rules_added)        parts.push(`${data.category_rules_added} category rules`);
+      if (data.custom_categories_added)     parts.push(`${data.custom_categories_added} custom categories`);
+      toast(`Imported: ${parts.join(', ')}. Click "Improve My Data" to apply.`, 'success');
+    }
+    _showImproveStats();
+  } catch (err) {
+    toast('Import failed: ' + err.message, 'error');
+  }
+}
+
+async function _showImproveStats() {
+  const statsEl = document.getElementById('improve-stats');
+  const gridEl = document.getElementById('improve-stats-grid');
+  if (!statsEl || !gridEl) return;
+  try {
+    const s = await api('GET', '/learning/stats');
+    const items = [
+      { label: 'Merchant Rules',      value: s.merchant_rules },
+      { label: 'Known Merchants',     value: s.merchant_category_map },
+      { label: 'Assigned Merchants',  value: s.merchants_assigned },
+      { label: 'Categories',          value: s.built_in_categories + s.custom_categories },
+    ];
+    gridEl.innerHTML = items.map(i => `
+      <div class="improve-stat-card">
+        <div class="improve-stat-value">${i.value.toLocaleString()}</div>
+        <div class="improve-stat-label">${i.label}</div>
+      </div>`).join('');
+    statsEl.style.display = 'block';
+  } catch (_) { /* non-fatal */ }
+}
 
 // -- Shared: populate all category-parent <select> elements from a parents list --
 let _knownParents = [];

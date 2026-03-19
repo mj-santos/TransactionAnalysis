@@ -6447,6 +6447,299 @@ No cloud services, no external dependencies — all data stays on your machine.
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    # -----------------------------------------------------------------------
+    # Learning export / import  (rules + category map only — no transaction PII)
+    # -----------------------------------------------------------------------
+
+    LEARNING_VERSION = 1
+
+    @app.get("/learning/export", tags=["learning"],
+             summary="Export merchant rules, category map, and normalization logic as JSON")
+    def export_learning():
+        """
+        Export the full 'learning layer' — merchant normalization rules,
+        merchant→category assignments, category normalization rules,
+        custom categories, and a snapshot of the built-in category map.
+
+        The result is a focused, shareable JSON file with no transaction data.
+        It can be imported into another Spendly instance or fed to an AI to
+        suggest new rules.
+        """
+        from fastapi.responses import Response as FastAPIResponse
+        import datetime as _dt
+        from finance_etl.category_rules import BUILT_IN_CATEGORY_MAP
+        from finance_etl.db import get_connection as _gc
+
+        try:
+            conn = _gc(db_path, read_only=True)
+            try:
+                merchant_rules_rows = _rows_to_dicts(conn.execute(
+                    "SELECT id, pattern, match_type, merchant, priority, "
+                    "conditions, logic, created_at, updated_at FROM merchant_rules "
+                    "ORDER BY priority DESC, id ASC"
+                ))
+                category_map_rows = _rows_to_dicts(conn.execute(
+                    "SELECT merchant, category, source, updated_at FROM merchant_category_map "
+                    "ORDER BY merchant"
+                ))
+                category_rules_rows = _rows_to_dicts(conn.execute(
+                    "SELECT id, pattern, match_type, category, parent, priority, "
+                    "conditions, logic FROM category_rules ORDER BY priority DESC, id ASC"
+                ))
+                custom_categories_rows = _rows_to_dicts(conn.execute(
+                    "SELECT subcategory, parent, created_at FROM custom_categories "
+                    "ORDER BY parent, subcategory"
+                ))
+            finally:
+                conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Learning export failed: {exc}") from exc
+
+        # Parse conditions JSON strings to objects for readability
+        import json as _json
+        for row in merchant_rules_rows + category_rules_rows:
+            if row.get("conditions") and isinstance(row["conditions"], str):
+                try:
+                    row["conditions"] = _json.loads(row["conditions"])
+                except Exception:
+                    pass
+
+        built_in_snapshot = {
+            raw: list(val) for raw, val in BUILT_IN_CATEGORY_MAP.items()
+        }
+
+        payload = {
+            "learning_version": LEARNING_VERSION,
+            "created_at": _dt.datetime.utcnow().isoformat() + "Z",
+            "app_version": "2.64.0",
+            "counts": {
+                "merchant_rules": len(merchant_rules_rows),
+                "merchant_category_map": len(category_map_rows),
+                "category_rules": len(category_rules_rows),
+                "custom_categories": len(custom_categories_rows),
+                "built_in_category_map": len(built_in_snapshot),
+            },
+            "merchant_rules": merchant_rules_rows,
+            "merchant_category_map": category_map_rows,
+            "category_rules": category_rules_rows,
+            "custom_categories": custom_categories_rows,
+            "built_in_category_map": built_in_snapshot,
+        }
+
+        ts = _dt.datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+        body = _json.dumps(payload, indent=2, default=str).encode("utf-8")
+        return FastAPIResponse(
+            content=body,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="spendly_learning_{ts}.json"'},
+        )
+
+    @app.post("/learning/import", tags=["learning"],
+              summary="Merge a learning export into the current DB (non-destructive)",
+              status_code=200)
+    async def import_learning(file: UploadFile = File(...)):
+        """
+        Merge a previously exported learning JSON into the current database.
+
+        Merge rules:
+        - Merchant rules: appended if pattern+match_type+merchant combo doesn't exist.
+        - Merchant category map: user-source entries are never overwritten.
+          Incoming 'user' entries upgrade existing 'learned' entries.
+        - Category rules: appended if no matching pattern+match_type+category combo.
+        - Custom categories: inserted if subcategory+parent not already present.
+        - built_in_category_map in the file is informational only — ignored.
+
+        All writes are in a single transaction; any failure rolls back entirely.
+        """
+        import json as _json
+        import datetime as _dt
+        from finance_etl.db import get_connection as _gc
+
+        _MAX_BYTES = 20 * 1024 * 1024  # 20 MB guard
+        raw = await file.read(_MAX_BYTES + 1)
+        if len(raw) > _MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Learning file exceeds 20 MB limit.")
+        try:
+            payload = _json.loads(raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid JSON file.")
+
+        if payload.get("learning_version") is None:
+            raise HTTPException(status_code=400, detail="Not a valid learning export (missing learning_version).")
+
+        now = _dt.datetime.utcnow().isoformat()
+        result = {
+            "merchant_rules_added": 0,
+            "merchant_category_map_added": 0,
+            "merchant_category_map_skipped": 0,
+            "category_rules_added": 0,
+            "custom_categories_added": 0,
+        }
+
+        conn = _gc(db_path)
+        try:
+            conn.execute("BEGIN")
+
+            # ── Merchant rules ────────────────────────────────────────────
+            existing_rules = {
+                (r[0].lower(), r[1], r[2])
+                for r in conn.execute(
+                    "SELECT pattern, match_type, merchant FROM merchant_rules"
+                ).fetchall()
+            }
+            new_rules = []
+            for rule in payload.get("merchant_rules", []):
+                key = (rule["pattern"].lower(), rule["match_type"], rule["merchant"])
+                if key not in existing_rules:
+                    conditions_json = (
+                        _json.dumps(rule["conditions"]) if rule.get("conditions") else None
+                    )
+                    new_rules.append([
+                        rule["pattern"], rule["match_type"], rule["merchant"],
+                        rule.get("priority", 10), conditions_json,
+                        rule.get("logic", "AND"), now, now,
+                    ])
+                    existing_rules.add(key)
+            if new_rules:
+                conn.executemany(
+                    "INSERT INTO merchant_rules "
+                    "(pattern, match_type, merchant, priority, conditions, logic, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    new_rules,
+                )
+                result["merchant_rules_added"] = len(new_rules)
+
+            # ── Merchant category map ─────────────────────────────────────
+            existing_map = {
+                r[0].lower(): r[1]
+                for r in conn.execute(
+                    "SELECT merchant, source FROM merchant_category_map"
+                ).fetchall()
+            }
+            new_entries, upgrade_entries = [], []
+            for entry in payload.get("merchant_category_map", []):
+                merchant_lc = entry["merchant"].lower()
+                incoming_source = entry.get("source", "learned")
+                if merchant_lc not in existing_map:
+                    new_entries.append([entry["merchant"], entry["category"], incoming_source, now])
+                    existing_map[merchant_lc] = incoming_source
+                elif existing_map[merchant_lc] == "learned" and incoming_source == "user":
+                    upgrade_entries.append([entry["category"], now, merchant_lc])
+                else:
+                    result["merchant_category_map_skipped"] += 1
+            if new_entries:
+                conn.executemany(
+                    "INSERT INTO merchant_category_map (merchant, category, source, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    new_entries,
+                )
+            for upg in upgrade_entries:
+                conn.execute(
+                    "UPDATE merchant_category_map SET category=?, source='user', updated_at=? "
+                    "WHERE LOWER(merchant)=?",
+                    upg,
+                )
+            result["merchant_category_map_added"] = len(new_entries) + len(upgrade_entries)
+
+            # ── Category rules ────────────────────────────────────────────
+            existing_cat_rules = {
+                (r[0].lower(), r[1], r[2])
+                for r in conn.execute(
+                    "SELECT pattern, match_type, category FROM category_rules"
+                ).fetchall()
+            }
+            new_cat_rules = []
+            for rule in payload.get("category_rules", []):
+                key = (rule["pattern"].lower(), rule["match_type"], rule["category"])
+                if key not in existing_cat_rules:
+                    conditions_json = (
+                        _json.dumps(rule["conditions"]) if rule.get("conditions") else None
+                    )
+                    new_cat_rules.append([
+                        rule["pattern"], rule["match_type"], rule["category"],
+                        rule.get("parent"), rule.get("priority", 10),
+                        conditions_json, rule.get("logic", "AND"),
+                    ])
+                    existing_cat_rules.add(key)
+            if new_cat_rules:
+                conn.executemany(
+                    "INSERT INTO category_rules "
+                    "(pattern, match_type, category, parent, priority, conditions, logic) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    new_cat_rules,
+                )
+                result["category_rules_added"] = len(new_cat_rules)
+
+            # ── Custom categories ─────────────────────────────────────────
+            existing_custom = {
+                (r[0].lower(), r[1].lower())
+                for r in conn.execute(
+                    "SELECT subcategory, parent FROM custom_categories"
+                ).fetchall()
+            }
+            new_custom = []
+            for cat in payload.get("custom_categories", []):
+                key = (cat["subcategory"].lower(), cat["parent"].lower())
+                if key not in existing_custom:
+                    new_custom.append([cat["subcategory"], cat["parent"], now])
+                    existing_custom.add(key)
+            if new_custom:
+                conn.executemany(
+                    "INSERT INTO custom_categories (subcategory, parent, created_at) VALUES (?, ?, ?)",
+                    new_custom,
+                )
+                result["custom_categories_added"] = len(new_custom)
+
+            conn.execute("COMMIT")
+        except Exception as exc:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=f"Learning import failed: {exc}") from exc
+        finally:
+            conn.close()
+
+        total_added = (
+            result["merchant_rules_added"]
+            + result["merchant_category_map_added"]
+            + result["category_rules_added"]
+            + result["custom_categories_added"]
+        )
+        return {"status": "ok", "total_added": total_added, **result}
+
+    @app.get("/learning/stats", tags=["learning"],
+             summary="Return counts of all learning tables in a single query")
+    def get_learning_stats():
+        """
+        Return pre-computed counts for all learning tables.
+        Used by the Improve My Data card to avoid fetching full table contents.
+        """
+        from finance_etl.db import get_connection as _gc
+        from finance_etl.category_rules import BUILT_IN_CATEGORY_MAP
+
+        conn = _gc(db_path, read_only=True)
+        try:
+            row = conn.execute("""
+                SELECT
+                    (SELECT COUNT(*) FROM merchant_rules) AS merchant_rules,
+                    (SELECT COUNT(*) FROM merchant_category_map) AS merchant_category_map,
+                    (SELECT COUNT(*) FROM merchant_category_map WHERE category IS NOT NULL) AS merchants_assigned,
+                    (SELECT COUNT(*) FROM category_rules) AS category_rules,
+                    (SELECT COUNT(*) FROM custom_categories) AS custom_categories
+            """).fetchone()
+        finally:
+            conn.close()
+
+        return {
+            "merchant_rules": row[0],
+            "merchant_category_map": row[1],
+            "merchants_assigned": row[2],
+            "category_rules": row[3],
+            "custom_categories": row[4],
+            "built_in_categories": len(BUILT_IN_CATEGORY_MAP),
+        }
+
     @app.post("/backup/restore", tags=["backup"],
               summary="Restore user data from a JSON backup (v1 or v2)",
               status_code=200)

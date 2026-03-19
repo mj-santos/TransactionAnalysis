@@ -1492,6 +1492,24 @@ tr.unreviewed-row {
   flex: 1;
 }
 .bulk-check { width: 16px; height: 16px; cursor: pointer; accent-color: var(--primary); }
+/* Improve My Data stat cards */
+.improve-stat-card {
+  background: var(--bg-alt, #f8f9fa);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.improve-stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--primary);
+}
+.improve-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+[data-theme="dark"] .improve-stat-card { background: var(--card-bg); }
 tr.bulk-selected > td {
   background: rgba(59, 130, 246, 0.06);
 }

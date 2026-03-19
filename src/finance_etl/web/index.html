@@ -2908,6 +2908,54 @@
   <!-- ─── UTILITIES PAGE ─── -->
   <section id="page-utilities" class="page">
 
+    <!-- Section 0: Improve My Data -->
+    <div class="card" id="util-card-improve">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title"><span>Improve My Data</span></div>
+        <span class="collapse-arrow">▾</span>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="card-body">
+          <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+            Apply all merchant normalization rules, merchant→category assignments, and category rules
+            to every transaction in your database. Transactions with manual category overrides are preserved.
+          </p>
+
+          <!-- Action buttons row -->
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:16px;">
+            <button class="btn btn-primary" id="improve-run-btn" onclick="improveMyData()">
+              ⚡ Improve My Data
+            </button>
+            <button class="btn btn-secondary" onclick="exportLearning()">
+              ↓ Export Learning
+            </button>
+            <label class="btn btn-secondary" style="cursor:pointer; margin:0;">
+              ↑ Import Learning
+              <input type="file" accept=".json" style="display:none;" onchange="importLearning(this)">
+            </label>
+          </div>
+
+          <!-- Progress / status area -->
+          <div id="improve-status" style="display:none;">
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+              <span id="improve-status-label" style="font-size:13px; font-weight:500;"></span>
+            </div>
+            <div style="background:var(--border); border-radius:4px; height:6px; overflow:hidden; margin-bottom:8px;">
+              <div id="improve-progress-fill"
+                   style="height:100%; width:0%; background:var(--primary); border-radius:4px; transition:width 0.3s ease;"></div>
+            </div>
+            <div id="improve-result" style="font-size:12px; color:var(--text-muted);"></div>
+          </div>
+
+          <!-- Learning stats -->
+          <div id="improve-stats" style="display:none; margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+            <div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">Current learning snapshot</div>
+            <div id="improve-stats-grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Section 1: Category List -->
     <div class="card" id="util-card-categories">
       <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
