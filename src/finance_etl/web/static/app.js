@@ -8177,12 +8177,23 @@ function openCategoryPicker(targetEl, options = {}) {
     <input type="text" class="cat-picker-input" value="${esc(current)}"
            placeholder="${esc(placeholder)}" autocomplete="off"
            style="width:160px; padding:3px 6px; font-size:12px; border:1px solid var(--primary); border-radius:4px;" />
-    <div class="cat-picker-dropdown" style="display:none;"></div>
   </div>`;
 
   const wrap = targetEl.querySelector('.cat-picker-inline');
   const input = wrap.querySelector('.cat-picker-input');
-  const dd = wrap.querySelector('.cat-picker-dropdown');
+
+  // Portal dropdown appended to body to escape any overflow:hidden ancestors
+  const dd = document.createElement('div');
+  dd.className = 'cat-picker-dropdown';
+  dd.style.cssText = 'display:none; position:fixed; z-index:9999;';
+  document.body.appendChild(dd);
+
+  function _positionDd() {
+    const r = input.getBoundingClientRect();
+    dd.style.left = r.left + 'px';
+    dd.style.top = (r.bottom + 2) + 'px';
+    dd.style.minWidth = Math.max(r.width, 220) + 'px';
+  }
 
   function renderOptions(query) {
     _ensureCategoryTaxonomy().then(cats => {
@@ -8201,6 +8212,7 @@ function openCategoryPicker(targetEl, options = {}) {
         html += `<div class="cat-picker-option cat-picker-remove" style="color:var(--danger); border-top:1px solid var(--border);">— Remove Category —</div>`;
       }
       dd.innerHTML = html || '<div style="padding:6px 8px; color:var(--text-muted); font-size:11px;">No matches</div>';
+      _positionDd();
       dd.style.display = 'block';
 
       // Attach click handlers
@@ -8257,6 +8269,7 @@ function openCategoryPicker(targetEl, options = {}) {
 
   function cleanup() {
     targetEl.innerHTML = originalHTML;
+    if (dd.parentNode) dd.parentNode.removeChild(dd);
     document.removeEventListener('keydown', escHandler);
     document.removeEventListener('mousedown', outsideHandler);
   }
@@ -8270,7 +8283,7 @@ function openCategoryPicker(targetEl, options = {}) {
   }
 
   function outsideHandler(e) {
-    if (!wrap.contains(e.target)) { cancel(); }
+    if (!wrap.contains(e.target) && !dd.contains(e.target)) { cancel(); }
   }
 
   input.addEventListener('input', () => renderOptions(input.value));
