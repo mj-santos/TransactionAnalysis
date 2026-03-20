@@ -984,17 +984,21 @@ function _updateFpValVisibility() {
 }
 
 document.addEventListener('change', e => {
-  if (e.target?.id === 'fp-op') _updateFpValVisibility();
+  if (e.target?.id === 'fp-op') _updateFpValInput();
 });
 
 // ── Filter options cache (populated from /reports/filter-options) ──────────
-let _filterOptions = { years: [], category: [], category_parent: [],
-                       bank_name: [], account_name: [], currency: [], merchant: [] };
+let _filterOptions = { years: [], category: [], category_normalized: [],
+                       category_parent: [], bank_name: [], account_name: [],
+                       currency: [], merchant: [] };
 
 async function _loadReportFilterOptions() {
   try {
     _filterOptions = await api('GET', '/reports/filter-options');
     _renderYearButtons();
+    // Re-initialize popover inputs if it's currently open
+    if (document.getElementById('filter-popover')?.style.display !== 'none')
+      _updateFpFieldType();
   } catch { /* non-fatal — falls back to free-text */ }
 }
 
@@ -1003,10 +1007,20 @@ function _renderYearButtons() {
   if (!el) return;
   const years = _filterOptions.years || [];
   el.innerHTML =
-    `<button class="date-preset-btn" onclick="_setReportDatePreset('all', this)">All years</button>` +
+    `<button class="date-preset-btn" onclick="_clearReportDateRange(this)">All years</button>` +
     years.map(y =>
       `<button class="date-preset-btn" data-year="${y}" onclick="_setReportYear(${y}, this)">${y}</button>`
     ).join('');
+}
+
+function _clearReportDateRange(btn) {
+  document.querySelectorAll('.date-preset-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const f = document.getElementById('report-date-from');
+  const t = document.getElementById('report-date-to');
+  if (f) f.value = '';
+  if (t) t.value = '';
+  _rawDataCacheKey = null;
 }
 
 function _setReportYear(year, btn) {
@@ -1021,15 +1035,16 @@ function _setReportYear(year, btn) {
 
 // Field-type metadata for smart operator + input rendering
 const _FP_TYPE = {
-  category:           'select',
-  category_parent:    'select',
-  bank_name:          'select',
-  account_name:       'select',
-  currency:           'select',
-  merchant:           'text',
-  description:        'text',
-  amount:             'number',
-  transaction_date:   'date',
+  category:             'select',
+  category_normalized:  'select',
+  category_parent:      'select',
+  bank_name:            'select',
+  account_name:         'select',
+  currency:             'select',
+  merchant:             'text',
+  description:          'text',
+  amount:               'number',
+  transaction_date:     'date',
 };
 const _FP_OPS = {
   select: [['=','equals'],['!=','excludes'],['in','is one of'],['is_null','is empty'],['not_null','is not empty']],

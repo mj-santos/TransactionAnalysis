@@ -881,6 +881,7 @@
                 <label>Field
                   <select id="fp-field" onchange="_updateFpFieldType()">
                     <option value="category">Category</option>
+                    <option value="category_normalized">Category (Normalized)</option>
                     <option value="category_parent">Category (Parent)</option>
                     <option value="merchant">Merchant</option>
                     <option value="bank_name">Bank</option>
@@ -892,7 +893,7 @@
                   </select>
                 </label>
                 <label>Operator
-                  <select id="fp-op" onchange="_updateFpValVisibility()">
+                  <select id="fp-op" onchange="_updateFpValInput()">
                     <option value="=">equals</option>
                     <option value="!=">excludes</option>
                     <option value="contains">contains</option>

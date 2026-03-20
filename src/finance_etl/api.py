@@ -3003,31 +3003,41 @@ No cloud services, no external dependencies — all data stays on your machine.
         try:
             conn = get_connection(db_path, read_only=True)
 
-            def _distinct(expr: str) -> list:
+            def _simple_distinct(col: str) -> list:
                 rows = conn.execute(
-                    f"SELECT DISTINCT {expr} AS v FROM transactions_norm "
-                    f"WHERE {expr} IS NOT NULL AND CAST({expr} AS VARCHAR) <> '' "
-                    f"ORDER BY v"
+                    f"SELECT v FROM (SELECT DISTINCT {col} AS v FROM transactions_norm) t "
+                    f"WHERE v IS NOT NULL AND CAST(v AS VARCHAR) <> '' ORDER BY v"
                 ).fetchall()
                 return [r[0] for r in rows]
 
-            years = conn.execute(
-                "SELECT DISTINCT EXTRACT(YEAR FROM transaction_date)::INTEGER AS y "
+            years_raw = conn.execute(
+                "SELECT DISTINCT YEAR(transaction_date) AS y "
                 "FROM transactions_norm WHERE transaction_date IS NOT NULL ORDER BY y DESC"
             ).fetchall()
+            years = [int(r[0]) for r in years_raw if r[0] is not None]
+
+            cats_raw = conn.execute(
+                "SELECT v FROM ("
+                "  SELECT DISTINCT COALESCE(category_normalized, category) AS v"
+                "  FROM transactions_norm"
+                ") t WHERE v IS NOT NULL AND v <> '' ORDER BY v"
+            ).fetchall()
+            categories = [r[0] for r in cats_raw]
 
             return {
-                "years":            [r[0] for r in years if r[0] is not None],
-                "category":         _distinct("COALESCE(category_normalized, category)"),
-                "category_parent":  _distinct("category_parent"),
-                "bank_name":        _distinct("bank_name"),
-                "account_name":     _distinct("account_name"),
-                "currency":         _distinct("currency"),
-                "merchant":         _distinct("merchant"),
+                "years":               years,
+                "category":            categories,
+                "category_normalized": categories,
+                "category_parent":     _simple_distinct("category_parent"),
+                "bank_name":           _simple_distinct("bank_name"),
+                "account_name":        _simple_distinct("account_name"),
+                "currency":            _simple_distinct("currency"),
+                "merchant":            _simple_distinct("merchant"),
             }
         except Exception:
-            return {"years": [], "category": [], "category_parent": [],
-                    "bank_name": [], "account_name": [], "currency": [], "merchant": []}
+            return {"years": [], "category": [], "category_normalized": [],
+                    "category_parent": [], "bank_name": [], "account_name": [],
+                    "currency": [], "merchant": []}
         finally:
             if conn:
                 try:
