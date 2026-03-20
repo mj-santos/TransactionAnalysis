@@ -879,35 +879,33 @@
               <!-- Filter popover -->
               <div class="filter-popover" id="filter-popover" style="display:none; top:34px; left:0;">
                 <label>Field
-                  <select id="fp-field">
-                    <option value="transaction_date">Transaction Date</option>
-                    <option value="description">Description</option>
-                    <option value="merchant">Merchant</option>
+                  <select id="fp-field" onchange="_updateFpFieldType()">
                     <option value="category">Category</option>
-                    <option value="category_normalized">Category (Normalized)</option>
                     <option value="category_parent">Category (Parent)</option>
-                    <option value="amount">Amount</option>
-                    <option value="currency">Currency</option>
+                    <option value="merchant">Merchant</option>
                     <option value="bank_name">Bank</option>
                     <option value="account_name">Account</option>
+                    <option value="amount">Amount</option>
+                    <option value="transaction_date">Date</option>
+                    <option value="description">Description</option>
+                    <option value="currency">Currency</option>
                   </select>
                 </label>
                 <label>Operator
-                  <select id="fp-op">
+                  <select id="fp-op" onchange="_updateFpValVisibility()">
                     <option value="=">equals</option>
                     <option value="!=">excludes</option>
                     <option value="contains">contains</option>
                     <option value="not_contains">does not contain</option>
-                    <option value=">=">is greater than or equal</option>
-                    <option value="<=">is less than or equal</option>
-                    <option value="in">is one of (comma-separated)</option>
-                    <option value="between">is between (comma-separated)</option>
+                    <option value="in">is one of</option>
                     <option value="is_null">is empty</option>
                     <option value="not_null">is not empty</option>
                   </select>
                 </label>
                 <label id="fp-val-label">Value
-                  <input type="text" id="fp-val" placeholder="e.g. Food &amp; Dining" />
+                  <div id="fp-val-container">
+                    <input type="text" id="fp-val" placeholder="Value…" />
+                  </div>
                 </label>
                 <div class="filter-popover-actions">
                   <button class="btn btn-secondary btn-sm" onclick="_closeFilterPopover()">Cancel</button>
@@ -964,7 +962,10 @@
                 <button class="date-preset-btn" data-preset="last_month" onclick="_setReportDatePreset('last_month', this)">Last Month</button>
                 <button class="date-preset-btn" data-preset="3months"    onclick="_setReportDatePreset('3months', this)">3 Months</button>
                 <button class="date-preset-btn" data-preset="ytd"        onclick="_setReportDatePreset('ytd', this)">YTD</button>
-                <button class="date-preset-btn" data-preset="all"        onclick="_setReportDatePreset('all', this)">All time</button>
+              </div>
+              <div class="date-presets" id="report-year-btns">
+                <!-- populated by _renderYearButtons() -->
+                <button class="date-preset-btn" onclick="_setReportDatePreset('all', this)">All years</button>
               </div>
               <div style="display:flex; gap:6px; align-items:center;">
                 <input type="date" id="report-date-from" style="padding:4px 7px; border:1px solid var(--border); border-radius:6px; font-size:12px;" oninput="_clearDatePresetHighlight()" />

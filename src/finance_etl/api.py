@@ -2989,6 +2989,53 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {"columns": col_names, "rows": rows, "count": len(rows)}
 
     @app.get(
+        "/reports/filter-options",
+        tags=["reports"],
+        summary="Distinct filterable values for the report builder",
+    )
+    def get_report_filter_options():
+        """
+        Returns distinct values for key filterable columns and all years
+        present in the transaction ledger. Used to populate the filter
+        popover with real data instead of free-text inputs.
+        """
+        conn = None
+        try:
+            conn = get_connection(db_path, read_only=True)
+
+            def _distinct(expr: str) -> list:
+                rows = conn.execute(
+                    f"SELECT DISTINCT {expr} AS v FROM transactions_norm "
+                    f"WHERE {expr} IS NOT NULL AND CAST({expr} AS VARCHAR) <> '' "
+                    f"ORDER BY v"
+                ).fetchall()
+                return [r[0] for r in rows]
+
+            years = conn.execute(
+                "SELECT DISTINCT EXTRACT(YEAR FROM transaction_date)::INTEGER AS y "
+                "FROM transactions_norm WHERE transaction_date IS NOT NULL ORDER BY y DESC"
+            ).fetchall()
+
+            return {
+                "years":            [r[0] for r in years if r[0] is not None],
+                "category":         _distinct("COALESCE(category_normalized, category)"),
+                "category_parent":  _distinct("category_parent"),
+                "bank_name":        _distinct("bank_name"),
+                "account_name":     _distinct("account_name"),
+                "currency":         _distinct("currency"),
+                "merchant":         _distinct("merchant"),
+            }
+        except Exception:
+            return {"years": [], "category": [], "category_parent": [],
+                    "bank_name": [], "account_name": [], "currency": [], "merchant": []}
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    @app.get(
         "/charts/{name}",
         tags=["reports"],
         summary="Get a report as JSON rows (optionally re-grouped)",

@@ -654,6 +654,7 @@ async function loadReports() {
   const grid = document.getElementById('reports-grid');
   grid.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div>Loading…</div>';
   loadSavedReports();
+  _loadReportFilterOptions();
 
   try {
     const data = await api('GET', '/reports');
@@ -966,8 +967,8 @@ function _toggleFilterPopover(e) {
   _closeAllPopovers();
   if (!isOpen) {
     pop.style.display = 'flex';
+    _updateFpFieldType();
     document.getElementById('fp-val')?.focus();
-    _updateFpValVisibility();
   }
 }
 
@@ -986,24 +987,163 @@ document.addEventListener('change', e => {
   if (e.target?.id === 'fp-op') _updateFpValVisibility();
 });
 
+// ── Filter options cache (populated from /reports/filter-options) ──────────
+let _filterOptions = { years: [], category: [], category_parent: [],
+                       bank_name: [], account_name: [], currency: [], merchant: [] };
+
+async function _loadReportFilterOptions() {
+  try {
+    _filterOptions = await api('GET', '/reports/filter-options');
+    _renderYearButtons();
+  } catch { /* non-fatal — falls back to free-text */ }
+}
+
+function _renderYearButtons() {
+  const el = document.getElementById('report-year-btns');
+  if (!el) return;
+  const years = _filterOptions.years || [];
+  el.innerHTML =
+    `<button class="date-preset-btn" onclick="_setReportDatePreset('all', this)">All years</button>` +
+    years.map(y =>
+      `<button class="date-preset-btn" data-year="${y}" onclick="_setReportYear(${y}, this)">${y}</button>`
+    ).join('');
+}
+
+function _setReportYear(year, btn) {
+  document.querySelectorAll('.date-preset-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  const f = document.getElementById('report-date-from');
+  const t = document.getElementById('report-date-to');
+  if (f) f.value = `${year}-01-01`;
+  if (t) t.value = `${year}-12-31`;
+  _rawDataCacheKey = null; // force re-fetch on next Run
+}
+
+// Field-type metadata for smart operator + input rendering
+const _FP_TYPE = {
+  category:           'select',
+  category_parent:    'select',
+  bank_name:          'select',
+  account_name:       'select',
+  currency:           'select',
+  merchant:           'text',
+  description:        'text',
+  amount:             'number',
+  transaction_date:   'date',
+};
+const _FP_OPS = {
+  select: [['=','equals'],['!=','excludes'],['in','is one of'],['is_null','is empty'],['not_null','is not empty']],
+  text:   [['=','equals'],['!=','excludes'],['contains','contains'],['not_contains','does not contain'],['is_null','is empty'],['not_null','is not empty']],
+  number: [['=','equals'],['!=','excludes'],['>=','≥ (greater or equal)'],['<=','≤ (less or equal)'],['between','between'],['is_null','is empty'],['not_null','is not empty']],
+  date:   [['=','on'],['>=','on or after'],['<=','on or before'],['between','between'],['is_null','is empty'],['not_null','is not empty']],
+};
+
+function _updateFpFieldType() {
+  const field = document.getElementById('fp-field')?.value;
+  const type  = _FP_TYPE[field] || 'text';
+
+  // Update operator options
+  const opEl = document.getElementById('fp-op');
+  if (opEl) {
+    opEl.innerHTML = (_FP_OPS[type] || _FP_OPS.text)
+      .map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  }
+  _updateFpValInput();
+}
+
+function _updateFpValInput() {
+  const field = document.getElementById('fp-field')?.value;
+  const op    = document.getElementById('fp-op')?.value;
+  const container = document.getElementById('fp-val-container');
+  const lbl       = document.getElementById('fp-val-label');
+  if (!container) return;
+
+  const noVal = op === 'is_null' || op === 'not_null';
+  if (lbl) lbl.style.display = noVal ? 'none' : '';
+  if (noVal) { container.innerHTML = '<input type="hidden" id="fp-val" value="">'; return; }
+
+  const type = _FP_TYPE[field] || 'text';
+  const opts = _filterOptions[field] || [];
+
+  if (type === 'select' && opts.length) {
+    if (op === 'in') {
+      // Multi-select checklist
+      container.innerHTML = `<div class="fp-checklist" id="fp-val-checklist">
+        <input type="text" class="fp-checklist-search" placeholder="Search…" oninput="_fpChecklistSearch(this)" />
+        <div class="fp-checklist-items">
+          ${opts.map(v => `<label><input type="checkbox" value="${esc(String(v))}"> ${esc(String(v))}</label>`).join('')}
+        </div>
+      </div><input type="hidden" id="fp-val" value="">`;
+    } else {
+      container.innerHTML = `<select id="fp-val" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;">
+        <option value="">— choose —</option>
+        ${opts.map(v => `<option value="${esc(String(v))}">${esc(String(v))}</option>`).join('')}
+      </select>`;
+    }
+  } else if (type === 'number') {
+    if (op === 'between') {
+      container.innerHTML = `<div style="display:flex;gap:6px;align-items:center;">
+        <input type="number" id="fp-val-a" step="0.01" placeholder="Min" style="width:80px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;font-size:13px;">
+        <span style="font-size:12px;color:var(--text-muted);">and</span>
+        <input type="number" id="fp-val-b" step="0.01" placeholder="Max" style="width:80px;padding:5px 7px;border:1px solid var(--border);border-radius:5px;font-size:13px;">
+      </div><input type="hidden" id="fp-val" value="">`;
+    } else {
+      container.innerHTML = `<input type="number" id="fp-val" step="0.01" placeholder="e.g. 50.00" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;">`;
+    }
+  } else if (type === 'date') {
+    if (op === 'between') {
+      container.innerHTML = `<div style="display:flex;gap:6px;align-items:center;">
+        <input type="date" id="fp-val-a" style="padding:4px 7px;border:1px solid var(--border);border-radius:5px;font-size:12px;">
+        <span style="font-size:12px;color:var(--text-muted);">to</span>
+        <input type="date" id="fp-val-b" style="padding:4px 7px;border:1px solid var(--border);border-radius:5px;font-size:12px;">
+      </div><input type="hidden" id="fp-val" value="">`;
+    } else {
+      container.innerHTML = `<input type="date" id="fp-val" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;">`;
+    }
+  } else {
+    container.innerHTML = `<input type="text" id="fp-val" placeholder="Value…" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;">`;
+  }
+}
+
+function _fpChecklistSearch(input) {
+  const q = input.value.toLowerCase();
+  input.closest('.fp-checklist').querySelectorAll('.fp-checklist-items label').forEach(lbl => {
+    lbl.style.display = lbl.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
 function _addFilterChip() {
   const field = document.getElementById('fp-field')?.value;
   const op    = document.getElementById('fp-op')?.value;
-  const val   = document.getElementById('fp-val')?.value?.trim();
   if (!field || !op) return;
-  if (op !== 'is_null' && op !== 'not_null' && !val) {
-    document.getElementById('fp-val')?.focus();
-    return;
+
+  let value;
+  if (op === 'is_null' || op === 'not_null') {
+    value = null;
+  } else if (op === 'in') {
+    // checklist mode — collect checked boxes; fall back to hidden input csv
+    const checks = [...document.querySelectorAll('#fp-val-checklist input[type=checkbox]:checked')];
+    if (checks.length) {
+      value = checks.map(cb => cb.value);
+    } else {
+      const raw = (document.getElementById('fp-val')?.value || '').trim();
+      if (!raw) { toast('Select at least one value.', 'info', 2000); return; }
+      value = raw.split(',').map(s => s.trim()).filter(Boolean);
+    }
+  } else if (op === 'between') {
+    const a = document.getElementById('fp-val-a')?.value?.trim();
+    const b = document.getElementById('fp-val-b')?.value?.trim();
+    if (!a || !b) { toast('Enter both values for "between".', 'info', 2000); return; }
+    value = [a, b];
+  } else {
+    value = (document.getElementById('fp-val')?.value || '').trim();
+    if (!value) { document.getElementById('fp-val')?.focus(); return; }
   }
-  let value = val;
-  if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
-  if (op === 'between') value = val.split(',').map(s => s.trim());
-  if (op === 'is_null' || op === 'not_null') value = null;
+
   _reportFilters.push({ field, op, value });
   _renderFilterChips();
   _renderFilterLogicToggle();
   _closeFilterPopover();
-  if (document.getElementById('fp-val')) document.getElementById('fp-val').value = '';
   if (_rawData) _renderFiltered();
 }
 
@@ -1419,15 +1559,6 @@ const REPORT_FIELD_LABELS = {
   bank_name: 'Bank', account_name: 'Account', account_id: 'Account ID',
 };
 const REPORT_OPS = ['=','contains','>=','<=','is_null','not_null','in','between'];
-
-function toggleCustomReport() {
-  const card = document.getElementById('custom-report-card');
-  card.style.display = card.style.display === 'none' ? '' : 'none';
-}
-
-function onReportStmtTypeChange() {
-  // no-op for now — stmt_type is read at run time from the radio
-}
 
 function _toggleSaveReportPanel() {
   const panel = document.getElementById('save-report-panel');
