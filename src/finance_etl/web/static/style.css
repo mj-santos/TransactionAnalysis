@@ -420,7 +420,7 @@ tbody td { padding: 10px 14px; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   margin-bottom: 16px;
-  overflow: hidden;
+  overflow: visible; /* must NOT be hidden — filter/group-by popovers are position:absolute children */
 }
 .report-builder-header {
   display: flex;
@@ -429,6 +429,7 @@ tbody td { padding: 10px 14px; }
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-alt);
+  border-radius: var(--radius) var(--radius) 0 0; /* round top corners since parent overflow is now visible */
 }
 .report-builder-header h3 {
   font-size: 13px;
