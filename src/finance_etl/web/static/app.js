@@ -663,25 +663,18 @@ async function loadReports() {
     }
     grid.innerHTML = data.reports.map(name => {
       const meta = REPORT_META[name] || { icon: '📄', desc: '' };
+      const label = name.replace('.csv', '').replace(/_/g, ' ');
+      const menuHtml = `
+        <button onclick="event.stopPropagation();editReport('${esc(name)}')">✏ Use as template</button>
+        <button onclick="event.stopPropagation();window.location='/reports/${esc(name)}'">⬇ Download CSV</button>`.replace(/"/g, '&quot;');
       return `
-        <div class="report-card" onclick="viewChart('${esc(name)}')">
+        <div class="report-card" onclick="viewChart('${esc(name)}')"
+             data-menu-html="${menuHtml}">
+          <button class="rc-menu-btn" onclick="_toggleRcMenu('${esc(name)}',event)" title="More options">⋯</button>
           <div class="rc-icon">${meta.icon}</div>
-          <div class="rc-name">${esc(name.replace('.csv', '').replace(/_/g, ' '))}</div>
-          <div class="rc-desc">${meta.desc}</div>
-          <div class="rc-actions">
-            <a class="btn btn-secondary btn-sm" href="/reports/${esc(name)}" download onclick="event.stopPropagation()">
-              ↓ Download
-            </a>
-            <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); editReport('${esc(name)}')" title="Open as template in Custom Report Builder">
-              ✏ Edit report
-            </button>
-            <a class="btn btn-secondary btn-sm" href="/docs#tag/reports" target="_blank" onclick="event.stopPropagation()" title="Open report documentation in new tab">
-              ℹ Info
-            </a>
-            <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); viewChart('${esc(name)}')">
-              Preview
-            </button>
-          </div>
+          <div class="rc-name">${esc(label)}</div>
+          <div class="rc-desc">${esc(meta.desc)}</div>
+          <div class="rc-open-hint">Click to open →</div>
         </div>`;
     }).join('');
   } catch (err) {
@@ -701,21 +694,23 @@ async function loadSavedReports() {
     if (!reports.length) { section.style.display = 'none'; return; }
     section.style.display = '';
     grid.innerHTML = reports.map(r => {
-      const typeBadge = r.stmt_type === 'credit_card' ? '💳 Credit Cards'
+      const typeBadge = r.stmt_type === 'credit_card' ? '💳 CC'
                       : r.stmt_type === 'bank'         ? '🏦 Bank'
                       : '📊 Both';
       const updated = r.updated_at ? new Date(r.updated_at).toLocaleDateString() : '';
-      return `<div class="report-card">
+      const menuHtml = `
+        <button onclick="event.stopPropagation();_editSavedReport(${r.id})">✏ Edit</button>
+        <button class="rc-dd-danger" onclick="event.stopPropagation();_deleteSavedReport(${r.id},'${esc(r.name).replace(/'/g,"\\'")}')">🗑 Delete</button>
+      `.replace(/"/g, '&quot;');
+      return `<div class="report-card" onclick="_runSavedReport(${r.id})"
+                   data-menu-html="${menuHtml}">
+        <button class="rc-menu-btn" onclick="_toggleRcMenu(${r.id},event)" title="More options">⋯</button>
         <div class="rc-icon">📋</div>
         <div class="rc-name">${esc(r.name)}</div>
         <div class="rc-desc">${esc(r.description || '')}
-          <span style="font-size:10px; color:var(--text-muted); display:block; margin-top:2px;">${esc(typeBadge)}${updated ? ' · ' + updated : ''}</span>
+          <span style="font-size:10px;color:var(--text-muted);display:block;margin-top:3px;">${esc(typeBadge)}${updated ? ' · ' + updated : ''}</span>
         </div>
-        <div class="rc-actions">
-          <button class="btn btn-primary btn-sm" onclick="_runSavedReport(${r.id})">▶ Run</button>
-          <button class="btn btn-secondary btn-sm" onclick="_editSavedReport(${r.id})">✏ Edit</button>
-          <button class="btn btn-secondary btn-sm" style="color:var(--danger);" onclick="_deleteSavedReport(${r.id}, '${esc(r.name).replace(/'/g,"\\'")}')">🗑</button>
-        </div>
+        <div class="rc-open-hint">Click to run →</div>
       </div>`;
     }).join('');
   } catch (err) {
@@ -724,33 +719,17 @@ async function loadSavedReports() {
 }
 
 function _loadSavedReportIntoBuilder(r) {
-  import_json = typeof r.filters_json === 'string' ? JSON.parse(r.filters_json || '[]') : (r.filters_json || []);
+  const filters  = typeof r.filters_json  === 'string' ? JSON.parse(r.filters_json  || '[]') : (r.filters_json  || []);
   const group_by = typeof r.group_by_json === 'string' ? JSON.parse(r.group_by_json || '[]') : (r.group_by_json || []);
-  const card = document.getElementById('custom-report-card');
-  card.style.display = '';
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  document.querySelectorAll('input[name="report-stmt-type"]').forEach(radio => {
-    radio.checked = (radio.value === (r.stmt_type || 'both'));
+  _loadStateIntoBuilder({
+    filters, group_by,
+    bucket:    r.bucket    || '',
+    date_from: r.date_from || null,
+    date_to:   r.date_to   || null,
+    stmt_type: r.stmt_type || 'both',
   });
-  document.getElementById('report-filter-rows').innerHTML = '';
-  import_json.forEach(f => {
-    addReportFilter();
-    const rows = document.getElementById('report-filter-rows').children;
-    const last = rows[rows.length - 1];
-    if (last) {
-      const fld = last.querySelector('.rf-field');
-      const op  = last.querySelector('.rf-op');
-      const val = last.querySelector('.rf-val');
-      if (fld) fld.value = f.field || '';
-      if (op)  op.value  = f.op    || '=';
-      if (val) val.value = Array.isArray(f.value) ? f.value.join(', ') : (f.value ?? '');
-    }
-  });
-  const groupSel = document.getElementById('report-group-by');
-  [...groupSel.options].forEach(o => { o.selected = group_by.includes(o.value); });
-  document.getElementById('report-bucket').value = r.bucket || '';
-  if (r.date_from) document.getElementById('report-date-from').value = r.date_from;
-  if (r.date_to)   document.getElementById('report-date-to').value   = r.date_to;
+  document.getElementById('custom-report-card')
+    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 async function _runSavedReport(id) {
@@ -897,38 +876,242 @@ function closeChart() {
 }
 
 function editReport(name) {
-  // Open custom report builder pre-filled as template from built-in report
-  const card = document.getElementById('custom-report-card');
-  card.style.display = '';
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
   const tmpl = REPORT_TEMPLATES[name] || { group_by: [], bucket: null, filters: [] };
-
-  // Clear and rebuild filters
-  document.getElementById('report-filter-rows').innerHTML = '';
-  tmpl.filters.forEach(f => {
-    addReportFilter();
-    const rows = document.getElementById('report-filter-rows').children;
-    const last = rows[rows.length - 1];
-    if (last) {
-      const fld = last.querySelector('.rf-field');
-      const op  = last.querySelector('.rf-op');
-      const val = last.querySelector('.rf-val');
-      if (fld) fld.value = f.field;
-      if (op)  op.value  = f.op;
-      if (val) val.value = f.value ?? '';
-    }
+  _loadStateIntoBuilder({
+    filters:   tmpl.filters  || [],
+    group_by:  tmpl.group_by || [],
+    bucket:    tmpl.bucket   || '',
+    date_from: null,
+    date_to:   null,
+    stmt_type: 'both',
   });
-
-  // Set group-by selections
-  const groupSel = document.getElementById('report-group-by');
-  [...groupSel.options].forEach(o => { o.selected = tmpl.group_by.includes(o.value); });
-
-  // Set bucket
-  document.getElementById('report-bucket').value = tmpl.bucket || '';
+  document.getElementById('custom-report-card')
+    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // ── Custom report builder ──────────────────────────────────────
+// Filter chip state — array of {field, op, value} objects
+let _reportFilters = [];
+
+const _OP_LABELS = {
+  '=':           'equals',
+  '!=':          'excludes',
+  'contains':    'contains',
+  'not_contains':'does not contain',
+  '>=':          '≥',
+  '<=':          '≤',
+  'in':          'is one of',
+  'between':     'between',
+  'is_null':     'is empty',
+  'not_null':    'is not empty',
+};
+
+const _FIELD_LABELS = {
+  transaction_date:   'Date',
+  description:        'Description',
+  merchant:           'Merchant',
+  category:           'Category',
+  category_normalized:'Category (Norm.)',
+  category_parent:    'Category (Parent)',
+  amount:             'Amount',
+  currency:           'Currency',
+  bank_name:          'Bank',
+  account_name:       'Account',
+};
+
+function _renderFilterChips() {
+  const bar = document.getElementById('report-filter-chips');
+  const clearBtn = document.getElementById('clear-filters-btn');
+  if (!bar) return;
+  if (!_reportFilters.length) {
+    bar.innerHTML = '<span class="filter-chip-empty">No filters — showing all transactions</span>';
+    if (clearBtn) clearBtn.style.display = 'none';
+    return;
+  }
+  if (clearBtn) clearBtn.style.display = '';
+  bar.innerHTML = _reportFilters.map((f, i) => {
+    const fieldLabel = _FIELD_LABELS[f.field] || f.field;
+    const opLabel    = _OP_LABELS[f.op] || f.op;
+    const isExclude  = f.op === '!=' || f.op === 'not_contains' || f.op === 'not_null';
+    const valText    = (f.op === 'is_null' || f.op === 'not_null') ? ''
+                     : Array.isArray(f.value) ? f.value.join(', ')
+                     : ` "${f.value}"`;
+    const cls = isExclude ? 'filter-chip fc-exclude' : 'filter-chip';
+    return `<span class="${cls}">
+      <span>${esc(fieldLabel)} ${esc(opLabel)}${esc(valText)}</span>
+      <button class="fc-remove" onclick="_removeFilterChip(${i})" title="Remove filter">×</button>
+    </span>`;
+  }).join('');
+}
+
+function _removeFilterChip(idx) {
+  _reportFilters.splice(idx, 1);
+  _renderFilterChips();
+}
+
+function _clearAllFilters() {
+  _reportFilters = [];
+  _renderFilterChips();
+}
+
+function _toggleFilterPopover(e) {
+  e.stopPropagation();
+  const pop = document.getElementById('filter-popover');
+  if (!pop) return;
+  const isOpen = pop.style.display !== 'none';
+  _closeAllPopovers();
+  if (!isOpen) {
+    pop.style.display = 'flex';
+    document.getElementById('fp-val')?.focus();
+    _updateFpValVisibility();
+  }
+}
+
+function _closeFilterPopover() {
+  const pop = document.getElementById('filter-popover');
+  if (pop) pop.style.display = 'none';
+}
+
+function _updateFpValVisibility() {
+  const op = document.getElementById('fp-op')?.value;
+  const lbl = document.getElementById('fp-val-label');
+  if (lbl) lbl.style.display = (op === 'is_null' || op === 'not_null') ? 'none' : '';
+}
+
+document.addEventListener('change', e => {
+  if (e.target?.id === 'fp-op') _updateFpValVisibility();
+});
+
+function _addFilterChip() {
+  const field = document.getElementById('fp-field')?.value;
+  const op    = document.getElementById('fp-op')?.value;
+  const val   = document.getElementById('fp-val')?.value?.trim();
+  if (!field || !op) return;
+  if (op !== 'is_null' && op !== 'not_null' && !val) {
+    document.getElementById('fp-val')?.focus();
+    return;
+  }
+  let value = val;
+  if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
+  if (op === 'between') value = val.split(',').map(s => s.trim());
+  if (op === 'is_null' || op === 'not_null') value = null;
+  _reportFilters.push({ field, op, value });
+  _renderFilterChips();
+  _closeFilterPopover();
+  if (document.getElementById('fp-val')) document.getElementById('fp-val').value = '';
+}
+
+// Group-by state — array of field strings
+let _reportGroupBy = [];
+
+function _toggleGroupByPopover(e) {
+  e.stopPropagation();
+  const pop = document.getElementById('group-by-popover');
+  if (!pop) return;
+  const isOpen = pop.style.display !== 'none';
+  _closeAllPopovers();
+  if (!isOpen) pop.style.display = '';
+}
+
+function _onGroupByChange() {
+  const pop = document.getElementById('group-by-popover');
+  if (!pop) return;
+  _reportGroupBy = [...pop.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
+  _renderGroupByChips();
+}
+
+function _renderGroupByChips() {
+  const el = document.getElementById('group-by-chips');
+  if (!el) return;
+  el.innerHTML = _reportGroupBy.map(v =>
+    `<span class="group-by-chip">${esc(_FIELD_LABELS[v] || v)}</span>`
+  ).join('');
+}
+
+function _closeAllPopovers() {
+  ['filter-popover', 'group-by-popover'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+}
+
+// Close popovers on outside click
+document.addEventListener('click', e => {
+  if (!e.target?.closest('#filter-popover') && !e.target?.closest('#add-filter-btn'))
+    document.getElementById('filter-popover') && (document.getElementById('filter-popover').style.display = 'none');
+  if (!e.target?.closest('#group-by-popover') && !e.target?.closest('#group-by-btn'))
+    document.getElementById('group-by-popover') && (document.getElementById('group-by-popover').style.display = 'none');
+});
+
+function _setReportDatePreset(preset, btn) {
+  // Highlight active preset — remove from all, add to clicked
+  document.querySelectorAll('.date-preset-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  setReportDatePreset(preset);
+}
+
+function _clearDatePresetHighlight() {
+  document.querySelectorAll('.date-preset-btn').forEach(b => b.classList.remove('active'));
+}
+
+function _getBuilderState() {
+  return {
+    filters:   _reportFilters.slice(),
+    group_by:  _reportGroupBy.slice(),
+    bucket:    document.getElementById('report-bucket')?.value || null,
+    date_from: document.getElementById('report-date-from')?.value || null,
+    date_to:   document.getElementById('report-date-to')?.value   || null,
+    stmt_type: document.querySelector('input[name="report-stmt-type"]:checked')?.value || 'both',
+  };
+}
+
+function _loadStateIntoBuilder(state) {
+  // Filters
+  _reportFilters = Array.isArray(state.filters) ? state.filters.slice() : [];
+  _renderFilterChips();
+  // Group by
+  _reportGroupBy = Array.isArray(state.group_by) ? state.group_by.slice() : [];
+  const pop = document.getElementById('group-by-popover');
+  if (pop) {
+    pop.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.checked = _reportGroupBy.includes(cb.value);
+    });
+  }
+  _renderGroupByChips();
+  // Bucket + dates
+  if (document.getElementById('report-bucket'))
+    document.getElementById('report-bucket').value = state.bucket || '';
+  if (state.date_from && document.getElementById('report-date-from'))
+    document.getElementById('report-date-from').value = state.date_from;
+  if (state.date_to && document.getElementById('report-date-to'))
+    document.getElementById('report-date-to').value = state.date_to;
+  // Stmt type
+  document.querySelectorAll('input[name="report-stmt-type"]').forEach(r => {
+    r.checked = r.value === (state.stmt_type || 'both');
+  });
+  _clearDatePresetHighlight();
+}
+
+// Report card ⋯ menu
+function _toggleRcMenu(id, e) {
+  e.stopPropagation();
+  const existing = document.querySelector('.rc-dropdown');
+  if (existing && existing.dataset.cardId === String(id)) { existing.remove(); return; }
+  document.querySelectorAll('.rc-dropdown').forEach(d => d.remove());
+  const card = e.target.closest('.report-card');
+  if (!card) return;
+  const dd = document.createElement('div');
+  dd.className = 'rc-dropdown';
+  dd.dataset.cardId = String(id);
+  dd.innerHTML = card.dataset.menuHtml || '';
+  card.appendChild(dd);
+}
+document.addEventListener('click', () => document.querySelectorAll('.rc-dropdown').forEach(d => d.remove()));
+
+function toggleCustomReport() { /* kept for backward compat — builder is now always visible */ }
+function addReportFilter() { /* kept for backward compat — replaced by chip system */ }
+function onFilterAllChange() { /* no-op — filter rows removed */ }
+function onReportStmtTypeChange() { /* no-op — read at run time */ }
 
 const REPORT_COL_TOOLTIPS = {
   net_amount:   'Signed total: income minus spend. Positive means net income.',
@@ -978,36 +1161,15 @@ async function _saveCustomReport() {
   const name = (document.getElementById('save-report-name')?.value || '').trim();
   const desc = (document.getElementById('save-report-desc')?.value || '').trim();
   if (!name) { toast('Report name is required.', 'error'); return; }
-
-  const filters = [];
-  document.querySelectorAll('#report-filter-rows > div').forEach(row => {
-    if (row.querySelector('.rf-all')?.checked) return;
-    const field = row.querySelector('.rf-field')?.value;
-    const op    = row.querySelector('.rf-op')?.value;
-    const val   = row.querySelector('.rf-val')?.value;
-    if (field && op) {
-      let value = val;
-      if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
-      if (op === 'between') value = val.split(',').map(s => s.trim());
-      if (op === 'is_null' || op === 'not_null') value = null;
-      filters.push({ field, op, value });
-    }
-  });
-  const groupByEl = document.getElementById('report-group-by');
-  const group_by  = [...groupByEl.selectedOptions].map(o => o.value);
-  const bucket    = document.getElementById('report-bucket').value || null;
-  const date_from = document.getElementById('report-date-from').value || null;
-  const date_to   = document.getElementById('report-date-to').value   || null;
-  const stmt_type = document.querySelector('input[name="report-stmt-type"]:checked')?.value || 'both';
-
+  const s = _getBuilderState();
   const panel  = document.getElementById('save-report-panel');
   const editId = panel?.dataset.editId;
   try {
     if (editId) {
-      await api('PUT', `/saved-reports/${editId}`, { name, description: desc, stmt_type, filters, group_by, bucket, date_from, date_to });
+      await api('PUT', `/saved-reports/${editId}`, { name, description: desc, ...s });
       toast('Report updated.', 'success');
     } else {
-      await api('POST', '/saved-reports', { name, description: desc, stmt_type, filters, group_by, bucket, date_from, date_to });
+      await api('POST', '/saved-reports', { name, description: desc, ...s });
       toast(`Report "${name}" saved.`, 'success');
     }
     _toggleSaveReportPanel();
@@ -1015,75 +1177,30 @@ async function _saveCustomReport() {
   } catch (err) { toast(`Failed: ${err.message}`, 'error'); }
 }
 
-function addReportFilter() {
-  const container = document.getElementById('report-filter-rows');
-  const idx = container.children.length;
-  const fieldOpts = Object.entries(REPORT_FIELD_LABELS).map(([v,l]) =>
-    `<option value="${v}">${esc(l)}</option>`).join('');
-  const opOpts = REPORT_OPS.map(o => `<option value="${o}">${esc(o)}</option>`).join('');
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex; gap:6px; align-items:center;';
-  row.dataset.filterIdx = idx;
-  row.innerHTML = `
-    <label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap;cursor:pointer;" title="Include all values (no filter applied for this field)">
-      <input type="checkbox" class="rf-all" onchange="onFilterAllChange(this)"> All
-    </label>
-    <select class="rf-field" style="flex:2;">${fieldOpts}</select>
-    <select class="rf-op"    style="flex:1;">${opOpts}</select>
-    <input  class="rf-val"   style="flex:3;" type="text" placeholder="value" />
-    <button class="btn btn-secondary btn-sm" onclick="this.parentElement.remove()">✕</button>`;
-  container.appendChild(row);
-}
-
-function onFilterAllChange(el) {
-  const row = el.closest('div');
-  const op  = row.querySelector('.rf-op');
-  const val = row.querySelector('.rf-val');
-  if (op)  op.disabled  = el.checked;
-  if (val) val.disabled = el.checked;
-}
-
 async function runCustomReport() {
-  const filters = [];
-  document.querySelectorAll('#report-filter-rows > div').forEach(row => {
-    if (row.querySelector('.rf-all')?.checked) return; // "Include all" — skip this filter
-    const field = row.querySelector('.rf-field')?.value;
-    const op    = row.querySelector('.rf-op')?.value;
-    const val   = row.querySelector('.rf-val')?.value;
-    if (field && op) {
-      let value = val;
-      if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
-      if (op === 'between') value = val.split(',').map(s => s.trim());
-      if (op === 'is_null' || op === 'not_null') value = null;
-      filters.push({ field, op, value });
-    }
-  });
-
-  const groupByEl = document.getElementById('report-group-by');
-  const group_by  = [...groupByEl.selectedOptions].map(o => o.value);
-  const bucket    = document.getElementById('report-bucket').value || null;
-  const date_from = document.getElementById('report-date-from').value || null;
-  const date_to   = document.getElementById('report-date-to').value   || null;
-
-  document.getElementById('custom-report-results').style.display = '';
+  const s = _getBuilderState();
+  const resultsEl = document.getElementById('custom-report-results');
+  resultsEl.style.display = '';
   document.getElementById('custom-report-body').innerHTML =
     '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">Running…</td></tr>';
   document.getElementById('custom-report-foot').innerHTML = '';
+  resultsEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   try {
-    const data = await api('POST', '/reports/query', { filters, group_by, bucket, date_from, date_to, limit: 1000 });
+    const data = await api('POST', '/reports/query', {
+      filters: s.filters, group_by: s.group_by, bucket: s.bucket,
+      date_from: s.date_from, date_to: s.date_to, stmt_type: s.stmt_type, limit: 1000,
+    });
     const cols = data.columns || (data.rows.length ? Object.keys(data.rows[0]) : []);
     document.getElementById('custom-report-meta').textContent =
-      `${data.count ?? data.rows.length} row(s)`;
-    // BUG FIX 2: custom-report-head IS already a <tr> element — do NOT wrap in another <tr>.
-    // Previously: innerHTML = `<tr>${cells}</tr>` caused a <tr>-inside-<tr> which made the
-    // browser strip/relocate the inner <tr>, leaving the header empty and misaligning tfoot.
+      `${(data.count ?? data.rows.length).toLocaleString()} row(s)`;
     document.getElementById('custom-report-head').innerHTML =
       cols.map(c => {
         const tip = REPORT_COL_TOOLTIPS[c];
         if (!tip) return `<th>${esc(c)}</th>`;
-        const href = `/metric-docs/${encodeURIComponent(c)}`;
-        return `<th>${esc(c)} <a href="${href}" target="_blank" title="${esc(tip)} — Click to read more." style="font-size:10px;opacity:.65;text-decoration:none;cursor:help;" onclick="event.stopPropagation()">ℹ</a></th>`;
+        return `<th>${esc(c)} <a href="/metric-docs/${encodeURIComponent(c)}" target="_blank"
+          title="${esc(tip)}" style="font-size:10px;opacity:.6;text-decoration:none;cursor:help;"
+          onclick="event.stopPropagation()">ℹ</a></th>`;
       }).join('');
     document.getElementById('custom-report-body').innerHTML = data.rows.length
       ? data.rows.map(row =>
@@ -1098,33 +1215,10 @@ async function runCustomReport() {
 }
 
 async function downloadReportResults() {
-  const filters = [];
-  document.querySelectorAll('#report-filter-rows > div').forEach(row => {
-    if (row.querySelector('.rf-all')?.checked) return;
-    const field = row.querySelector('.rf-field')?.value;
-    const op    = row.querySelector('.rf-op')?.value;
-    const val   = row.querySelector('.rf-val')?.value;
-    if (field && op) {
-      let value = val;
-      if (op === 'in')      value = val.split(',').map(s => s.trim()).filter(Boolean);
-      if (op === 'between') value = val.split(',').map(s => s.trim());
-      if (op === 'is_null' || op === 'not_null') value = null;
-      filters.push({ field, op, value });
-    }
-  });
-  const groupByEl = document.getElementById('report-group-by');
-  const group_by  = [...(groupByEl?.selectedOptions || [])].map(o => o.value);
-  const bucket    = document.getElementById('report-bucket')?.value || null;
-  const date_from = document.getElementById('report-date-from')?.value || null;
-  const date_to   = document.getElementById('report-date-to')?.value   || null;
-  const stmt_type = document.querySelector('input[name="report-stmt-type"]:checked')?.value || 'both';
-
-  if (!filters.length && !group_by.length && !date_from && !date_to) {
-    toast('Configure filters or grouping before exporting.', 'info'); return;
-  }
+  const s = _getBuilderState();
   try {
     toast('Preparing export…', 'info', 2000);
-    const data = await api('POST', '/reports/query', { filters, group_by, bucket, date_from, date_to, stmt_type, limit: 50000 });
+    const data = await api('POST', '/reports/query', { ...s, limit: 50000 });
     const cols = data.columns || (data.rows?.length ? Object.keys(data.rows[0]) : []);
     if (!cols.length || !data.rows?.length) { toast('No data to export.', 'info'); return; }
     const csvLines = [cols, ...data.rows.map(row => cols.map(c => row[c] ?? ''))].map(r =>
@@ -1133,11 +1227,10 @@ async function downloadReportResults() {
     const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `report_export_${new Date().toISOString().slice(0,10)}.csv`;
+    a.href = url; a.download = `report_export_${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast(`Exported ${data.rows.length} rows.`, 'success');
+    toast(`Exported ${data.rows.length.toLocaleString()} rows.`, 'success');
   } catch (err) { toast(`Export failed: ${err.message}`, 'error'); }
 }
 
