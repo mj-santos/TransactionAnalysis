@@ -915,6 +915,7 @@
                 </div>
               </div>
             </div>
+            <button id="filter-logic-toggle" onclick="toggleFilterLogic()" title="ALL filters must match (click to switch to ANY)">All</button>
             <button class="btn btn-secondary btn-sm" id="clear-filters-btn" onclick="_clearAllFilters()" style="display:none;">✕ Clear all</button>
           </div>
         </div>
@@ -979,6 +980,15 @@
           <button class="btn btn-primary btn-sm" onclick="runCustomReport()">▶ Run report</button>
           <button class="btn btn-secondary btn-sm" onclick="downloadReportResults()" title="Download current results as CSV">⬇ CSV</button>
           <button class="btn btn-secondary btn-sm" onclick="_toggleSaveReportPanel()" title="Save this report definition for reuse">💾 Save</button>
+          <button class="btn btn-secondary btn-sm" onclick="_toggleSavedViewsPanel()" title="Save and load named filter views">📁 Views</button>
+          <!-- Saved views panel -->
+          <div class="saved-views-panel" id="saved-views-panel" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <strong style="font-size:12px;">Saved Views</strong>
+              <button class="btn btn-primary btn-sm" onclick="saveReportView()">+ Save current</button>
+            </div>
+            <div id="saved-views-list"><span style="font-size:12px;color:var(--text-muted);">No saved views</span></div>
+          </div>
           <!-- Save panel -->
           <div id="save-report-panel" style="display:none; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px; padding:12px; width:100%; box-sizing:border-box; margin-top:4px;">
             <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;">

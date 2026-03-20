@@ -947,11 +947,15 @@ function _renderFilterChips() {
 function _removeFilterChip(idx) {
   _reportFilters.splice(idx, 1);
   _renderFilterChips();
+  _renderFilterLogicToggle();
+  if (_rawData) _renderFiltered();
 }
 
 function _clearAllFilters() {
   _reportFilters = [];
   _renderFilterChips();
+  _renderFilterLogicToggle();
+  if (_rawData) _renderFiltered();
 }
 
 function _toggleFilterPopover(e) {
@@ -997,12 +1001,292 @@ function _addFilterChip() {
   if (op === 'is_null' || op === 'not_null') value = null;
   _reportFilters.push({ field, op, value });
   _renderFilterChips();
+  _renderFilterLogicToggle();
   _closeFilterPopover();
   if (document.getElementById('fp-val')) document.getElementById('fp-val').value = '';
+  if (_rawData) _renderFiltered();
 }
 
 // Group-by state — array of field strings
 let _reportGroupBy = [];
+
+// ── Client-side filter engine state ───────────────────────────
+let _rawData         = null;   // { rows, columns } — in-memory cache from last server fetch
+let _rawDataCacheKey = null;   // 'date_from|date_to|stmt_type' — stale-cache detection
+let _filterLogic     = 'and';  // 'and' | 'or'  (Any/All toggle)
+
+function _dataCacheKey(s) {
+  return `${s.date_from || ''}|${s.date_to || ''}|${s.stmt_type || 'both'}`;
+}
+
+function _testFilter(row, f) {
+  const raw  = row[f.field];
+  const val  = raw == null ? '' : String(raw);
+  const vLow = val.toLowerCase();
+  switch (f.op) {
+    case '=':            return vLow === String(f.value).toLowerCase();
+    case '!=':           return vLow !== String(f.value).toLowerCase();
+    case 'contains':     return vLow.includes(String(f.value).toLowerCase());
+    case 'not_contains': return !vLow.includes(String(f.value).toLowerCase());
+    case '>=':           return Number(raw) >= Number(f.value);
+    case '<=':           return Number(raw) <= Number(f.value);
+    case 'in': {
+      const opts = Array.isArray(f.value) ? f.value : String(f.value).split(',').map(s => s.trim());
+      return opts.map(v => v.toLowerCase()).includes(vLow);
+    }
+    case 'between': {
+      const parts = Array.isArray(f.value) ? f.value : String(f.value).split(',');
+      return Number(raw) >= Number(parts[0]) && Number(raw) <= Number(parts[1]);
+    }
+    case 'is_null':  return raw == null || raw === '';
+    case 'not_null': return raw != null && raw !== '';
+    default: return true;
+  }
+}
+
+function _applyFilters(rows, filters, logic) {
+  if (!filters.length) return rows;
+  return rows.filter(row => {
+    const results = filters.map(f => _testFilter(row, f));
+    return logic === 'or' ? results.some(Boolean) : results.every(Boolean);
+  });
+}
+
+function _renderFiltered() {
+  if (!_rawData) return;
+  const rows = _applyFilters(_rawData.rows, _reportFilters, _filterLogic);
+  const cols  = _rawData.columns;
+  const resultsEl = document.getElementById('custom-report-results');
+  if (resultsEl) resultsEl.style.display = '';
+  document.getElementById('custom-report-meta').textContent =
+    `${rows.length.toLocaleString()} of ${_rawData.rows.length.toLocaleString()} row(s)`;
+  _updateActiveColFilterHighlights(cols);
+  if (_reportGroupBy.length) {
+    _renderGrouped(rows, _reportGroupBy, cols);
+  } else {
+    _renderFlat(rows, cols);
+  }
+}
+
+function _colHead(c) {
+  const label = _FIELD_LABELS[c] || c;
+  return `<th class="col-filterable" onclick="_showColFilterDropdown('${esc(c)}',event)" title="Filter by ${esc(label)}" data-col="${esc(c)}">${esc(label)} <span class="col-filter-icon">▾</span></th>`;
+}
+
+function _renderFlat(rows, cols) {
+  document.getElementById('custom-report-head').innerHTML = cols.map(_colHead).join('');
+  document.getElementById('custom-report-body').innerHTML = rows.length
+    ? rows.map(row =>
+        `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
+      ).join('')
+    : '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">No results match the current filters.</td></tr>';
+  _renderTotalsRow('custom-report-foot', cols, rows);
+}
+
+function _renderGrouped(rows, groupByCols, allCols) {
+  document.getElementById('custom-report-head').innerHTML = allCols.map(_colHead).join('');
+  const key = row => groupByCols.map(f => row[f] ?? '').join('\x00');
+  const groupMap = new Map();
+  for (const row of rows) {
+    const k = key(row);
+    if (!groupMap.has(k)) {
+      groupMap.set(k, {
+        label: groupByCols.map(f => `${_FIELD_LABELS[f] || f}: ${row[f] ?? '—'}`).join(' · '),
+        rows: [],
+      });
+    }
+    groupMap.get(k).rows.push(row);
+  }
+  let bodyHtml = '';
+  let gi = 0;
+  for (const [, g] of groupMap) {
+    const gid = `grp-${gi++}`;
+    const subs = {};
+    allCols.forEach(c => {
+      const nums = g.rows.map(r => { const v = parseFloat(r[c]); return isNaN(v) ? null : v; }).filter(v => v !== null);
+      if (nums.length) subs[c] = nums.reduce((a, b) => a + b, 0);
+    });
+    const subRow = allCols.map((c, i) =>
+      subs[c] !== undefined
+        ? `<td class="mono text-right" style="font-size:11px;color:var(--text-muted);">${subs[c].toFixed(2)}</td>`
+        : `<td>${i === 0 ? '<span style="font-size:10px;color:var(--text-muted);">subtotal</span>' : ''}</td>`
+    ).join('');
+    bodyHtml += `<tr class="group-section-header" onclick="_toggleGroup('${gid}')">
+      <td colspan="${allCols.length}" class="group-section-label">
+        <span class="group-section-toggle" id="${gid}-toggle">▼</span>
+        ${esc(g.label)}
+        <span class="group-section-count">${g.rows.length} row${g.rows.length !== 1 ? 's' : ''}</span>
+      </td></tr>
+    <tr class="group-section-subtotal" id="${gid}-sub">${subRow}</tr>`;
+    bodyHtml += g.rows.map(row =>
+      `<tr class="group-section-row" data-group="${gid}">${allCols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
+    ).join('');
+  }
+  if (!bodyHtml)
+    bodyHtml = '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">No results match the current filters.</td></tr>';
+  document.getElementById('custom-report-body').innerHTML = bodyHtml;
+  _renderTotalsRow('custom-report-foot', allCols, rows);
+}
+
+function _toggleGroup(gid) {
+  const rows   = document.querySelectorAll(`[data-group="${gid}"]`);
+  const sub    = document.getElementById(`${gid}-sub`);
+  const toggle = document.getElementById(`${gid}-toggle`);
+  const hide   = rows.length && rows[0].style.display !== 'none';
+  rows.forEach(r => r.style.display = hide ? 'none' : '');
+  if (sub)    sub.style.display    = hide ? 'none' : '';
+  if (toggle) toggle.textContent   = hide ? '▶' : '▼';
+}
+
+// ── Column header filter dropdown ──────────────────────────────
+let _colFilterDropdown = null;
+
+function _showColFilterDropdown(col, e) {
+  e.stopPropagation();
+  if (_colFilterDropdown) {
+    const prev = _colFilterDropdown.dataset.col;
+    _closeColFilterDropdown();
+    if (prev === col) return;
+  }
+  if (!_rawData) return;
+  const valueCounts = {};
+  for (const row of _rawData.rows) {
+    const v = String(row[col] ?? '');
+    valueCounts[v] = (valueCounts[v] || 0) + 1;
+  }
+  const entries = Object.entries(valueCounts).sort((a, b) => b[1] - a[1]);
+  const existing = _reportFilters.find(f => f.field === col && f.op === 'in');
+  const selected = new Set(existing ? (Array.isArray(existing.value) ? existing.value : [existing.value]) : []);
+  const sid = `cfd-s-${Date.now()}`;
+  const dd  = document.createElement('div');
+  dd.className = 'col-filter-dropdown';
+  dd.dataset.col = col;
+  dd.innerHTML = `
+    <div class="cfd-header">
+      <input type="text" id="${sid}" class="cfd-search" placeholder="Search…" autocomplete="off" />
+      <div class="cfd-actions">
+        <button class="cfd-action-btn" onclick="_cfdSelectAll()">Select all</button>
+        <button class="cfd-action-btn" onclick="_cfdDeselectAll()">Deselect all</button>
+      </div>
+    </div>
+    <div class="cfd-list" id="cfd-list">
+      ${entries.map(([v, cnt]) => `
+        <label class="cfd-item">
+          <input type="checkbox" value="${esc(v)}" ${selected.has(v) ? 'checked' : ''} />
+          <span class="cfd-val">${v === '' ? '<em style="opacity:.55">empty</em>' : esc(v)}</span>
+          <span class="cfd-cnt">${cnt}</span>
+        </label>`).join('')}
+    </div>
+    <div class="cfd-footer">
+      <button class="btn btn-secondary btn-sm" onclick="_closeColFilterDropdown()">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="_applyColFilter('${esc(col)}')">Apply</button>
+    </div>`;
+  const th   = e.currentTarget;
+  const rect = th.getBoundingClientRect();
+  dd.style.position = 'fixed';
+  dd.style.top  = (rect.bottom + 2) + 'px';
+  dd.style.left = rect.left + 'px';
+  document.body.appendChild(dd);
+  _colFilterDropdown = dd;
+  dd.querySelector(`#${sid}`)?.addEventListener('input', ev => {
+    const q = ev.target.value.toLowerCase();
+    dd.querySelectorAll('.cfd-item').forEach(item => {
+      item.style.display = item.querySelector('.cfd-val')?.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+  dd.querySelector(`#${sid}`)?.focus();
+}
+
+function _cfdSelectAll()   { _colFilterDropdown?.querySelectorAll('.cfd-item input').forEach(cb => cb.checked = true); }
+function _cfdDeselectAll() { _colFilterDropdown?.querySelectorAll('.cfd-item input').forEach(cb => cb.checked = false); }
+function _closeColFilterDropdown() {
+  if (_colFilterDropdown) { _colFilterDropdown.remove(); _colFilterDropdown = null; }
+}
+function _applyColFilter(col) {
+  if (!_colFilterDropdown) return;
+  const checked = [..._colFilterDropdown.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
+  _closeColFilterDropdown();
+  _reportFilters = _reportFilters.filter(f => !(f.field === col && f.op === 'in'));
+  if (checked.length) _reportFilters.push({ field: col, op: 'in', value: checked });
+  _renderFilterChips();
+  _renderFilterLogicToggle();
+  _renderFiltered();
+}
+function _updateActiveColFilterHighlights(cols) {
+  const activeCols = new Set(_reportFilters.filter(f => f.op === 'in').map(f => f.field));
+  document.querySelectorAll('th.col-filterable').forEach(th => {
+    th.classList.toggle('col-active-filter', activeCols.has(th.dataset.col));
+  });
+}
+document.addEventListener('click', e => {
+  if (_colFilterDropdown && !_colFilterDropdown.contains(e.target))
+    _closeColFilterDropdown();
+});
+
+// ── Any / All logic toggle ─────────────────────────────────────
+function toggleFilterLogic() {
+  _filterLogic = _filterLogic === 'and' ? 'or' : 'and';
+  _renderFilterLogicToggle();
+  if (_rawData) _renderFiltered();
+}
+function _renderFilterLogicToggle() {
+  const btn = document.getElementById('filter-logic-toggle');
+  if (!btn) return;
+  btn.textContent = _filterLogic === 'and' ? 'All' : 'Any';
+  btn.title = _filterLogic === 'and'
+    ? 'ALL filters must match — click to switch to ANY'
+    : 'ANY filter must match — click to switch to ALL';
+  btn.style.display = _reportFilters.length >= 2 ? '' : 'none';
+}
+
+// ── Saved views (localStorage) ─────────────────────────────────
+const _VIEW_KEY = 'spendly_report_views_v1';
+function _storedViews() {
+  try { return JSON.parse(localStorage.getItem(_VIEW_KEY) || '{}'); } catch { return {}; }
+}
+function saveReportView() {
+  const name = prompt('View name:');
+  if (!name || !name.trim()) return;
+  const views = _storedViews();
+  views[name.trim()] = { ..._getBuilderState(), filterLogic: _filterLogic, savedAt: new Date().toISOString() };
+  localStorage.setItem(_VIEW_KEY, JSON.stringify(views));
+  toast(`View "${name.trim()}" saved.`, 'success');
+  _renderSavedViewsList();
+}
+function _renderSavedViewsList() {
+  const el = document.getElementById('saved-views-list');
+  if (!el) return;
+  const views = _storedViews();
+  const names = Object.keys(views);
+  if (!names.length) { el.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">No saved views</span>'; return; }
+  el.innerHTML = names.map(n =>
+    `<div class="saved-view-item">
+      <button class="btn-link" onclick="_loadReportView(${JSON.stringify(n)})">${esc(n)}</button>
+      <button class="saved-view-delete" onclick="_deleteReportView(${JSON.stringify(n)})" title="Delete">×</button>
+    </div>`
+  ).join('');
+}
+function _loadReportView(name) {
+  const v = _storedViews()[name];
+  if (!v) { toast('View not found.', 'error'); return; }
+  _filterLogic = v.filterLogic || 'and';
+  _loadStateIntoBuilder(v);
+  _renderFilterLogicToggle();
+  toast(`View "${name}" loaded.`, 'info', 2000);
+}
+function _deleteReportView(name) {
+  const views = _storedViews();
+  delete views[name];
+  localStorage.setItem(_VIEW_KEY, JSON.stringify(views));
+  _renderSavedViewsList();
+}
+function _toggleSavedViewsPanel() {
+  const el = document.getElementById('saved-views-panel');
+  if (!el) return;
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : '';
+  if (!open) _renderSavedViewsList();
+}
 
 function _toggleGroupByPopover(e) {
   e.stopPropagation();
@@ -1018,6 +1302,7 @@ function _onGroupByChange() {
   if (!pop) return;
   _reportGroupBy = [...pop.querySelectorAll('input[type=checkbox]:checked')].map(cb => cb.value);
   _renderGroupByChips();
+  if (_rawData) _renderFiltered();
 }
 
 function _renderGroupByChips() {
@@ -1179,59 +1464,50 @@ async function _saveCustomReport() {
 
 async function runCustomReport() {
   const s = _getBuilderState();
+  const cKey = _dataCacheKey(s);
   const resultsEl = document.getElementById('custom-report-results');
   resultsEl.style.display = '';
   document.getElementById('custom-report-body').innerHTML =
-    '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">Running…</td></tr>';
+    '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">Loading…</td></tr>';
   document.getElementById('custom-report-foot').innerHTML = '';
   resultsEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-  try {
-    const data = await api('POST', '/reports/query', {
-      filters: s.filters, group_by: s.group_by, bucket: s.bucket,
-      date_from: s.date_from, date_to: s.date_to, stmt_type: s.stmt_type, limit: 1000,
-    });
-    const cols = data.columns || (data.rows.length ? Object.keys(data.rows[0]) : []);
-    document.getElementById('custom-report-meta').textContent =
-      `${(data.count ?? data.rows.length).toLocaleString()} row(s)`;
-    document.getElementById('custom-report-head').innerHTML =
-      cols.map(c => {
-        const tip = REPORT_COL_TOOLTIPS[c];
-        if (!tip) return `<th>${esc(c)}</th>`;
-        return `<th>${esc(c)} <a href="/metric-docs/${encodeURIComponent(c)}" target="_blank"
-          title="${esc(tip)}" style="font-size:10px;opacity:.6;text-decoration:none;cursor:help;"
-          onclick="event.stopPropagation()">ℹ</a></th>`;
-      }).join('');
-    document.getElementById('custom-report-body').innerHTML = data.rows.length
-      ? data.rows.map(row =>
-          `<tr>${cols.map(c => `<td>${esc(String(row[c] ?? ''))}</td>`).join('')}</tr>`
-        ).join('')
-      : '<tr><td colspan="99" class="text-center text-muted" style="padding:20px">No results.</td></tr>';
-    _renderTotalsRow('custom-report-foot', cols, data.rows);
-  } catch (err) {
-    document.getElementById('custom-report-body').innerHTML =
-      `<tr><td colspan="99" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+  // Re-fetch only when date/stmt_type scope changes; filters are applied client-side
+  if (!_rawData || _rawDataCacheKey !== cKey) {
+    try {
+      const data = await api('POST', '/reports/query', {
+        filters: [], group_by: [], bucket: null,
+        date_from: s.date_from, date_to: s.date_to, stmt_type: s.stmt_type, limit: 10000,
+      });
+      _rawData = {
+        rows:    data.rows    || [],
+        columns: data.columns || (data.rows?.length ? Object.keys(data.rows[0]) : []),
+      };
+      _rawDataCacheKey = cKey;
+    } catch (err) {
+      document.getElementById('custom-report-body').innerHTML =
+        `<tr><td colspan="99" class="text-center text-muted">Error: ${esc(err.message)}</td></tr>`;
+      return;
+    }
   }
+  _renderFiltered();
 }
 
 async function downloadReportResults() {
-  const s = _getBuilderState();
-  try {
-    toast('Preparing export…', 'info', 2000);
-    const data = await api('POST', '/reports/query', { ...s, limit: 50000 });
-    const cols = data.columns || (data.rows?.length ? Object.keys(data.rows[0]) : []);
-    if (!cols.length || !data.rows?.length) { toast('No data to export.', 'info'); return; }
-    const csvLines = [cols, ...data.rows.map(row => cols.map(c => row[c] ?? ''))].map(r =>
-      r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
-    );
-    const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = `report_export_${new Date().toISOString().slice(0,10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast(`Exported ${data.rows.length.toLocaleString()} rows.`, 'success');
-  } catch (err) { toast(`Export failed: ${err.message}`, 'error'); }
+  if (!_rawData) { toast('Run a report first.', 'info'); return; }
+  const rows = _applyFilters(_rawData.rows, _reportFilters, _filterLogic);
+  const cols = _rawData.columns;
+  if (!cols.length || !rows.length) { toast('No data to export.', 'info'); return; }
+  const csvLines = [cols, ...rows.map(row => cols.map(c => row[c] ?? ''))].map(r =>
+    r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+  );
+  const blob = new Blob([csvLines.join('\r\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `report_export_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${rows.length.toLocaleString()} rows.`, 'success');
 }
 
 // ── Settings page ──────────────────────────────────────────────

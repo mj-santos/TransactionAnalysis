@@ -640,6 +640,165 @@ tbody td { padding: 10px 14px; }
 [data-theme="dark"] .filter-popover select,
 [data-theme="dark"] .filter-popover input[type="text"] { background: var(--bg-alt); }
 
+/* ── Any / All logic toggle ───────────────────────────────── */
+#filter-logic-toggle {
+  display: none;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  border: 1px solid var(--primary);
+  color: var(--primary);
+  background: transparent;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+#filter-logic-toggle:hover { background: var(--primary); color: #fff; }
+
+/* ── Column header filter ─────────────────────────────────── */
+th.col-filterable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.col-filterable:hover { color: var(--primary); }
+.col-filter-icon { font-size: 9px; opacity: .55; margin-left: 2px; }
+th.col-filterable.col-active-filter { color: var(--primary); }
+th.col-filterable.col-active-filter .col-filter-icon { opacity: 1; }
+
+.col-filter-dropdown {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,.13);
+  width: 240px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  z-index: 10000;
+  overflow: hidden;
+}
+.cfd-header {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cfd-search {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+  outline: none;
+}
+.cfd-search:focus { border-color: var(--primary); }
+.cfd-actions { display: flex; gap: 6px; }
+.cfd-action-btn {
+  font-size: 11px;
+  color: var(--primary);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.cfd-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0;
+}
+.cfd-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.cfd-item:hover { background: var(--bg); }
+.cfd-item input[type=checkbox] { flex-shrink: 0; accent-color: var(--primary); }
+.cfd-val { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfd-cnt { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.cfd-footer {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+[data-theme="dark"] .col-filter-dropdown { background: var(--card-bg); }
+[data-theme="dark"] .cfd-search { background: var(--bg-alt); color: var(--text); }
+
+/* ── Grouped result rows ─────────────────────────────────── */
+.group-section-header {
+  background: var(--bg-alt);
+  cursor: pointer;
+}
+.group-section-header:hover { background: var(--bg); }
+.group-section-label {
+  padding: 7px 12px !important;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.group-section-toggle {
+  display: inline-block;
+  width: 14px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.group-section-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+.group-section-subtotal td {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border) !important;
+}
+
+/* ── Saved views panel ───────────────────────────────────── */
+.saved-views-panel {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 4px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.saved-view-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+.saved-view-item:last-child { border-bottom: none; }
+.saved-view-delete {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.saved-view-delete:hover { color: var(--danger); }
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 12px;
+  text-align: left;
+}
+.btn-link:hover { text-decoration: underline; }
+
 /* ── Chart table ─────────────────────────────────────────── */
 #chart-area {
   background: var(--card-bg);
