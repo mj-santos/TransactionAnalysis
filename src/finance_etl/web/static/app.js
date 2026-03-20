@@ -4121,7 +4121,7 @@ async function loadTxnTab(type, reset = true) {
       document.getElementById(`${p}-tfoot`), totals, type, cols.length || 10,
       document.getElementById(`${p}-totals-warn`),
     );
-    _renderFilterChips(type);
+    _renderTxnFilterChips(type);
 
     // Render Card Financial Summary panel for credit card tab
     if (type === 'credit_card') _renderCcFinancialSummary(totals);
@@ -9185,7 +9185,7 @@ const _CHIP_LABELS = {
   amount_min: 'Min $', amount_max: 'Max $', tag: 'Tag',
 };
 
-function _renderFilterChips(type) {
+function _renderTxnFilterChips(type) {
   const p = _pfx(type);
   const bar = document.getElementById(`${p}-filter-chips`);
   if (!bar) return;
