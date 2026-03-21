@@ -253,9 +253,10 @@ async function api(method, path, body) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    const detail = err.detail || res.statusText;
-    const status = res.status;
-    throw new Error(`(${status}) ${detail}`);
+    let detail = err.detail || res.statusText;
+    if (Array.isArray(detail)) detail = detail.map(e => e.msg || JSON.stringify(e)).join('; ');
+    else if (typeof detail === 'object') detail = JSON.stringify(detail);
+    throw new Error(`(${res.status}) ${detail}`);
   }
   return res.json();
 }

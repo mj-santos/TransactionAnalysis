@@ -193,7 +193,7 @@ try:
         bucket:    Optional[str] = Field(None, description="Time bucket for transaction_date: day|week|month|year")
         date_from: Optional[str] = Field(None, description="ISO date lower bound (inclusive)")
         date_to:   Optional[str] = Field(None, description="ISO date upper bound (inclusive)")
-        limit:     int           = Field(500, le=2000, description="Max rows (capped at 2000)")
+        limit:     int           = Field(500, le=10000, description="Max rows (capped at 10000)")
         stmt_type: Optional[str] = Field(None, description="Filter by statement type: credit_card or bank")
 
     class SettingsResponse(BaseModel):
