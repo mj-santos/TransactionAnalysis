@@ -2475,3 +2475,100 @@ tr.acct-row-active > td {
   align-self: center;
   margin-right: 2px;
 }
+
+/* ── Upcoming Bills Widget ──────────────────────────────────── */
+.upcoming-bill-group { margin-bottom: 10px; }
+.upcoming-bill-group:last-child { margin-bottom: 0; }
+.upcoming-bill-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-bottom: 4px;
+}
+.upcoming-bill-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.upcoming-bill-row:last-child { border-bottom: none; }
+.upcoming-bill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.upcoming-bill-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upcoming-bill-days { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.upcoming-bill-date { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.upcoming-bill-amt  { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+
+/* ── Skeleton / shimmer loading ────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.skeleton {
+  display: inline-block;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--border) 25%, var(--bg-alt) 50%, var(--border) 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+  color: transparent !important;
+  pointer-events: none;
+  user-select: none;
+  min-width: 60px;
+  min-height: 1em;
+}
+
+/* ── SVG Net Worth chart ────────────────────────────────────── */
+#nw-svg-chart {
+  width: 100%;
+  height: 90px;
+  display: block;
+  overflow: visible;
+}
+#nw-svg-chart .nw-axis-label {
+  font-size: 10px;
+  fill: var(--text-muted, #64748b);
+}
+#nw-svg-chart .nw-chart-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+#nw-svg-chart .nw-chart-dot { r: 3; }
+
+/* ── Global search "View all" footer ───────────────────────── */
+.gs-view-all {
+  display: block;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--primary);
+  font-weight: 600;
+  text-align: center;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  text-decoration: none;
+}
+.gs-view-all:hover { background: var(--bg-alt); }
+
+/* ── Responsive sidebar ────────────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar {
+    width: 52px;
+  }
+  .sidebar-brand h1,
+  .sidebar-brand p,
+  .sidebar nav a span:not(.icon),
+  .sidebar nav a .nav-badge,
+  .sidebar-footer { display: none; }
+  .sidebar nav a {
+    justify-content: center;
+    padding: 12px 0;
+  }
+  .sidebar nav a .icon { width: auto; font-size: 18px; }
+  .sidebar nav a.active { border-left-width: 3px; }
+  .content { min-width: 0; }
+}

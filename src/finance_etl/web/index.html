@@ -131,10 +131,10 @@
         <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Top Category</div>
         <div id="dash-top-cat" style="font-size:18px; font-weight:700; margin-top:4px;">—</div>
       </div>
-      <div class="card" style="padding:16px 20px;">
+      <div class="card" style="padding:16px 20px; cursor:pointer;" onclick="navigateToUnreviewed()" title="Click to review unreviewed transactions">
         <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Unreviewed</div>
         <div id="dash-unreviewed" style="font-size:28px; font-weight:700; margin-top:4px; color:var(--warning);">—</div>
-        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">transactions pending review</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">tap to review →</div>
       </div>
     </div>
 
@@ -274,7 +274,7 @@
       </div>
       <div id="nw-history-panel" style="display:none; margin-top:8px;">
         <div style="font-size:12px; font-weight:600; margin-bottom:6px;">Net Worth History</div>
-        <div id="nw-chart" style="display:flex; align-items:flex-end; gap:2px; height:80px; margin-bottom:8px;"></div>
+        <div id="nw-chart" style="height:90px; margin-bottom:8px;"></div>
         <div id="nw-history-list" style="max-height:200px; overflow-y:auto;"></div>
       </div>
       <!-- Add/Edit account form (hidden) -->
@@ -306,6 +306,15 @@
           <button class="btn btn-secondary btn-sm" onclick="closeNwForm()">Cancel</button>
         </div>
       </div>
+    </div>
+
+    <!-- Upcoming Bills -->
+    <div class="card" id="dash-upcoming-bills-card" style="margin-bottom:20px; display:none;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Upcoming Bills — Next 30 Days</span>
+        <span id="dash-upcoming-bills-total" style="font-size:13px; font-weight:600; color:var(--text);"></span>
+      </div>
+      <div id="dash-upcoming-bills" style="display:flex; flex-direction:column; gap:4px;"></div>
     </div>
 
     <!-- Recent transactions -->

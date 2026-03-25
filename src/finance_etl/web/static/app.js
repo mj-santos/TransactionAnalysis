@@ -24,6 +24,11 @@ const REPORT_META = {
 };
 
 // ── Navigation ──────────────────────────────────────────────
+// _navSeq increments on every navigate() call. Async load functions
+// capture it at call time and bail out before rendering if the user
+// has already navigated elsewhere, preventing stale DOM overwrites.
+let _navSeq = 0;
+
 document.querySelectorAll('.sidebar nav a').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();
@@ -32,6 +37,7 @@ document.querySelectorAll('.sidebar nav a').forEach(link => {
 });
 
 function navigate(page) {
+  _navSeq++;
   document.querySelectorAll('.sidebar nav a').forEach(l => l.classList.remove('active'));
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const link = document.querySelector(`.sidebar nav a[data-page="${page}"]`);
@@ -157,7 +163,13 @@ async function _runGlobalSearch() {
         <span class="gs-badge ${badgeCls}">${badgeText}</span>
       </div>`;
     }).join('');
-    panel.innerHTML = header + rows;
+
+    // "View all" footer when results are truncated
+    const viewAll = data.total_count > data.rows.length
+      ? `<a class="gs-view-all" onclick="_gsViewAll(${esc(JSON.stringify(q))})">View all ${data.total_count} results →</a>`
+      : '';
+
+    panel.innerHTML = header + rows + viewAll;
   } catch (err) {
     panel.innerHTML = `<div class="gs-status">Error: ${esc(err.message)}</div>`;
   }
@@ -202,6 +214,16 @@ function _closeGlobalSearch() {
   const panel = document.getElementById('global-search-results');
   if (panel) panel.style.display = 'none';
   _gsActiveIdx = -1;
+}
+
+function _gsViewAll(q) {
+  _closeGlobalSearch();
+  // Navigate to CC tab (broader) with query pre-filled in the merchant filter
+  navigate('credit-cards');
+  setTimeout(() => {
+    const el = document.getElementById('cc-merchant');
+    if (el) { el.value = q; loadTxnTab('credit_card'); }
+  }, 50);
 }
 
 function _globalSearchKeydown(e) {
@@ -542,11 +564,13 @@ function discardRun(runId) {
 
 // ── History page ─────────────────────────────────────────────
 async function loadHistory() {
+  const seq = _navSeq;
   const tbody = document.getElementById('history-tbody');
   tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted" style="padding:32px">Loading…</td></tr>';
 
   try {
     const data = await api('GET', '/runs');
+    if (_navSeq !== seq) return;
     if (!data.runs.length) {
       tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted" style="padding:32px">No runs yet. Import some transactions first.</td></tr>';
       return;
@@ -5830,18 +5854,94 @@ function dashboardNextMonth() {
   loadDashboard();
 }
 
+function _dashSkeleton(on) {
+  ['dash-mtd','dash-prev-spend','dash-top-cat','dash-unreviewed'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (on) { el.classList.add('skeleton'); el.dataset.realHtml = el.innerHTML; el.innerHTML = '\u00a0'; }
+    else     { el.classList.remove('skeleton'); if (el.dataset.realHtml !== undefined) { el.innerHTML = el.dataset.realHtml; } }
+  });
+}
+
 async function loadDashboard() {
+  const seq = _navSeq;
   const label = document.getElementById('dash-month-label');
   if (label) label.textContent = `${_MONTH_NAMES[_dashMonth - 1]} ${_dashYear}`;
 
+  _dashSkeleton(true);
   try {
-    const data = await api('GET', `/dashboard/summary?year=${_dashYear}&month=${_dashMonth}`);
+    const [data, recurringData] = await Promise.all([
+      api('GET', `/dashboard/summary?year=${_dashYear}&month=${_dashMonth}`),
+      api('GET', '/recurring').catch(() => null),
+    ]);
+    if (_navSeq !== seq) return;
+    _dashSkeleton(false);
     _renderDashboard(data);
     _renderWeeklyRecap();
+    if (recurringData) _renderUpcomingBills(recurringData.patterns || []);
   } catch (err) {
+    if (_navSeq !== seq) return;
+    _dashSkeleton(false);
     const el = document.getElementById('dash-mtd');
     if (el) el.textContent = 'Error loading';
   }
+}
+
+function _renderUpcomingBills(patterns) {
+  const card = document.getElementById('dash-upcoming-bills-card');
+  const listEl = document.getElementById('dash-upcoming-bills');
+  const totalEl = document.getElementById('dash-upcoming-bills-total');
+  if (!card || !listEl) return;
+
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const in30 = new Date(today); in30.setDate(today.getDate() + 30);
+
+  const upcoming = patterns
+    .filter(p => p.next_estimated && p.reimbursement_type !== 'full')
+    .map(p => {
+      const d = new Date(p.next_estimated + 'T00:00:00');
+      return { ...p, _date: d, _diff: Math.round((d - today) / 86400000) };
+    })
+    .filter(p => p._diff <= 30)
+    .sort((a, b) => a._date - b._date);
+
+  if (!upcoming.length) { card.style.display = 'none'; return; }
+
+  card.style.display = '';
+  const totalAmt = upcoming.reduce((s, p) => {
+    const net = p.monthly_net != null ? p.monthly_net : p.median_amount;
+    return s + Math.abs(net || 0);
+  }, 0);
+  if (totalEl) totalEl.textContent = `${upcoming.length} due · ${_fmt$(totalAmt)} total`;
+
+  const groups = [
+    { label: 'Overdue',       color: 'var(--danger)',   items: upcoming.filter(p => p._diff < 0) },
+    { label: 'Due Today',     color: 'var(--warning)',  items: upcoming.filter(p => p._diff === 0) },
+    { label: 'This Week',     color: 'var(--primary)',  items: upcoming.filter(p => p._diff > 0 && p._diff <= 7) },
+    { label: 'Later',         color: 'var(--text-muted)', items: upcoming.filter(p => p._diff > 7) },
+  ];
+
+  listEl.innerHTML = groups
+    .filter(g => g.items.length)
+    .map(g => {
+      const rows = g.items.map(p => {
+        const daysLabel = p._diff < 0 ? `${Math.abs(p._diff)}d overdue`
+          : p._diff === 0 ? 'today'
+          : `in ${p._diff}d`;
+        const amt = p.monthly_net != null ? p.monthly_net : p.median_amount;
+        return `<div class="upcoming-bill-row">
+          <span class="upcoming-bill-dot" style="background:${g.color};"></span>
+          <span class="upcoming-bill-name">${esc(p.label || p.merchant)}</span>
+          <span class="upcoming-bill-days" style="color:${g.color};">${daysLabel}</span>
+          <span class="upcoming-bill-date">${p.next_estimated}</span>
+          <span class="upcoming-bill-amt">${_fmt$(Math.abs(amt))}</span>
+        </div>`;
+      }).join('');
+      return `<div class="upcoming-bill-group">
+        <div class="upcoming-bill-group-label" style="color:${g.color};">${g.label}</div>
+        ${rows}
+      </div>`;
+    }).join('');
 }
 
 function _fmt$(v) {
@@ -6033,12 +6133,17 @@ function _dismissNudge(type) {
   document.getElementById('unreviewed-nudge').style.display = 'none';
 }
 
+function navigateToUnreviewed() {
+  navigate('credit-cards');
+  setTimeout(() => {
+    const cb = document.getElementById('cc-unreviewed-only');
+    if (cb && !cb.checked) { cb.checked = true; loadTxnTab('credit_card'); }
+  }, 50);
+}
+
 function _goReviewFromNudge() {
   localStorage.setItem('nudge_last_review', new Date().toISOString());
-  showPage('transactions');
-  // Filter to unreviewed
-  const sel = document.getElementById('filter-reviewed');
-  if (sel) { sel.value = 'unreviewed'; loadTransactions(); }
+  navigateToUnreviewed();
 }
 
 // ── Weekly Spending Recap ───────────────────────────────────────
@@ -6407,15 +6512,47 @@ async function _loadNwSnapshots() {
     const listEl = document.getElementById('nw-history-list');
     if (!chartEl || !listEl || !snapshots.length) return;
 
-    // Mini bar chart (last 12 snapshots, oldest to newest)
+    // SVG line chart (last 12 snapshots, oldest to newest)
     const recent = snapshots.slice(0, 12).reverse();
-    const maxNw = Math.max(...recent.map(s => Math.abs(parseFloat(s.net_worth))), 1);
-    chartEl.innerHTML = recent.map(s => {
+    const W = 320, H = 80, PAD = { t: 8, r: 8, b: 20, l: 52 };
+    const vals = recent.map(s => parseFloat(s.net_worth));
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const range = maxV - minV || 1;
+    const cx = (i) => PAD.l + (i / Math.max(recent.length - 1, 1)) * (W - PAD.l - PAD.r);
+    const cy = (v) => PAD.t + (1 - (v - minV) / range) * (H - PAD.t - PAD.b);
+
+    const pts = recent.map((s, i) => `${cx(i).toFixed(1)},${cy(parseFloat(s.net_worth)).toFixed(1)}`).join(' ');
+    const lineColor = vals[vals.length - 1] >= vals[0] ? '#22c55e' : '#ef4444';
+
+    // Y-axis labels (min and max)
+    const yLabels = [
+      `<text class="nw-axis-label" x="${PAD.l - 4}" y="${(cy(maxV) + 4).toFixed(1)}" text-anchor="end">${_fmt$(maxV)}</text>`,
+      `<text class="nw-axis-label" x="${PAD.l - 4}" y="${(cy(minV) + 4).toFixed(1)}" text-anchor="end">${_fmt$(minV)}</text>`,
+    ].join('');
+
+    // X-axis labels (first and last date)
+    const xLabels = [
+      `<text class="nw-axis-label" x="${cx(0).toFixed(1)}" y="${H}" text-anchor="start">${recent[0].snapshot_date.slice(5)}</text>`,
+      `<text class="nw-axis-label" x="${cx(recent.length - 1).toFixed(1)}" y="${H}" text-anchor="end">${recent[recent.length - 1].snapshot_date.slice(5)}</text>`,
+    ].join('');
+
+    // Data point circles with tooltip titles
+    const dots = recent.map((s, i) => {
       const nw = parseFloat(s.net_worth);
-      const h = Math.max(Math.round(Math.abs(nw) / maxNw * 70), 2);
-      const color = nw >= 0 ? '#22c55e' : '#ef4444';
-      return `<div title="${s.snapshot_date}: ${_fmt$(nw)}" style="flex:1; min-width:8px; max-width:24px; height:${h}px; background:${color}; border-radius:2px;"></div>`;
+      return `<circle class="nw-chart-dot" cx="${cx(i).toFixed(1)}" cy="${cy(nw).toFixed(1)}" fill="${nw >= 0 ? '#22c55e' : '#ef4444'}"><title>${s.snapshot_date}: ${_fmt$(nw)}</title></circle>`;
     }).join('');
+
+    // Zero line if range crosses zero
+    const zeroLine = (minV < 0 && maxV > 0)
+      ? `<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${cy(0).toFixed(1)}" y2="${cy(0).toFixed(1)}" stroke="var(--border)" stroke-dasharray="3,3" stroke-width="1"/>`
+      : '';
+
+    chartEl.innerHTML = `<svg id="nw-svg-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      ${zeroLine}
+      <polyline class="nw-chart-line" points="${pts}" stroke="${lineColor}"/>
+      ${yLabels}${xLabels}${dots}
+    </svg>`;
 
     // History list
     listEl.innerHTML = snapshots.slice(0, 20).map(s => {
