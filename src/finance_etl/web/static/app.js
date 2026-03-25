@@ -5955,39 +5955,37 @@ function _renderUpcomingBills(patterns) {
   const urgent = upcoming.filter(p => p._diff <= 0);
   _renderBillsUrgentBanner(urgent);
 
-  listEl.innerHTML = upcoming.map(p => {
+  listEl.innerHTML = upcoming.map((p, idx) => {
     const u = _billUrgency(p._diff);
     const amt = Math.abs(p.monthly_net != null ? p.monthly_net : (p.median_amount || 0));
-    const rowId = `bill-row-${CSS.escape(p.merchant)}`;
-    const menuId = `bill-menu-${CSS.escape(p.merchant)}`;
-    return `<div class="bill-row ${u.cls}" id="${rowId}" data-merchant="${esc(p.merchant)}" data-date="${esc(p.next_estimated)}" data-amt="${amt}">
+    return `<div class="bill-row ${u.cls}" id="bill-row-${idx}" data-idx="${idx}" data-merchant="${esc(p.merchant)}" data-date="${esc(p.next_estimated)}" data-amt="${amt}">
       <span class="bill-row-name">${esc(p.label || p.merchant)}</span>
       <span class="bill-row-badge">${u.badge(p._diff)}</span>
       <span class="bill-row-date">${p.next_estimated}</span>
       <span class="bill-row-amt">${_fmt$(amt)}</span>
       <div class="bill-row-actions">
-        <button class="btn btn-success btn-sm bill-pay-btn" onclick="_billMarkPaid('${esc(p.merchant)}','${esc(p.next_estimated)}',${amt})">✓ Paid</button>
+        <button class="btn btn-success btn-sm bill-pay-btn" onclick="_billMarkPaid(${idx})">✓ Paid</button>
         <div style="position:relative;">
-          <button class="btn btn-secondary btn-sm" onclick="_toggleBillMenu('${menuId}')">···</button>
-          <div id="${menuId}" class="bill-action-menu" style="display:none;">
-            <button onclick="_toggleBillMenu('${menuId}'); _openBillPartial('${esc(p.merchant)}','${esc(p.next_estimated)}',${amt})">Partial payment…</button>
-            <button onclick="_toggleBillMenu('${menuId}'); _billSnooze('${esc(p.merchant)}','${esc(p.next_estimated)}')">Snooze</button>
+          <button class="btn btn-secondary btn-sm" onclick="_toggleBillMenu(${idx})">···</button>
+          <div id="bill-menu-${idx}" class="bill-action-menu" style="display:none;">
+            <button onclick="_toggleBillMenu(${idx}); _openBillPartial(${idx})">Partial payment…</button>
+            <button onclick="_toggleBillMenu(${idx}); _billSnooze(${idx})">Snooze</button>
           </div>
         </div>
       </div>
     </div>
-    <div class="bill-partial-panel" id="bill-partial-${CSS.escape(p.merchant)}" style="display:none;">
+    <div class="bill-partial-panel" id="bill-partial-${idx}" style="display:none;">
       <div class="bill-partial-inner">
         <span class="bill-partial-label">Amount paid ($)</span>
-        <input type="number" class="bill-partial-input" id="bill-partial-amt-${CSS.escape(p.merchant)}"
+        <input type="number" class="bill-partial-input" id="bill-partial-amt-${idx}"
                placeholder="${amt.toFixed(2)}" min="0" step="0.01" />
         <label class="bill-partial-acct-row">
-          <input type="checkbox" id="bill-partial-acct-cb-${CSS.escape(p.merchant)}" />
+          <input type="checkbox" id="bill-partial-acct-cb-${idx}" />
           Also record in Accounts
         </label>
         <div style="display:flex; gap:6px; margin-top:6px;">
-          <button class="btn btn-primary btn-sm" onclick="_billMarkPartialConfirm('${esc(p.merchant)}','${esc(p.next_estimated)}',${amt})">Confirm</button>
-          <button class="btn btn-secondary btn-sm" onclick="_closeBillPartial('${esc(p.merchant)}')">Cancel</button>
+          <button class="btn btn-primary btn-sm" onclick="_billMarkPartialConfirm(${idx})">Confirm</button>
+          <button class="btn btn-secondary btn-sm" onclick="_closeBillPartial(${idx})">Cancel</button>
         </div>
       </div>
     </div>`;
@@ -6010,12 +6008,11 @@ function _renderBillsUrgentBanner(urgent) {
   bannerEl.style.display = '';
 }
 
-function _toggleBillMenu(menuId) {
-  // Close all other bill menus first
+function _toggleBillMenu(idx) {
   document.querySelectorAll('.bill-action-menu').forEach(m => {
-    if (m.id !== menuId) m.style.display = 'none';
+    if (m.id !== `bill-menu-${idx}`) m.style.display = 'none';
   });
-  const menu = document.getElementById(menuId);
+  const menu = document.getElementById(`bill-menu-${idx}`);
   if (menu) menu.style.display = menu.style.display === 'none' ? '' : 'none';
 }
 
@@ -6026,9 +6023,13 @@ document.addEventListener('click', e => {
   }
 });
 
-async function _billMarkPaid(merchant, occDate, amtDue) {
-  const rowEl = document.getElementById(`bill-row-${CSS.escape(merchant)}`);
-  if (rowEl) rowEl.classList.add('bill-row-paid');
+async function _billMarkPaid(idx) {
+  const rowEl = document.getElementById(`bill-row-${idx}`);
+  if (!rowEl) return;
+  const merchant = rowEl.dataset.merchant;
+  const occDate  = rowEl.dataset.date;
+  const amtDue   = parseFloat(rowEl.dataset.amt);
+  rowEl.classList.add('bill-row-paid');
   try {
     await api('POST', `/recurring/${encodeURIComponent(merchant)}/mark-paid`, {
       occurrence_date: occDate,
@@ -6036,46 +6037,49 @@ async function _billMarkPaid(merchant, occDate, amtDue) {
       payment_type: 'full',
       amount_due: amtDue,
     });
-    // Fade out and remove row + partial panel after brief confirmation
     setTimeout(() => {
-      const partial = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
-      if (rowEl) rowEl.style.transition = 'opacity .4s'; rowEl && (rowEl.style.opacity = '0');
+      const partial = document.getElementById(`bill-partial-${idx}`);
+      rowEl.style.transition = 'opacity .4s'; rowEl.style.opacity = '0';
       if (partial) partial.style.display = 'none';
       setTimeout(() => {
-        rowEl && rowEl.remove();
-        partial && partial.remove();
+        rowEl.remove();
+        if (partial) partial.remove();
         _refreshBillsTotals();
       }, 400);
     }, 800);
     toast(`${merchant} marked paid`, 'success', 2500);
   } catch (err) {
-    if (rowEl) rowEl.classList.remove('bill-row-paid');
+    rowEl.classList.remove('bill-row-paid');
     toast(`Failed: ${err.message}`, 'error');
   }
 }
 
-function _openBillPartial(merchant, occDate, amtDue) {
-  const panel = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
+function _openBillPartial(idx) {
+  const panel = document.getElementById(`bill-partial-${idx}`);
   if (!panel) return;
-  const input = document.getElementById(`bill-partial-amt-${CSS.escape(merchant)}`);
+  const input = document.getElementById(`bill-partial-amt-${idx}`);
   if (input) input.value = '';
   panel.style.display = '';
   if (input) input.focus();
 }
 
-function _closeBillPartial(merchant) {
-  const panel = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
+function _closeBillPartial(idx) {
+  const panel = document.getElementById(`bill-partial-${idx}`);
   if (panel) panel.style.display = 'none';
 }
 
-async function _billMarkPartialConfirm(merchant, occDate, amtDue) {
-  const input = document.getElementById(`bill-partial-amt-${CSS.escape(merchant)}`);
-  const cb    = document.getElementById(`bill-partial-acct-cb-${CSS.escape(merchant)}`);
+async function _billMarkPartialConfirm(idx) {
+  const rowEl = document.getElementById(`bill-row-${idx}`);
+  if (!rowEl) return;
+  const merchant = rowEl.dataset.merchant;
+  const occDate  = rowEl.dataset.date;
+  const amtDue   = parseFloat(rowEl.dataset.amt);
+  const input = document.getElementById(`bill-partial-amt-${idx}`);
+  const cb    = document.getElementById(`bill-partial-acct-cb-${idx}`);
   const paid  = parseFloat(input ? input.value : 0);
   if (!paid || paid <= 0) { toast('Enter a valid amount', 'error'); return; }
 
-  const rowEl = document.getElementById(`bill-row-${CSS.escape(merchant)}`);
-  if (rowEl) rowEl.classList.add('bill-row-paid');
+  rowEl.classList.add('bill-row-paid');
   try {
     await api('POST', `/recurring/${encodeURIComponent(merchant)}/mark-paid`, {
       occurrence_date: occDate,
@@ -6084,29 +6088,32 @@ async function _billMarkPartialConfirm(merchant, occDate, amtDue) {
       amount_due: amtDue,
       record_in_accounts: cb ? cb.checked : false,
     });
-    _closeBillPartial(merchant);
-    // Update the amount shown to remaining balance
-    const amtEl = rowEl && rowEl.querySelector('.bill-row-amt');
+    _closeBillPartial(idx);
+    const amtEl = rowEl.querySelector('.bill-row-amt');
     const remaining = amtDue - paid;
     if (amtEl && remaining > 0) {
       amtEl.innerHTML = `<span style="text-decoration:line-through;color:var(--text-muted);">${_fmt$(amtDue)}</span> <span style="color:var(--warning);">${_fmt$(remaining)} left</span>`;
       rowEl.classList.remove('bill-row-paid');
-    } else if (rowEl) {
+    } else {
       setTimeout(() => { rowEl.style.transition='opacity .4s'; rowEl.style.opacity='0'; setTimeout(() => rowEl.remove(), 400); }, 800);
     }
     toast(`Partial payment of ${_fmt$(paid)} recorded for ${merchant}`, 'success', 3000);
   } catch (err) {
-    if (rowEl) rowEl.classList.remove('bill-row-paid');
+    rowEl.classList.remove('bill-row-paid');
     toast(`Failed: ${err.message}`, 'error');
   }
 }
 
-function _billSnooze(merchant, occDate) {
+function _billSnooze(idx) {
+  const rowEl  = document.getElementById(`bill-row-${idx}`);
+  if (!rowEl) return;
+  const merchant = rowEl.dataset.merchant;
+  const occDate  = rowEl.dataset.date;
   _snoozeBill(merchant, occDate);
-  const rowEl  = document.getElementById(`bill-row-${CSS.escape(merchant)}`);
-  const partEl = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
-  if (rowEl)  { rowEl.style.transition = 'opacity .3s';  rowEl.style.opacity  = '0'; setTimeout(() => rowEl.remove(),  300); }
-  if (partEl) { partEl.style.display = 'none'; }
+  const partEl = document.getElementById(`bill-partial-${idx}`);
+  rowEl.style.transition = 'opacity .3s'; rowEl.style.opacity = '0';
+  setTimeout(() => rowEl.remove(), 300);
+  if (partEl) partEl.style.display = 'none';
   _refreshBillsTotals();
   toast(`${merchant} snoozed`, 'info', 2000);
 }

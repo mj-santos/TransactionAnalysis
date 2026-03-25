@@ -6415,6 +6415,18 @@ No cloud services, no external dependencies — all data stays on your machine.
                  paid_amount, payment_type, record_in_accounts, notes, now],
             )
 
+            # Update recurring_overrides so next_estimated recalculates on next load
+            conn.execute(
+                """INSERT INTO recurring_overrides
+                       (merchant_key, is_recurring, last_date, next_estimated, created_at, updated_at)
+                   VALUES (?, TRUE, ?, NULL, ?, ?)
+                   ON CONFLICT (merchant_key)
+                   DO UPDATE SET last_date = excluded.last_date,
+                                 next_estimated = NULL,
+                                 updated_at = excluded.updated_at""",
+                [merchant, occurrence_date, now, now],
+            )
+
             ap_payment_id = None
             if record_in_accounts:
                 # Look up linked account for this merchant via recurring_overrides
