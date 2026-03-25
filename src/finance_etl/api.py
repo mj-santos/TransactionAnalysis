@@ -14,6 +14,33 @@ from finance_etl.utils.query_helpers import INCOME_FILTER
 # ---------------------------------------------------------------------------
 _async_runs: dict[str, dict] = {}
 
+# ---------------------------------------------------------------------------
+# Recurring patterns cache — avoids full-table scan on every dashboard load
+# ---------------------------------------------------------------------------
+import time as _time
+_recurring_cache: dict = {}
+_RECURRING_CACHE_TTL = 300  # 5 minutes
+
+def _invalidate_recurring_cache() -> None:
+    _recurring_cache.clear()
+
+def _get_recurring_cached(db_path):
+    from finance_etl.recurring import detect_recurring, compute_monthly_recurring_total
+    from finance_etl.db import get_connection as _gc
+    now = _time.monotonic()
+    entry = _recurring_cache.get("data")
+    if entry and now - entry["ts"] < _RECURRING_CACHE_TTL:
+        return entry["result"]
+    conn = _gc(db_path, read_only=True)
+    try:
+        active, paused = detect_recurring(conn)
+        monthly_total = compute_monthly_recurring_total(active)
+    finally:
+        conn.close()
+    result = {"active": active, "paused": paused, "monthly_total": monthly_total}
+    _recurring_cache["data"] = {"ts": now, "result": result}
+    return result
+
 # Sentinel for distinguishing "field not in request body" from "field explicitly set to None"
 _SENTINEL = object()
 _restore_in_progress: bool = False
@@ -693,6 +720,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
     def _commit_bg(run_id: str):
         _async_runs[run_id] = {"status": "committing", "run_id": run_id}
+        _invalidate_recurring_cache()
         try:
             result = commit_run(run_id)
             # Run duplicate detection after successful commit (non-blocking)
@@ -1570,9 +1598,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         if source and source != "all":
             where.append("run_id = ?"); params.append(source)
         # review status filter
-        # COALESCE handles pre-migration rows where unreviewed is NULL (treated as unreviewed)
         if unreviewed_only:
-            where.append("COALESCE(unreviewed, TRUE) = TRUE")
+            where.append("unreviewed = TRUE")
         # empty merchant filter
         if no_merchant:
             where.append("(merchant IS NULL OR merchant = '')")
@@ -1971,7 +1998,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         try:
             conn = get_connection(db_path, read_only=True)
             row = conn.execute(
-                "SELECT COUNT(*) FROM transactions_norm WHERE COALESCE(unreviewed, TRUE) = TRUE"
+                "SELECT COUNT(*) FROM transactions_norm WHERE unreviewed = TRUE"
             ).fetchone()
             conn.close()
         except Exception as exc:
@@ -2323,14 +2350,14 @@ No cloud services, no external dependencies — all data stays on your machine.
         """Mark all transactions matching the current filters as reviewed."""
         where, params = _build_txn_where(type, date_from, date_to, account, category, merchant, source, subtype)
         # Only update unreviewed ones
-        where.append("COALESCE(unreviewed, TRUE) = TRUE")
+        where.append("unreviewed = TRUE")
         where_sql = " WHERE " + " AND ".join(where) if where else ""
         try:
             conn = get_connection(db_path)
             # Count matching rows before update
-            count_sql = f"SELECT COUNT(*) FROM transactions_norm WHERE COALESCE(unreviewed, TRUE) = TRUE"
+            count_sql = f"SELECT COUNT(*) FROM transactions_norm WHERE unreviewed = TRUE"
             if where:
-                count_sql = f"SELECT COUNT(*) FROM transactions_norm WHERE " + " AND ".join(where) + " AND COALESCE(unreviewed, TRUE) = TRUE"
+                count_sql = f"SELECT COUNT(*) FROM transactions_norm WHERE " + " AND ".join(where) + " AND unreviewed = TRUE"
             count_row = conn.execute(count_sql, params).fetchone()
             updated = int(count_row[0]) if count_row else 0
             conn.execute(
@@ -2834,7 +2861,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 SELECT
                   COUNT(CASE WHEN (category_normalized IS NULL OR category_normalized = '')
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS uncategorized,
-                  COUNT(CASE WHEN COALESCE(unreviewed, TRUE) = TRUE
+                  COUNT(CASE WHEN unreviewed = TRUE
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS unreviewed,
                   COUNT(CASE WHEN (merchant IS NULL OR merchant = '')
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END) AS no_merchant
@@ -2846,7 +2873,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                   statement_type,
                   COUNT(CASE WHEN (category_normalized IS NULL OR category_normalized = '')
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END),
-                  COUNT(CASE WHEN COALESCE(unreviewed, TRUE) = TRUE
+                  COUNT(CASE WHEN unreviewed = TRUE
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END),
                   COUNT(CASE WHEN (merchant IS NULL OR merchant = '')
                               AND COALESCE(is_split, FALSE) = FALSE THEN 1 END)
@@ -5153,7 +5180,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
             # Unreviewed count (global, not month-scoped)
             unrev_row = conn.execute(
-                "SELECT COUNT(*) FROM transactions_norm WHERE COALESCE(unreviewed, TRUE) = TRUE"
+                "SELECT COUNT(*) FROM transactions_norm WHERE unreviewed = TRUE"
             ).fetchone()
             unreviewed_count = int(unrev_row[0]) if unrev_row else 0
 
@@ -5938,17 +5965,15 @@ No cloud services, no external dependencies — all data stays on your machine.
         User overrides (mark/unmark) are merged into the results.
         Returns the pattern list and an estimated monthly total.
         """
-        from finance_etl.recurring import detect_recurring, compute_monthly_recurring_total
-        from finance_etl.db import get_connection as _gc
-
         try:
-            conn = _gc(db_path, read_only=True)
-            active, paused = detect_recurring(conn)
-            monthly_total = compute_monthly_recurring_total(active)
-            conn.close()
+            cached = _get_recurring_cached(db_path)
         except Exception as exc:
             raise HTTPException(status_code=500,
                                 detail=f"Recurring detection failed: {exc}") from exc
+
+        active = cached["active"]
+        paused = cached["paused"]
+        monthly_total = cached["monthly_total"]
 
         # Breakdown of gross monthly-equivalent cost by frequency bucket
         breakdown: dict[str, float] = {}
@@ -6396,8 +6421,8 @@ No cloud services, no external dependencies — all data stays on your machine.
         notes = body.get("notes")
         now = _dt.datetime.utcnow().isoformat()
 
+        conn = _gc(db_path)
         try:
-            conn = _gc(db_path)
             # Upsert — replace if user corrects a previous entry
             conn.execute(
                 """INSERT INTO recurring_payment_log
@@ -6449,10 +6474,11 @@ No cloud services, no external dependencies — all data stays on your machine.
                     })
                     ap_payment_id = result.get("id") if result else None
 
-            conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500,
                                 detail=f"mark-paid failed: {exc}") from exc
+        finally:
+            conn.close()
 
         return {
             "status": "ok",

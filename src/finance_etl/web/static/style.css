@@ -23,6 +23,7 @@
   --text:         #0f172a;
   --text-muted:   #64748b;
   --bg-alt:       #f8f9fa;
+  --bg-secondary: #f1f5f9;
   --radius:       8px;
   --shadow:       0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -205,8 +206,6 @@ select:focus, input[type="text"]:focus { outline: none; border-color: var(--prim
 .btn-secondary:hover { background: var(--content-bg); }
 .btn-success { background: var(--success); color: #fff; }
 .btn-success:hover { background: #16a34a; }
-.btn-danger  { background: var(--danger);  color: #fff; }
-.btn-danger:hover  { background: #dc2626; }
 .btn-sm { padding: 5px 12px; font-size: 12px; }
 
 /* ── Account type radio buttons ──────────────────────────── */
@@ -835,20 +834,6 @@ th.col-filterable.col-active-filter .col-filter-icon { opacity: 1; }
   text-align: left;
 }
 .btn-link:hover { text-decoration: underline; }
-
-/* ── Chart table ─────────────────────────────────────────── */
-#chart-area {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-#chart-area .chart-header {
-  padding: 14px 18px;
-  background: var(--bg-alt);
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-}
 
 /* ── Empty states ────────────────────────────────────────── */
 .empty {
@@ -1880,6 +1865,7 @@ tr.unreviewed-row {
   --surface:      #1e293b;
   --bg:           #1e293b;
   --bg-alt:       #334155;
+  --bg-secondary: #1e293b;
   --border:       #334155;
   --text:         #e2e8f0;
   --text-muted:   #94a3b8;
@@ -1959,7 +1945,6 @@ tr.unreviewed-row {
   border: 1px solid rgba(255,255,255,.4);
 }
 .bulk-bar .btn:hover { background: rgba(255,255,255,.25); }
-/* Bulk bar state transitions */
 .bulk-bar {
   position: relative;
   overflow: hidden;

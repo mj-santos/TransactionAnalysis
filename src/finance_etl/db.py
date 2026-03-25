@@ -456,6 +456,17 @@ from finance_etl.accounts.db_migrations import ACCOUNT_MIGRATIONS  # noqa: E402
 _MIGRATIONS.extend(ACCOUNT_MIGRATIONS)
 # ---------------------------------------------------------------------------
 
+# Tracked migrations — each has a stable integer ID and is run only once.
+# IDs must be unique and never reused/renumbered.
+_TRACKED_MIGRATIONS: list[tuple[int, str]] = [
+    # 1: Backfill unreviewed NULL → TRUE (safe after unreviewed column added)
+    (1, "UPDATE transactions_norm SET unreviewed = TRUE WHERE unreviewed IS NULL"),
+    # 2-4: Composite indexes for common query patterns
+    (2, "CREATE INDEX IF NOT EXISTS idx_tx_type_date ON transactions_norm (statement_type, transaction_date DESC)"),
+    (3, "CREATE INDEX IF NOT EXISTS idx_tx_unreviewed_type ON transactions_norm (unreviewed, statement_type)"),
+    (4, "CREATE INDEX IF NOT EXISTS idx_tx_merchant_date ON transactions_norm (merchant, transaction_date)"),
+]
+
 def get_connection(db_path: str | Path, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     """Open (or create) the DuckDB database and return a connection."""
     db_path = Path(db_path)
@@ -482,9 +493,34 @@ def _bootstrap_schema(conn) -> None:
         stmt = statement.strip()
         if stmt:
             conn.execute(stmt)
+
+    # Ensure migration tracking table exists
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            migration_id INTEGER PRIMARY KEY,
+            applied_at   TEXT NOT NULL
+        )
+    """)
+
+    applied = {row[0] for row in conn.execute("SELECT migration_id FROM schema_migrations").fetchall()}
+
     # Migrations for databases created before these columns existed
     for migration in _MIGRATIONS:
         try:
             conn.execute(migration)
         except Exception:
             pass  # column already exists — safe to ignore
+
+    # Tracked (expensive) migrations — skipped once applied
+    import datetime as _dt
+    for mid, sql in _TRACKED_MIGRATIONS:
+        if mid in applied:
+            continue
+        try:
+            conn.execute(sql)
+            conn.execute(
+                "INSERT INTO schema_migrations (migration_id, applied_at) VALUES (?, ?)",
+                [mid, _dt.datetime.utcnow().isoformat()],
+            )
+        except Exception:
+            pass

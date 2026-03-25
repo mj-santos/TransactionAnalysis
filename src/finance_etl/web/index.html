@@ -634,6 +634,15 @@
                    style="width:80px; padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
           </div>
         </div>
+        <div class="form-group" style="margin:0; min-width:130px;">
+          <label for="bk-subtype" style="font-size:11px;">Amount Type</label>
+          <select id="bk-subtype" onchange="loadTxnTab('bank')">
+            <option value="">All</option>
+            <option value="spending">Spending</option>
+            <option value="payment">Payment</option>
+            <option value="adjustment">Adjustment</option>
+          </select>
+        </div>
         <div class="form-group" style="margin:0; min-width:140px;">
           <label for="bk-group-by" style="font-size:11px;">Group by</label>
           <select id="bk-group-by" onchange="loadTxnTab('bank')">
