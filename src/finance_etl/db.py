@@ -419,6 +419,21 @@ CREATE TABLE IF NOT EXISTS annual_reports (
         UNIQUE(subcategory, parent)
     )""",
 
+    # ── Recurring payment log (mark-as-paid on upcoming bills widget) ───────
+    """CREATE TABLE IF NOT EXISTS recurring_payment_log (
+        id               BIGINT DEFAULT nextval('seq_recurring_payment_log_id') PRIMARY KEY,
+        merchant         TEXT   NOT NULL,
+        occurrence_date  TEXT   NOT NULL,
+        amount_due       DECIMAL(18,2),
+        paid_amount      DECIMAL(18,2) NOT NULL,
+        payment_type     TEXT   NOT NULL DEFAULT 'full',
+        record_in_accounts BOOLEAN DEFAULT FALSE,
+        notes            TEXT,
+        created_at       TEXT   NOT NULL,
+        UNIQUE(merchant, occurrence_date)
+    )""",
+    "CREATE SEQUENCE IF NOT EXISTS seq_recurring_payment_log_id",
+
     # ── Saved reports (user-defined reusable filter+groupby presets) ──────
     "CREATE SEQUENCE IF NOT EXISTS seq_saved_reports_id",
     """CREATE TABLE IF NOT EXISTS saved_reports (

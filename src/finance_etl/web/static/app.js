@@ -5887,14 +5887,50 @@ async function loadDashboard() {
   }
 }
 
+// Urgency config keyed by diff bucket
+const _BILL_URGENCY = [
+  { test: d => d < 0,            cls: 'bill-urgent-overdue', badge: d => `${Math.abs(d)}d overdue` },
+  { test: d => d === 0,          cls: 'bill-urgent-today',   badge: () => 'Due today' },
+  { test: d => d > 0 && d <= 3,  cls: 'bill-urgent-soon',    badge: d => `in ${d}d` },
+  { test: d => d > 3 && d <= 7,  cls: 'bill-urgent-week',    badge: d => `in ${d}d` },
+  { test: () => true,            cls: 'bill-urgent-later',   badge: d => `in ${d}d` },
+];
+
+function _billUrgency(diff) {
+  return _BILL_URGENCY.find(u => u.test(diff));
+}
+
+// localStorage key for snoozed bills: { "merchant|occurrence_date": snooze_until_iso }
+function _isBillSnoozed(merchant, occDate) {
+  try {
+    const store = JSON.parse(localStorage.getItem('bill_snooze') || '{}');
+    const until = store[`${merchant}|${occDate}`];
+    return until && new Date(until) > new Date();
+  } catch { return false; }
+}
+
+function _snoozeBill(merchant, occDate) {
+  try {
+    const store = JSON.parse(localStorage.getItem('bill_snooze') || '{}');
+    const d = new Date(occDate + 'T00:00:00');
+    // Snooze until 2 days after the occurrence date (or 7 days from now if already past)
+    const until = new Date(Math.max(d.getTime() + 2 * 86400000, Date.now() + 7 * 86400000));
+    store[`${merchant}|${occDate}`] = until.toISOString();
+    localStorage.setItem('bill_snooze', JSON.stringify(store));
+  } catch {}
+}
+
 function _renderUpcomingBills(patterns) {
-  const card = document.getElementById('dash-upcoming-bills-card');
+  const card   = document.getElementById('dash-upcoming-bills-card');
   const listEl = document.getElementById('dash-upcoming-bills');
   const totalEl = document.getElementById('dash-upcoming-bills-total');
+  const noteEl  = document.getElementById('dash-upcoming-bills-date-note');
   if (!card || !listEl) return;
 
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const in30 = new Date(today); in30.setDate(today.getDate() + 30);
+  const todayStr = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  if (noteEl) noteEl.textContent = `Based on today, ${todayStr} — not affected by month navigation`;
 
   const upcoming = patterns
     .filter(p => p.next_estimated && p.reimbursement_type !== 'full')
@@ -5902,46 +5938,193 @@ function _renderUpcomingBills(patterns) {
       const d = new Date(p.next_estimated + 'T00:00:00');
       return { ...p, _date: d, _diff: Math.round((d - today) / 86400000) };
     })
-    .filter(p => p._diff <= 30)
+    .filter(p => p._diff <= 30 && !_isBillSnoozed(p.merchant, p.next_estimated))
     .sort((a, b) => a._date - b._date);
 
-  if (!upcoming.length) { card.style.display = 'none'; return; }
+  // Empty state
+  if (!upcoming.length) {
+    listEl.innerHTML = '<div class="bill-empty-state">No bills due in the next 30 days</div>';
+    if (totalEl) totalEl.textContent = '';
+    return;
+  }
 
-  card.style.display = '';
-  const totalAmt = upcoming.reduce((s, p) => {
-    const net = p.monthly_net != null ? p.monthly_net : p.median_amount;
-    return s + Math.abs(net || 0);
-  }, 0);
-  if (totalEl) totalEl.textContent = `${upcoming.length} due · ${_fmt$(totalAmt)} total`;
+  const totalAmt = upcoming.reduce((s, p) => s + Math.abs(p.monthly_net != null ? p.monthly_net : (p.median_amount || 0)), 0);
+  if (totalEl) totalEl.textContent = `${upcoming.length} due · ${_fmt$(totalAmt)}`;
 
-  const groups = [
-    { label: 'Overdue',       color: 'var(--danger)',   items: upcoming.filter(p => p._diff < 0) },
-    { label: 'Due Today',     color: 'var(--warning)',  items: upcoming.filter(p => p._diff === 0) },
-    { label: 'This Week',     color: 'var(--primary)',  items: upcoming.filter(p => p._diff > 0 && p._diff <= 7) },
-    { label: 'Later',         color: 'var(--text-muted)', items: upcoming.filter(p => p._diff > 7) },
-  ];
+  // Compact overdue/today urgent banner injected into the alerts banner slot
+  const urgent = upcoming.filter(p => p._diff <= 0);
+  _renderBillsUrgentBanner(urgent);
 
-  listEl.innerHTML = groups
-    .filter(g => g.items.length)
-    .map(g => {
-      const rows = g.items.map(p => {
-        const daysLabel = p._diff < 0 ? `${Math.abs(p._diff)}d overdue`
-          : p._diff === 0 ? 'today'
-          : `in ${p._diff}d`;
-        const amt = p.monthly_net != null ? p.monthly_net : p.median_amount;
-        return `<div class="upcoming-bill-row">
-          <span class="upcoming-bill-dot" style="background:${g.color};"></span>
-          <span class="upcoming-bill-name">${esc(p.label || p.merchant)}</span>
-          <span class="upcoming-bill-days" style="color:${g.color};">${daysLabel}</span>
-          <span class="upcoming-bill-date">${p.next_estimated}</span>
-          <span class="upcoming-bill-amt">${_fmt$(Math.abs(amt))}</span>
-        </div>`;
-      }).join('');
-      return `<div class="upcoming-bill-group">
-        <div class="upcoming-bill-group-label" style="color:${g.color};">${g.label}</div>
-        ${rows}
-      </div>`;
-    }).join('');
+  listEl.innerHTML = upcoming.map(p => {
+    const u = _billUrgency(p._diff);
+    const amt = Math.abs(p.monthly_net != null ? p.monthly_net : (p.median_amount || 0));
+    const rowId = `bill-row-${CSS.escape(p.merchant)}`;
+    const menuId = `bill-menu-${CSS.escape(p.merchant)}`;
+    return `<div class="bill-row ${u.cls}" id="${rowId}" data-merchant="${esc(p.merchant)}" data-date="${esc(p.next_estimated)}" data-amt="${amt}">
+      <span class="bill-row-name">${esc(p.label || p.merchant)}</span>
+      <span class="bill-row-badge">${u.badge(p._diff)}</span>
+      <span class="bill-row-date">${p.next_estimated}</span>
+      <span class="bill-row-amt">${_fmt$(amt)}</span>
+      <div class="bill-row-actions">
+        <button class="btn btn-success btn-sm bill-pay-btn" onclick="_billMarkPaid('${esc(p.merchant)}','${esc(p.next_estimated)}',${amt})">✓ Paid</button>
+        <div style="position:relative;">
+          <button class="btn btn-secondary btn-sm" onclick="_toggleBillMenu('${menuId}')">···</button>
+          <div id="${menuId}" class="bill-action-menu" style="display:none;">
+            <button onclick="_toggleBillMenu('${menuId}'); _openBillPartial('${esc(p.merchant)}','${esc(p.next_estimated)}',${amt})">Partial payment…</button>
+            <button onclick="_toggleBillMenu('${menuId}'); _billSnooze('${esc(p.merchant)}','${esc(p.next_estimated)}')">Snooze</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="bill-partial-panel" id="bill-partial-${CSS.escape(p.merchant)}" style="display:none;">
+      <div class="bill-partial-inner">
+        <span class="bill-partial-label">Amount paid ($)</span>
+        <input type="number" class="bill-partial-input" id="bill-partial-amt-${CSS.escape(p.merchant)}"
+               placeholder="${amt.toFixed(2)}" min="0" step="0.01" />
+        <label class="bill-partial-acct-row">
+          <input type="checkbox" id="bill-partial-acct-cb-${CSS.escape(p.merchant)}" />
+          Also record in Accounts
+        </label>
+        <div style="display:flex; gap:6px; margin-top:6px;">
+          <button class="btn btn-primary btn-sm" onclick="_billMarkPartialConfirm('${esc(p.merchant)}','${esc(p.next_estimated)}',${amt})">Confirm</button>
+          <button class="btn btn-secondary btn-sm" onclick="_closeBillPartial('${esc(p.merchant)}')">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _renderBillsUrgentBanner(urgent) {
+  // Inject overdue/today items as a compact line inside the spending-alerts-banner slot
+  const bannerEl = document.getElementById('spending-alerts-banner');
+  if (!bannerEl || !urgent.length) return;
+  const existing = bannerEl.querySelector('.bills-urgent-banner');
+  const html = `<div class="bills-urgent-banner sa-banner sa-banner-red" style="margin-bottom:8px;">
+    <span><strong>${urgent.length} bill${urgent.length > 1 ? 's' : ''} overdue or due today:</strong>
+      ${urgent.map(p => `<span style="margin-left:8px;">${esc(p.label || p.merchant)} <strong>${_fmt$(Math.abs(p.monthly_net != null ? p.monthly_net : (p.median_amount||0)))}</strong></span>`).join('')}
+    </span>
+    <button onclick="this.closest('.bills-urgent-banner').remove()" style="background:none;border:none;cursor:pointer;font-size:16px;color:inherit;margin-left:8px;">×</button>
+  </div>`;
+  if (existing) existing.outerHTML = html;
+  else bannerEl.insertAdjacentHTML('afterbegin', html);
+  bannerEl.style.display = '';
+}
+
+function _toggleBillMenu(menuId) {
+  // Close all other bill menus first
+  document.querySelectorAll('.bill-action-menu').forEach(m => {
+    if (m.id !== menuId) m.style.display = 'none';
+  });
+  const menu = document.getElementById(menuId);
+  if (menu) menu.style.display = menu.style.display === 'none' ? '' : 'none';
+}
+
+// Close bill menus on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.bill-row-actions')) {
+    document.querySelectorAll('.bill-action-menu').forEach(m => m.style.display = 'none');
+  }
+});
+
+async function _billMarkPaid(merchant, occDate, amtDue) {
+  const rowEl = document.getElementById(`bill-row-${CSS.escape(merchant)}`);
+  if (rowEl) rowEl.classList.add('bill-row-paid');
+  try {
+    await api('POST', `/recurring/${encodeURIComponent(merchant)}/mark-paid`, {
+      occurrence_date: occDate,
+      paid_amount: amtDue,
+      payment_type: 'full',
+      amount_due: amtDue,
+    });
+    // Fade out and remove row + partial panel after brief confirmation
+    setTimeout(() => {
+      const partial = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
+      if (rowEl) rowEl.style.transition = 'opacity .4s'; rowEl && (rowEl.style.opacity = '0');
+      if (partial) partial.style.display = 'none';
+      setTimeout(() => {
+        rowEl && rowEl.remove();
+        partial && partial.remove();
+        _refreshBillsTotals();
+      }, 400);
+    }, 800);
+    toast(`${merchant} marked paid`, 'success', 2500);
+  } catch (err) {
+    if (rowEl) rowEl.classList.remove('bill-row-paid');
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function _openBillPartial(merchant, occDate, amtDue) {
+  const panel = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
+  if (!panel) return;
+  const input = document.getElementById(`bill-partial-amt-${CSS.escape(merchant)}`);
+  if (input) input.value = '';
+  panel.style.display = '';
+  if (input) input.focus();
+}
+
+function _closeBillPartial(merchant) {
+  const panel = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
+  if (panel) panel.style.display = 'none';
+}
+
+async function _billMarkPartialConfirm(merchant, occDate, amtDue) {
+  const input = document.getElementById(`bill-partial-amt-${CSS.escape(merchant)}`);
+  const cb    = document.getElementById(`bill-partial-acct-cb-${CSS.escape(merchant)}`);
+  const paid  = parseFloat(input ? input.value : 0);
+  if (!paid || paid <= 0) { toast('Enter a valid amount', 'error'); return; }
+
+  const rowEl = document.getElementById(`bill-row-${CSS.escape(merchant)}`);
+  if (rowEl) rowEl.classList.add('bill-row-paid');
+  try {
+    await api('POST', `/recurring/${encodeURIComponent(merchant)}/mark-paid`, {
+      occurrence_date: occDate,
+      paid_amount: paid,
+      payment_type: 'partial',
+      amount_due: amtDue,
+      record_in_accounts: cb ? cb.checked : false,
+    });
+    _closeBillPartial(merchant);
+    // Update the amount shown to remaining balance
+    const amtEl = rowEl && rowEl.querySelector('.bill-row-amt');
+    const remaining = amtDue - paid;
+    if (amtEl && remaining > 0) {
+      amtEl.innerHTML = `<span style="text-decoration:line-through;color:var(--text-muted);">${_fmt$(amtDue)}</span> <span style="color:var(--warning);">${_fmt$(remaining)} left</span>`;
+      rowEl.classList.remove('bill-row-paid');
+    } else if (rowEl) {
+      setTimeout(() => { rowEl.style.transition='opacity .4s'; rowEl.style.opacity='0'; setTimeout(() => rowEl.remove(), 400); }, 800);
+    }
+    toast(`Partial payment of ${_fmt$(paid)} recorded for ${merchant}`, 'success', 3000);
+  } catch (err) {
+    if (rowEl) rowEl.classList.remove('bill-row-paid');
+    toast(`Failed: ${err.message}`, 'error');
+  }
+}
+
+function _billSnooze(merchant, occDate) {
+  _snoozeBill(merchant, occDate);
+  const rowEl  = document.getElementById(`bill-row-${CSS.escape(merchant)}`);
+  const partEl = document.getElementById(`bill-partial-${CSS.escape(merchant)}`);
+  if (rowEl)  { rowEl.style.transition = 'opacity .3s';  rowEl.style.opacity  = '0'; setTimeout(() => rowEl.remove(),  300); }
+  if (partEl) { partEl.style.display = 'none'; }
+  _refreshBillsTotals();
+  toast(`${merchant} snoozed`, 'info', 2000);
+}
+
+function _refreshBillsTotals() {
+  // Recount visible rows and update totals without a network call
+  const rows = document.querySelectorAll('.bill-row:not(.bill-row-paid)');
+  let total = 0;
+  rows.forEach(r => { total += parseFloat(r.dataset.amt || 0); });
+  const totalEl = document.getElementById('dash-upcoming-bills-total');
+  if (totalEl) {
+    if (rows.length) totalEl.textContent = `${rows.length} due · ${_fmt$(total)}`;
+    else totalEl.textContent = '';
+  }
+  const listEl = document.getElementById('dash-upcoming-bills');
+  if (listEl && !document.querySelector('.bill-row')) {
+    listEl.innerHTML = '<div class="bill-empty-state">No bills due in the next 30 days</div>';
+  }
 }
 
 function _fmt$(v) {
@@ -6465,8 +6648,7 @@ function _renderNetWorthWidget(nw) {
       trendEl.innerHTML = '';
     }
   }
-  // Load accounts list
-  _loadNwAccounts();
+  // Only load the sparkline — account list and history are on the Accounts page
   _loadNwSnapshots();
 }
 
@@ -6505,12 +6687,9 @@ async function _loadNwSnapshots() {
   try {
     const data = await api('GET', '/net-worth/snapshots');
     const snapshots = data.snapshots || [];
-    const toggle = document.getElementById('nw-history-toggle');
-    if (toggle) toggle.style.display = snapshots.length ? '' : 'none';
 
     const chartEl = document.getElementById('nw-chart');
-    const listEl = document.getElementById('nw-history-list');
-    if (!chartEl || !listEl || !snapshots.length) return;
+    if (!chartEl || !snapshots.length) return;
 
     // SVG line chart (last 12 snapshots, oldest to newest)
     const recent = snapshots.slice(0, 12).reverse();
@@ -6553,19 +6732,6 @@ async function _loadNwSnapshots() {
       <polyline class="nw-chart-line" points="${pts}" stroke="${lineColor}"/>
       ${yLabels}${xLabels}${dots}
     </svg>`;
-
-    // History list
-    listEl.innerHTML = snapshots.slice(0, 20).map(s => {
-      const nw = parseFloat(s.net_worth);
-      const color = nw >= 0 ? '#22c55e' : '#ef4444';
-      return `<div class="nw-history-row">
-        <span style="font-size:12px;">${esc(s.snapshot_date)}</span>
-        <div style="display:flex; align-items:center; gap:8px;">
-          <span style="font-size:12px; font-weight:600; color:${color};">${_fmt$(nw)}</span>
-          <button class="btn btn-secondary btn-sm" onclick="deleteNwSnapshot(${s.id})" style="font-size:10px; padding:1px 5px; color:#ef4444;">✕</button>
-        </div>
-      </div>`;
-    }).join('');
   } catch (err) {
     // silent
   }

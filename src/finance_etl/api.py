@@ -6360,6 +6360,117 @@ No cloud services, no external dependencies — all data stays on your machine.
                                 detail=f"Restore failed: {exc}") from exc
         return {"status": "restored", "merchant": merchant}
 
+    # ── Mark recurring bill as paid ─────────────────────────────────────────
+
+    @app.post("/recurring/{merchant}/mark-paid", tags=["recurring"],
+              summary="Record a payment against a recurring bill occurrence")
+    def mark_recurring_paid(merchant: str, body: dict):
+        """
+        Log a payment for a specific occurrence of a recurring charge.
+
+        Body fields:
+        - occurrence_date  (required) YYYY-MM-DD of the estimated due date
+        - paid_amount      (required) amount actually paid
+        - payment_type     'full' | 'partial' (default 'full')
+        - amount_due       optional original amount
+        - record_in_accounts  bool — if true and merchant has a linked nw_account,
+                              also creates an ap_payments record
+        - notes            optional free text
+        """
+        import datetime as _dt
+        from finance_etl.db import get_connection as _gc
+
+        occurrence_date = body.get("occurrence_date", "").strip()
+        paid_amount = body.get("paid_amount")
+        if not occurrence_date or paid_amount is None:
+            raise HTTPException(status_code=400,
+                                detail="occurrence_date and paid_amount are required.")
+        try:
+            paid_amount = float(paid_amount)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="paid_amount must be numeric.")
+
+        payment_type = body.get("payment_type", "full")
+        amount_due = body.get("amount_due")
+        record_in_accounts = bool(body.get("record_in_accounts", False))
+        notes = body.get("notes")
+        now = _dt.datetime.utcnow().isoformat()
+
+        try:
+            conn = _gc(db_path)
+            # Upsert — replace if user corrects a previous entry
+            conn.execute(
+                """INSERT INTO recurring_payment_log
+                       (merchant, occurrence_date, amount_due, paid_amount,
+                        payment_type, record_in_accounts, notes, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (merchant, occurrence_date)
+                   DO UPDATE SET paid_amount = excluded.paid_amount,
+                                 payment_type = excluded.payment_type,
+                                 amount_due = excluded.amount_due,
+                                 record_in_accounts = excluded.record_in_accounts,
+                                 notes = excluded.notes""",
+                [merchant, occurrence_date,
+                 float(amount_due) if amount_due is not None else None,
+                 paid_amount, payment_type, record_in_accounts, notes, now],
+            )
+
+            ap_payment_id = None
+            if record_in_accounts:
+                # Look up linked account for this merchant via recurring_overrides
+                row = conn.execute(
+                    "SELECT linked_account_id FROM recurring_overrides "
+                    "WHERE merchant_key = ? AND linked_account_id IS NOT NULL",
+                    [merchant],
+                ).fetchone()
+                if row and row[0]:
+                    linked_id = row[0]
+                    from finance_etl.accounts.payments import record_payment as _rp
+                    result = _rp(conn, {
+                        "from_account_id": linked_id,
+                        "to_account_id": linked_id,
+                        "payment_date": occurrence_date,
+                        "amount": paid_amount,
+                        "payment_type": "manual",
+                        "notes": notes or f"Auto-logged from upcoming bills: {merchant}",
+                        "status": "completed",
+                    })
+                    ap_payment_id = result.get("id") if result else None
+
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"mark-paid failed: {exc}") from exc
+
+        return {
+            "status": "ok",
+            "merchant": merchant,
+            "occurrence_date": occurrence_date,
+            "paid_amount": paid_amount,
+            "payment_type": payment_type,
+            "ap_payment_id": ap_payment_id,
+        }
+
+    @app.get("/recurring/{merchant}/payments", tags=["recurring"],
+             summary="List payment log entries for a recurring merchant")
+    def list_recurring_payments(merchant: str):
+        from finance_etl.db import get_connection as _gc
+        try:
+            conn = _gc(db_path)
+            cols_desc = conn.execute(
+                "SELECT * FROM recurring_payment_log LIMIT 0"
+            ).description
+            col_names = [c[0] for c in cols_desc]
+            rows = conn.execute(
+                "SELECT * FROM recurring_payment_log WHERE merchant = ? "
+                "ORDER BY occurrence_date DESC",
+                [merchant],
+            ).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"payments": [dict(zip(col_names, r)) for r in rows]}
+
     # -----------------------------------------------------------------------
     # Backup & Restore  (v2 — comprehensive full-state backup)
     # -----------------------------------------------------------------------
@@ -6393,6 +6504,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         "ap_payment_source_tags",
         "ap_card_benefits",
         "ap_apr_terms",
+        "recurring_payment_log",
     ]
 
     def _rows_to_dicts(cursor_result) -> list[dict]:
