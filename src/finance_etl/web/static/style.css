@@ -101,7 +101,8 @@ body { display: flex; height: 100vh; overflow: hidden; background: var(--content
 }
 .sidebar nav a:hover  { background: rgba(255,255,255,.05); color: #f1f5f9; }
 .sidebar nav a.active { background: rgba(59,130,246,.15); color: #93c5fd; border-left-color: var(--sidebar-act); }
-.sidebar nav a .icon  { font-size: 16px; width: 20px; text-align: center; }
+.sidebar nav a .icon  { width: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sidebar nav a .icon svg { width: 16px; height: 16px; stroke: currentColor; flex-shrink: 0; }
 
 .sidebar-footer {
   padding: 14px 20px;
@@ -882,10 +883,16 @@ th.col-filterable.col-active-filter .col-filter-icon { opacity: 1; }
 .toast {
   background: var(--text); color: #f1f5f9;
   padding: 12px 18px; border-radius: var(--radius);
-  font-size: 13px; max-width: 340px;
+  font-size: 13px; max-width: 360px;
   box-shadow: 0 4px 12px rgba(0,0,0,.2);
   animation: slideIn .25s ease;
+  display: flex; align-items: flex-start; gap: 10px;
 }
+.toast-close {
+  background: none; border: none; color: inherit; opacity: .7;
+  cursor: pointer; font-size: 16px; line-height: 1; padding: 0; flex-shrink: 0;
+}
+.toast-close:hover { opacity: 1; }
 .toast.toast-success { background: #166534; }
 .toast.toast-error   { background: #991b1b; }
 .toast.toast-info    { background: #1e40af; }
@@ -2622,6 +2629,27 @@ tr.acct-row-active > td {
   min-height: 1em;
 }
 
+/* ── Filter bar: collapsible "More filters" ───────────────────── */
+.filter-more-toggle {
+  font-size: 11px; padding: 3px 10px; margin-left: auto;
+}
+.filter-more-panel {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height .25s ease, padding .25s ease;
+  padding-top: 0;
+}
+.filter-more-panel.open {
+  max-height: 500px;
+  padding-top: 10px;
+}
+
+/* ── Skeleton rows ───────────────────────────────────────────── */
+.skeleton-rows { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.skeleton-row  { display: flex; gap: 10px; align-items: center; }
+.skeleton-row .sk { border-radius: 4px; background: linear-gradient(90deg,var(--border) 25%,var(--bg-alt) 50%,var(--border) 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; }
+.skeleton-card { border-radius: var(--radius); background: linear-gradient(90deg,var(--border) 25%,var(--bg-alt) 50%,var(--border) 75%); background-size: 800px 100%; animation: shimmer 1.4s infinite linear; height: 120px; }
+
 /* ── SVG Net Worth chart ────────────────────────────────────── */
 #nw-svg-chart {
   width: 100%;
@@ -2664,7 +2692,8 @@ tr.acct-row-active > td {
     justify-content: center;
     padding: 12px 0;
   }
-  .sidebar nav a .icon { width: auto; font-size: 18px; }
+  .sidebar nav a .icon { width: auto; }
+  .sidebar nav a .icon svg { width: 18px; height: 18px; }
   .sidebar nav a.active { border-left-width: 3px; }
   .content { min-width: 0; }
 }

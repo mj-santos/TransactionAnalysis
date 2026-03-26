@@ -18,6 +18,10 @@ function _invalidateTabCache(tab) { delete _tabCache[tab]; }
 
 // ── Load Accounts ────────────────────────────────────────────────────
 async function loadAccounts() {
+  const tbody = document.getElementById('accounts-table-body');
+  if (tbody) tbody.innerHTML = Array.from({length:6}, () =>
+    `<tr>${Array.from({length:7}, (_,i) => `<td><div class="sk" style="height:13px;width:${[60,40,30,25,30,20,15][i]}%;border-radius:3px;background:linear-gradient(90deg,var(--border) 25%,var(--bg-alt) 50%,var(--border) 75%);background-size:800px 100%;animation:shimmer 1.4s infinite linear;"></div></td>`).join('')}</tr>`
+  ).join('');
   try {
     const res = await api('GET', '/accounts/');
     _accountsCache = res.accounts || [];
@@ -42,7 +46,7 @@ function _renderAccountsTable(accounts) {
   _updateAcctBulkBar();
 
   if (!accounts.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding:32px; color:var(--text-muted);">No accounts yet. Click "+ Add New Account" to get started.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">💼</div><strong>No accounts yet</strong><br><span style="font-size:13px;">Track balances and net worth by adding your accounts.</span><br><button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="openAddAccountModal()">+ Add Account</button></div></td></tr>';
     return;
   }
   tbody.innerHTML = accounts.map(a => {

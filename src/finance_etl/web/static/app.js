@@ -66,8 +66,8 @@ function navigate(page) {
   if (page === 'cashflow')           loadCashFlow();
   if (page === 'reports')            loadReports();
   if (page === 'settings')           loadSettings();
-  if (page === 'credit-cards')       loadTxnTab('credit_card');
-  if (page === 'bank-transactions')  loadTxnTab('bank');
+  if (page === 'credit-cards')       { _restoreMoreFilters('credit_card'); loadTxnTab('credit_card'); }
+  if (page === 'bank-transactions')  { _restoreMoreFilters('bank'); loadTxnTab('bank'); }
   if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); _clearSuggestions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
@@ -79,9 +79,41 @@ function navigate(page) {
 function toast(msg, type = 'info', duration = 4000) {
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
-  el.textContent = msg;
+  const isError = type === 'error';
+  el.innerHTML = `<span>${esc(msg)}</span><button class="toast-close" onclick="this.closest('.toast').remove()">×</button>`;
   document.getElementById('toasts').appendChild(el);
-  setTimeout(() => el.remove(), duration);
+  if (!isError) setTimeout(() => el.remove(), duration);
+}
+
+function _toggleMoreFilters(type) {
+  const prefix = type === 'credit_card' ? 'cc' : 'bk';
+  const panel = document.getElementById(`${prefix}-more-filters`);
+  const btn   = document.getElementById(`${prefix}-more-toggle`);
+  if (!panel) return;
+  const open = panel.classList.toggle('open');
+  if (btn) btn.textContent = open ? '▴ Fewer filters' : '▾ More filters';
+  localStorage.setItem(`txn_more_filters_${prefix}`, open ? '1' : '');
+}
+
+function _restoreMoreFilters(type) {
+  const prefix = type === 'credit_card' ? 'cc' : 'bk';
+  if (localStorage.getItem(`txn_more_filters_${prefix}`)) {
+    const panel = document.getElementById(`${prefix}-more-filters`);
+    const btn   = document.getElementById(`${prefix}-more-toggle`);
+    if (panel) { panel.classList.add('open'); }
+    if (btn)   { btn.textContent = '▴ Fewer filters'; }
+  }
+}
+
+function _skeletonRows(n = 6, widths = ['40%','60%','30%']) {
+  const rows = Array.from({length: n}, (_, i) =>
+    `<div class="skeleton-row"><div class="sk" style="height:14px;width:${widths[i % widths.length]};border-radius:3px;"></div></div>`
+  ).join('');
+  return `<div class="skeleton-rows">${rows}</div>`;
+}
+
+function _skeletonCards(n = 4) {
+  return Array.from({length: n}, () => `<div class="skeleton-card"></div>`).join('');
 }
 
 // ── Collapsible Card Panels ─────────────────────────────────
@@ -677,7 +709,7 @@ async function confirmDeleteRun() {
 // ── Reports page ──────────────────────────────────────────────
 async function loadReports() {
   const grid = document.getElementById('reports-grid');
-  grid.innerHTML = '<div class="empty"><div class="empty-icon">⏳</div>Loading…</div>';
+  grid.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;">${_skeletonCards(6)}</div>`;
   loadSavedReports();
   _loadReportFilterOptions();
 
@@ -1772,10 +1804,10 @@ async function loadRecurringTransactions() {
   const totalEl  = document.getElementById('recurring-monthly-total');
   const countEl  = document.getElementById('recurring-count-label');
 
-  if (statusEl) statusEl.textContent = 'Analyzing…';
+  if (statusEl) statusEl.textContent = '';
+  if (listEl) listEl.innerHTML = _skeletonRows(8, ['50%','70%','40%','65%','55%','75%','45%','60%']);
   try {
     const data = await api('GET', '/recurring');
-    if (statusEl) statusEl.textContent = '';
 
     _recurringPatterns = data.patterns || [];
 
@@ -1903,7 +1935,7 @@ function _applyRecurringFilters() {
   if (!filtered.length) {
     listEl.innerHTML = _recurringPatterns.length
       ? '<p style="color:var(--text-muted); padding:12px 0;">No charges match the current filters.</p>'
-      : '<p style="color:var(--text-muted); padding:12px 0;">No recurring charges yet. Click <strong>+ Add Recurring</strong> to add one manually, or import transactions to auto-detect.</p>';
+      : '<div class="empty"><div class="empty-icon">🔄</div><strong>No recurring charges detected yet</strong><br><span style="font-size:13px;">Import at least 2–3 months of transactions to auto-detect patterns, or add one manually.</span><br><button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="_openAddRecurringModal()">+ Add Recurring</button></div>';
     return;
   }
 
@@ -4868,7 +4900,7 @@ async function loadMerchantAnalytics() {
   const sortBy = document.getElementById('mi-sort')?.value || 'total_spend';
   const search = document.getElementById('mi-search')?.value?.trim() || '';
   if (!listEl) return;
-  listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">Loading…</span>';
+  listEl.innerHTML = _skeletonRows(8, ['55%','70%','40%','65%','50%','75%','45%','60%']);
 
   let url = `/merchant-analytics?sort_by=${sortBy}&limit=100`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
@@ -5176,7 +5208,7 @@ async function loadMerchantRules() {
     const data = await api('GET', '/merchant-rules');
     _allMerchantRules = data.rules || [];
     if (!_allMerchantRules.length) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:24px">No rules yet. Click "+ Add Rule" to create one.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🏪</div><strong>No merchant rules yet</strong><br><span style="font-size:13px;">Rules auto-assign categories and clean up merchant names on import.</span><br><button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="openRuleForm(null)">+ Add Rule</button></div></td></tr>';
       _updateBadge('merchant-rules-count', 0);
       _updateMerchantRuleSearchCount();
       return;
@@ -6690,17 +6722,12 @@ async function _loadNwAccounts() {
   }
 }
 
-async function _loadNwSnapshots() {
-  try {
-    const data = await api('GET', '/net-worth/snapshots');
-    const snapshots = data.snapshots || [];
+let _nwSnapshotData = null;
+let _nwResizeObserver = null;
 
-    const chartEl = document.getElementById('nw-chart');
-    if (!chartEl || !snapshots.length) return;
-
-    // SVG line chart (last 12 snapshots, oldest to newest)
-    const recent = snapshots.slice(0, 12).reverse();
-    const W = 320, H = 80, PAD = { t: 8, r: 8, b: 20, l: 52 };
+function _renderNwChart(chartEl, snapshots) {
+  const recent = snapshots.slice(0, 12).reverse();
+  const W = Math.max(chartEl.offsetWidth || 320, 160), H = 80, PAD = { t: 8, r: 8, b: 20, l: 52 };
     const vals = recent.map(s => parseFloat(s.net_worth));
     const minV = Math.min(...vals);
     const maxV = Math.max(...vals);
@@ -6734,11 +6761,26 @@ async function _loadNwSnapshots() {
       ? `<line x1="${PAD.l}" x2="${W - PAD.r}" y1="${cy(0).toFixed(1)}" y2="${cy(0).toFixed(1)}" stroke="var(--border)" stroke-dasharray="3,3" stroke-width="1"/>`
       : '';
 
-    chartEl.innerHTML = `<svg id="nw-svg-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    chartEl.innerHTML = `<svg id="nw-svg-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
       ${zeroLine}
       <polyline class="nw-chart-line" points="${pts}" stroke="${lineColor}"/>
       ${yLabels}${xLabels}${dots}
     </svg>`;
+}
+
+async function _loadNwSnapshots() {
+  try {
+    const data = await api('GET', '/net-worth/snapshots');
+    const snapshots = data.snapshots || [];
+    const chartEl = document.getElementById('nw-chart');
+    if (!chartEl || !snapshots.length) return;
+    _nwSnapshotData = snapshots;
+    _renderNwChart(chartEl, snapshots);
+    if (_nwResizeObserver) _nwResizeObserver.disconnect();
+    _nwResizeObserver = new ResizeObserver(() => {
+      if (_nwSnapshotData) _renderNwChart(chartEl, _nwSnapshotData);
+    });
+    _nwResizeObserver.observe(chartEl);
   } catch (err) {
     // silent
   }
