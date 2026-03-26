@@ -66,13 +66,13 @@ function navigate(page) {
   if (page === 'cashflow')           loadCashFlow();
   if (page === 'reports')            loadReports();
   if (page === 'settings')           loadSettings();
-  if (page === 'credit-cards')       { _restoreMoreFilters('credit_card'); loadTxnTab('credit_card'); }
-  if (page === 'bank-transactions')  { _restoreMoreFilters('bank'); loadTxnTab('bank'); }
+  if (page === 'credit-cards')       { _ensureTxnPageBuilt('cc', 'credit_card'); _restoreMoreFilters('credit_card'); loadTxnTab('credit_card'); }
+  if (page === 'bank-transactions')  { _ensureTxnPageBuilt('bk', 'bank'); _restoreMoreFilters('bank'); loadTxnTab('bank'); }
   if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); _clearSuggestions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
   if (page === 'accounts')           { loadAccounts(); }
-  if (page === 'utilities')          { loadUtilCategories(); loadUtilMerchants(); loadUtilDuplicates(); loadUtilHealth(); _showImproveStats(); }
+  if (page === 'utilities')          { Promise.all([loadUtilCategories(), loadUtilMerchants(), loadUtilDuplicates(), loadUtilHealth()]); _showImproveStats(); }
 }
 
 // ── Toasts ──────────────────────────────────────────────────
@@ -155,14 +155,15 @@ function _updateBadge(id, count) {
   el.style.display = count ? '' : 'none';
 }
 
-// ── Global Transaction Search ────────────────────────────────
-let _gsTimer = null;
-let _gsActiveIdx = -1;   // keyboard-navigated result index
-
-function _debounceGlobalSearch() {
-  clearTimeout(_gsTimer);
-  _gsTimer = setTimeout(_runGlobalSearch, 300);
+// ── Debounce utility ─────────────────────────────────────────
+function _debounce(fn, ms) {
+  let t = null;
+  return function(...args) { clearTimeout(t); t = setTimeout(() => fn.apply(this, args), ms); };
 }
+
+// ── Global Transaction Search ────────────────────────────────
+let _gsActiveIdx = -1;   // keyboard-navigated result index
+const _debounceGlobalSearch = _debounce(_runGlobalSearch, 300);
 
 async function _runGlobalSearch() {
   const input = document.getElementById('global-search-input');
@@ -1797,8 +1798,14 @@ const _freqColors = {
 };
 
 // ── Load ──────────────────────────────────────────────────────
+let _recurringLoadedAt = 0;
 
 async function loadRecurringTransactions() {
+  const now = Date.now();
+  if (_recurringPatterns.length && now - _recurringLoadedAt < 30000) {
+    _applyRecurringFilters();
+    return;
+  }
   const statusEl = document.getElementById('recurring-status');
   const listEl   = document.getElementById('recurring-list');
   const totalEl  = document.getElementById('recurring-monthly-total');
@@ -1810,6 +1817,7 @@ async function loadRecurringTransactions() {
     const data = await api('GET', '/recurring');
 
     _recurringPatterns = data.patterns || [];
+    _recurringLoadedAt = Date.now();
 
     // Top-level KPI (net of reimbursements)
     totalEl.textContent = '$' + Number(data.monthly_total).toLocaleString(undefined,
@@ -4061,6 +4069,125 @@ const _acctCtrl = {
   bank:        _makeAcctDropdown('bk-acct-ctrl', 'bank',        () => loadTxnTab('bank')),
 };
 
+// ── Lazy transaction page builder ────────────────────────────
+const _txnPageBuilt = {};
+
+function _buildTxnPageHTML(p, type) {
+  const groupByExtra = type === 'credit_card'
+    ? '<option value="category_normalized">Category (Normalized)</option><option value="category_parent">Category (Parent Group)</option>'
+    : '';
+  const financialSummary = type === 'credit_card'
+    ? `<div id="cc-financial-summary" class="card" style="margin-top:12px; display:none;">
+        <div class="card-title" style="cursor:pointer; user-select:none;" onclick="this.nextElementSibling.classList.toggle('collapsed'); this.querySelector('.chevron').textContent = this.nextElementSibling.classList.contains('collapsed') ? '▶' : '▼';">
+          Card Financial Summary <span class="chevron" style="font-size:11px; color:var(--text-muted);">▼</span>
+        </div>
+        <div id="cc-financial-summary-body" style="padding:4px 0;"></div>
+      </div>`
+    : '';
+  return `
+    <div id="${p}-balance-card" style="display:none; margin-bottom:14px;"></div>
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-title flex-between" style="margin-bottom:10px;">Filters
+        <button id="${p}-more-toggle" class="btn btn-secondary btn-sm filter-more-toggle" onclick="_toggleMoreFilters('${type}')">▾ More filters</button>
+      </div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="form-group" style="margin:0; min-width:200px;"><label style="font-size:11px;">Import Source</label><div id="${p}-source-ctrl" class="source-dropdown-wrap"></div></div>
+        <div class="form-group" style="margin:0; min-width:80px;"><label style="font-size:11px;">Year</label><select id="${p}-year" onchange="onYearChange('${type}')" style="padding:4px 8px; border-radius:6px; border:1px solid var(--border); font-size:12px;"></select></div>
+        <div class="form-group" style="margin:0;"><label style="font-size:11px;">Quick Date</label>
+          <div style="display:flex; gap:4px; flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('${type}','this_month')" style="font-size:11px; padding:3px 8px;">This Month</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('${type}','last_month')" style="font-size:11px; padding:3px 8px;">Last Month</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('${type}','3months')" style="font-size:11px; padding:3px 8px;">3 Months</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('${type}','ytd')" style="font-size:11px; padding:3px 8px;">YTD</button>
+            <button class="btn btn-secondary btn-sm" onclick="setDatePreset('${type}','all')" style="font-size:11px; padding:3px 8px;">All</button>
+          </div></div>
+        <div class="form-group" style="margin:0; min-width:130px;"><label for="${p}-date-from" style="font-size:11px;">Date from</label><input type="date" id="${p}-date-from" onchange="onDateManualChange('${type}')" /></div>
+        <div class="form-group" style="margin:0; min-width:130px;"><label for="${p}-date-to" style="font-size:11px;">Date to</label><input type="date" id="${p}-date-to" onchange="onDateManualChange('${type}')" /></div>
+        <div class="form-group" style="margin:0; min-width:170px;"><label style="font-size:11px;">Account</label><div id="${p}-acct-ctrl" class="source-ctrl-wrap"></div></div>
+        <button class="btn btn-secondary btn-sm" onclick="clearTxnFilters('${type}')">✕ Clear</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadTxnTab('${type}')">↻ Refresh</button>
+      </div>
+      <div id="${p}-more-filters" class="filter-more-panel">
+        <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; border-top:1px solid var(--border); padding-top:10px;">
+          <div class="form-group" style="margin:0; min-width:140px;"><label for="${p}-category" style="font-size:11px;">Category</label><input type="text" id="${p}-category" placeholder="Category…" oninput="debounceTxn('${type}')" /></div>
+          <div class="form-group" style="margin:0; min-width:160px;"><label for="${p}-merchant" style="font-size:11px;">Merchant / Description</label><input type="text" id="${p}-merchant" placeholder="Search…" oninput="debounceTxn('${type}')" /></div>
+          <div class="form-group" style="margin:0; min-width:190px;"><label style="font-size:11px;">Amount Range ($)</label>
+            <div style="display:flex; gap:4px; align-items:center;">
+              <input type="number" id="${p}-amount-min" placeholder="Min" step="0.01" oninput="debounceTxn('${type}')" style="width:80px; padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
+              <span style="font-size:11px; color:var(--text-muted);">–</span>
+              <input type="number" id="${p}-amount-max" placeholder="Max" step="0.01" oninput="debounceTxn('${type}')" style="width:80px; padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px;" />
+            </div></div>
+          <div class="form-group" style="margin:0; min-width:130px;"><label for="${p}-subtype" style="font-size:11px;">Amount Type</label>
+            <select id="${p}-subtype" onchange="loadTxnTab('${type}')"><option value="">All</option><option value="spending">Spending</option><option value="payment">Payment</option><option value="adjustment">Adjustment</option></select></div>
+          <div class="form-group" style="margin:0; min-width:140px;"><label for="${p}-group-by" style="font-size:11px;">Group by</label>
+            <select id="${p}-group-by" onchange="loadTxnTab('${type}')">
+              <option value="">No grouping</option><option value="transaction_date">Date</option><option value="category">Category</option>
+              ${groupByExtra}
+              <option value="merchant">Merchant</option><option value="account_name">Account</option>
+            </select></div>
+          <div class="form-group" style="margin:0; min-width:120px;"><label for="${p}-tag" style="font-size:11px;">Tag</label><select id="${p}-tag" onchange="loadTxnTab('${type}')"><option value="">All Tags</option></select></div>
+          <span style="font-size:11px; color:var(--text-muted); margin-bottom:2px; align-self:center;">Show only:</span>
+          <label class="toggle-row" style="margin-bottom:2px;"><input type="checkbox" id="${p}-unreviewed-only" onchange="loadTxnTab('${type}')" /> Unreviewed</label>
+          <label class="toggle-row" style="margin-bottom:2px;"><input type="checkbox" id="${p}-no-merchant" onchange="loadTxnTab('${type}')" /> No Merchant</label>
+          <label class="toggle-row" style="margin-bottom:2px;"><input type="checkbox" id="${p}-no-category" onchange="loadTxnTab('${type}')" /> No Category</label>
+          <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('${type}')">Mark All Reviewed</button>
+          <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="_saveTxnFilterAsReport('${type}')" title="Save current filters as a reusable report">💾 Save Report</button>
+        </div></div>
+    </div>
+    <div id="${p}-filter-chips" style="display:none; flex-wrap:wrap; gap:6px; padding:6px 0 2px; align-items:center;"></div>
+    <div id="${p}-bulk-bar" class="bulk-bar" style="display:none;">
+      <div class="bulk-status-row" id="${p}-bulk-status" style="display:none;"></div>
+      <span id="${p}-bulk-count" style="font-weight:600;">0 selected</span>
+      <button class="btn btn-sm" onclick="bulkAssignCategory('${type}', this)">Assign Category</button>
+      <button class="btn btn-sm" onclick="bulkMarkReviewed('${type}')">Mark Reviewed</button>
+      <button class="btn btn-sm" onclick="bulkExclude('${type}')">Exclude</button>
+      <button class="btn btn-sm" onclick="bulkAssignMerchant('${type}')">Assign Merchant</button>
+      <button class="btn btn-sm" onclick="bulkAssignTag('${type}')">Assign Tag</button>
+      <button class="btn btn-sm" onclick="bulkClearSelection('${type}')" style="margin-left:auto;">Clear Selection &times;</button>
+      <div class="bulk-progress-bar" id="${p}-bulk-progress"></div>
+    </div>
+    <div id="${p}-bulk-category-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px;">
+      <div style="font-size:13px; margin-bottom:8px;">Assign category to <strong id="${p}-bulk-cat-n">0</strong> selected transactions</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span id="${p}-bulk-cat-anchor" style="display:inline-block; min-width:220px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; cursor:pointer; font-size:13px; color:var(--text-muted);">Search categories…</span>
+        <button class="btn btn-secondary btn-sm" onclick="bulkAssignCategoryCancel('${type}')">Cancel</button>
+      </div></div>
+    <div id="${p}-bulk-merchant-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px;">
+      <div style="font-size:13px; margin-bottom:8px;">Assign merchant to <strong id="${p}-bulk-merchant-n">0</strong> selected transactions</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div style="position:relative; flex:1;">
+          <input id="${p}-bulk-merchant-input" type="text" placeholder="Search or type merchant name…" autocomplete="off"
+                 oninput="_debounceSearchMerchants(this, '${type}')"
+                 style="width:100%; padding:6px 10px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
+          <div id="${p}-bulk-merchant-dropdown" style="display:none; position:absolute; left:0; right:0; top:100%; margin-top:2px; background:var(--card-bg); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.1); z-index:50; max-height:200px; overflow-y:auto;"></div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="bulkAssignMerchantConfirm('${type}')">Assign</button>
+        <button class="btn btn-secondary btn-sm" onclick="bulkAssignMerchantCancel('${type}')">Cancel</button>
+      </div></div>
+    <div class="card" style="padding:0; overflow:hidden;"><div class="table-wrap">
+      <table id="${p}-table">
+        <thead><tr id="${p}-thead"></tr></thead>
+        <tbody id="${p}-tbody"><tr><td colspan="6" class="text-center text-muted" style="padding:32px">Loading…</td></tr></tbody>
+        <tfoot id="${p}-tfoot"></tfoot>
+      </table>
+    </div></div>
+    <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+      <button class="btn btn-secondary btn-sm" id="${p}-load-more" style="display:none;" onclick="loadMoreTxn('${type}')">Load more</button>
+      <span id="${p}-meta" style="font-size:12px; color:var(--text-muted);"></span>
+    </div>
+    <div id="${p}-totals-warn" style="margin-top:8px;"></div>
+    ${financialSummary}`;
+}
+
+function _ensureTxnPageBuilt(p, type) {
+  if (_txnPageBuilt[p]) return;
+  const pageId = p === 'cc' ? 'page-credit-cards' : 'page-bank-transactions';
+  document.getElementById(pageId).innerHTML = _buildTxnPageHTML(p, type);
+  _srcCtrl[type]  = makeSourceDropdown(`${p}-source-ctrl`, type, () => loadTxnTab(type));
+  _acctCtrl[type] = _makeAcctDropdown(`${p}-acct-ctrl`,    type, () => loadTxnTab(type));
+  _txnPageBuilt[p] = true;
+}
+
 /** Read current filter values from the DOM for the given tab type. */
 function _txnFilters(type) {
   const p = _pfx(type);
@@ -4894,73 +5021,79 @@ async function _populateMiYears() {
   } catch (_) {}
 }
 
+let _miCache = { key: null, data: null, ts: 0 };
+
 async function loadMerchantAnalytics() {
   _populateMiYears();
   const listEl = document.getElementById('mi-list');
   const sortBy = document.getElementById('mi-sort')?.value || 'total_spend';
   const search = document.getElementById('mi-search')?.value?.trim() || '';
   if (!listEl) return;
-  listEl.innerHTML = _skeletonRows(8, ['55%','70%','40%','65%','50%','75%','45%','60%']);
 
   let url = `/merchant-analytics?sort_by=${sortBy}&limit=100`;
   if (search) url += `&search=${encodeURIComponent(search)}`;
   if (_miDateFrom) url += `&date_from=${encodeURIComponent(_miDateFrom)}`;
   if (_miDateTo) url += `&date_to=${encodeURIComponent(_miDateTo)}`;
 
+  const now = Date.now();
+  if (_miCache.key === url && now - _miCache.ts < 30000 && _miCache.data) {
+    _renderMerchantAnalyticsData(_miCache.data, listEl);
+    return;
+  }
+  listEl.innerHTML = _skeletonRows(8, ['55%','70%','40%','65%','50%','75%','45%','60%']);
+
   try {
     const data = await api('GET', url);
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    set('mi-total', String(data.total_merchants));
-    set('mi-accel', String(data.accelerating_count));
-    set('mi-shown', String(data.merchants.length));
-
-    if (!data.merchants.length) {
-      listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No merchants found.</span>';
-      return;
-    }
-    const maxSpend = Math.max(...data.merchants.map(m => m.total_spend), 1);
-    listEl.innerHTML = data.merchants.map(m => {
-      const barPct = Math.round(m.total_spend / maxSpend * 100);
-      const trendArrow = m.trend === 'increasing' ? '▲' : m.trend === 'decreasing' ? '▼' : '→';
-      const trendColor = m.trend === 'increasing' ? '#ef4444' : m.trend === 'decreasing' ? '#22c55e' : 'var(--text-muted)';
-      const accelBadge = m.accelerating
-        ? '<span class="mi-accel-badge">Accelerating</span>' : '';
-      const lastDate = m.last_date ? m.last_date.substring(0, 10) : '—';
-
-      // Mini sparkline from monthly_data (up to 3 bars)
-      let sparkline = '';
-      if (m.monthly_data && m.monthly_data.length > 0) {
-        const maxM = Math.max(...m.monthly_data.map(d => d.spend), 1);
-        sparkline = '<div class="mi-spark">' + m.monthly_data.map(d => {
-          const h = Math.max(Math.round(d.spend / maxM * 24), 2);
-          return `<div class="mi-spark-bar" style="height:${h}px;" title="${_MONTH_NAMES[d.month-1]}: ${_fmt$(d.spend)}"></div>`;
-        }).join('') + '</div>';
-      }
-
-      return `<div class="mi-row">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span class="mi-merchant-name">${esc(m.merchant)}</span>
-            ${accelBadge}
-          </div>
-          <div style="display:flex; align-items:center; gap:12px;">
-            ${sparkline}
-            <span class="mi-trend" style="color:${trendColor};" title="MoM trend: ${m.trend_pct}%">${trendArrow} ${Math.abs(m.trend_pct)}%</span>
-            <span class="mi-amount">${_fmt$(m.total_spend)}</span>
-          </div>
-        </div>
-        <div class="mi-bar-track"><div class="mi-bar-fill" style="width:${barPct}%;"></div></div>
-        <div class="mi-meta">
-          <span>${m.txn_count} txns</span>
-          <span>Avg ${_fmt$(m.monthly_avg)}/mo</span>
-          <span>${m.months_active} mo active</span>
-          <span>Last: ${lastDate}</span>
-        </div>
-      </div>`;
-    }).join('');
+    _miCache = { key: url, data, ts: Date.now() };
+    _renderMerchantAnalyticsData(data, listEl);
   } catch (err) {
     listEl.innerHTML = `<span style="color:var(--danger);font-size:13px;">Error: ${esc(err.message)}</span>`;
   }
+}
+
+function _renderMerchantAnalyticsData(data, listEl) {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('mi-total', String(data.total_merchants));
+  set('mi-accel', String(data.accelerating_count));
+  set('mi-shown', String(data.merchants.length));
+
+  if (!data.merchants.length) {
+    listEl.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">No merchants found.</span>';
+    return;
+  }
+  const maxSpend = Math.max(...data.merchants.map(m => m.total_spend), 1);
+  listEl.innerHTML = data.merchants.map(m => {
+    const barPct = Math.round(m.total_spend / maxSpend * 100);
+    const trendArrow = m.trend === 'increasing' ? '▲' : m.trend === 'decreasing' ? '▼' : '→';
+    const trendColor = m.trend === 'increasing' ? '#ef4444' : m.trend === 'decreasing' ? '#22c55e' : 'var(--text-muted)';
+    const accelBadge = m.accelerating ? '<span class="mi-accel-badge">Accelerating</span>' : '';
+    const lastDate = m.last_date ? m.last_date.substring(0, 10) : '—';
+    let sparkline = '';
+    if (m.monthly_data && m.monthly_data.length > 0) {
+      const maxM = Math.max(...m.monthly_data.map(d => d.spend), 1);
+      sparkline = '<div class="mi-spark">' + m.monthly_data.map(d => {
+        const h = Math.max(Math.round(d.spend / maxM * 24), 2);
+        return `<div class="mi-spark-bar" style="height:${h}px;" title="${_MONTH_NAMES[d.month-1]}: ${_fmt$(d.spend)}"></div>`;
+      }).join('') + '</div>';
+    }
+    return `<div class="mi-row">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="mi-merchant-name">${esc(m.merchant)}</span>${accelBadge}
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+          ${sparkline}
+          <span class="mi-trend" style="color:${trendColor};" title="MoM trend: ${m.trend_pct}%">${trendArrow} ${Math.abs(m.trend_pct)}%</span>
+          <span class="mi-amount">${_fmt$(m.total_spend)}</span>
+        </div>
+      </div>
+      <div class="mi-bar-track"><div class="mi-bar-fill" style="width:${barPct}%;"></div></div>
+      <div class="mi-meta">
+        <span>${m.txn_count} txns</span><span>Avg ${_fmt$(m.monthly_avg)}/mo</span>
+        <span>${m.months_active} mo active</span><span>Last: ${lastDate}</span>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ── Merchant Rules page ───────────────────────────────────────
@@ -8942,7 +9075,7 @@ async function bulkAssignTag(type) {
 
 // ── Bulk Assign Merchant ──────────────────────────────────────
 
-let _merchantSearchTimer = null;
+const _debounceSearchMerchants = _debounce((input, type) => _searchMerchants(input, type), 300);
 
 function bulkAssignMerchant(type) {
   const p = type === 'credit_card' ? 'cc' : 'bk';
@@ -8960,11 +9093,6 @@ function bulkAssignMerchantCancel(type) {
   const p = type === 'credit_card' ? 'cc' : 'bk';
   const panel = document.getElementById(`${p}-bulk-merchant-panel`);
   if (panel) panel.style.display = 'none';
-}
-
-function _debounceSearchMerchants(input, type) {
-  clearTimeout(_merchantSearchTimer);
-  _merchantSearchTimer = setTimeout(() => _searchMerchants(input, type), 300);
 }
 
 async function _searchMerchants(input, type) {
