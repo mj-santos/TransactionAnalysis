@@ -38,11 +38,11 @@ document.querySelectorAll('.sidebar nav a').forEach(link => {
 
 function navigate(page) {
   _navSeq++;
-  document.querySelectorAll('.sidebar nav a').forEach(l => l.classList.remove('active'));
+  document.querySelectorAll('.sidebar nav a').forEach(l => { l.classList.remove('active'); l.removeAttribute('aria-current'); });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const link = document.querySelector(`.sidebar nav a[data-page="${page}"]`);
   const section = document.getElementById(`page-${page}`);
-  if (link)    link.classList.add('active');
+  if (link)    { link.classList.add('active'); link.setAttribute('aria-current', 'page'); }
   if (section) section.classList.add('active');
 
   const titles = {
@@ -4136,7 +4136,7 @@ function _buildTxnPageHTML(p, type) {
     </div>
     <div id="${p}-filter-chips" style="display:none; flex-wrap:wrap; gap:6px; padding:6px 0 2px; align-items:center;"></div>
     <div id="${p}-bulk-bar" class="bulk-bar" style="display:none;">
-      <div class="bulk-status-row" id="${p}-bulk-status" style="display:none;"></div>
+      <div class="bulk-status-row" id="${p}-bulk-status" style="display:none;" aria-live="polite"></div>
       <span id="${p}-bulk-count" style="font-weight:600;">0 selected</span>
       <button class="btn btn-sm" onclick="bulkAssignCategory('${type}', this)">Assign Category</button>
       <button class="btn btn-sm" onclick="bulkMarkReviewed('${type}')">Mark Reviewed</button>
@@ -4165,6 +4165,7 @@ function _buildTxnPageHTML(p, type) {
         <button class="btn btn-secondary btn-sm" onclick="bulkAssignMerchantCancel('${type}')">Cancel</button>
       </div></div>
     <div class="card" style="padding:0; overflow:hidden;"><div class="table-wrap">
+      <div class="scroll-hint">← scroll to see all columns →</div>
       <table id="${p}-table">
         <thead><tr id="${p}-thead"></tr></thead>
         <tbody id="${p}-tbody"><tr><td colspan="6" class="text-center text-muted" style="padding:32px">Loading…</td></tr></tbody>

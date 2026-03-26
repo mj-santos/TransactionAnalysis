@@ -78,7 +78,7 @@
     <div style="display:flex; align-items:center; gap:12px;">
       <div id="global-search-wrap" style="position:relative;">
         <input type="text" id="global-search-input" placeholder="Search transactions… ( / )"
-               autocomplete="off"
+               autocomplete="off" role="combobox" aria-expanded="false" aria-controls="global-search-results" aria-autocomplete="list"
                style="width:260px; padding:6px 12px; border-radius:6px; border:1px solid var(--border); font-size:13px; background:var(--card-bg); color:var(--text);"
                oninput="_debounceGlobalSearch()" onkeydown="_globalSearchKeydown(event)" />
         <div id="global-search-results" class="global-search-panel" style="display:none;"></div>
@@ -826,9 +826,9 @@
     </div>
 
     <!-- Restore preview modal (hidden by default) -->
-    <div id="restore-preview-modal" class="restore-modal-backdrop" style="display:none;">
+    <div id="restore-preview-modal" class="restore-modal-backdrop" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="restore-preview-title">
       <div class="restore-modal-container">
-        <div style="font-size:18px; font-weight:700; margin-bottom:16px;">Restore Preview</div>
+        <div id="restore-preview-title" style="font-size:18px; font-weight:700; margin-bottom:16px;">Restore Preview</div>
         <div id="restore-preview-body" style="font-size:13px; margin-bottom:20px;"></div>
         <div style="border-top:1px solid var(--border); padding-top:16px; display:flex; gap:10px; justify-content:flex-end;">
           <button class="btn btn-secondary btn-sm" onclick="cancelRestore()">Cancel</button>
@@ -1314,12 +1314,12 @@
   </section>
 
   <!-- ─── Add Recurring Modal ─── -->
-  <div id="add-recurring-modal" class="modal-overlay hidden" onclick="if(event.target===this)_closeAddRecurringModal()">
+  <div id="add-recurring-modal" class="modal-overlay hidden" onclick="if(event.target===this)_closeAddRecurringModal()" role="dialog" aria-modal="true" aria-labelledby="add-recurring-title">
     <div class="modal-dialog" style="width:480px; max-width:95vw; padding:0; overflow:hidden;">
       <!-- Header -->
       <div style="padding:20px 24px 16px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
         <div>
-          <div style="font-size:17px; font-weight:700;">Add Recurring Charge</div>
+          <div id="add-recurring-title" style="font-size:17px; font-weight:700;">Add Recurring Charge</div>
           <div style="font-size:12px; color:var(--text-muted); margin-top:2px;">Manually track a subscription or recurring bill</div>
         </div>
         <button onclick="_closeAddRecurringModal()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); line-height:1; padding:4px;">&times;</button>
@@ -2995,7 +2995,7 @@
 </div><!-- #wizard-overlay -->
 
 <!-- Monthly Summary Modal -->
-<div id="monthly-summary-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeMonthlySummary()">
+<div id="monthly-summary-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeMonthlySummary()" role="dialog" aria-modal="true" aria-labelledby="ms-title">
   <div class="modal-dialog" style="max-width:620px; max-height:90vh; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
       <div style="display:flex; align-items:center; gap:10px;">
@@ -3022,10 +3022,10 @@
 </div>
 
 <!-- Monthly Summary History Modal -->
-<div id="summary-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSummaryHistory()">
+<div id="summary-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSummaryHistory()" role="dialog" aria-modal="true" aria-labelledby="sh-title">
   <div class="modal-dialog" style="max-width:500px; max-height:80vh; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
-      <span style="font-size:16px; font-weight:700;">Saved Summaries</span>
+      <span id="sh-title" style="font-size:16px; font-weight:700;">Saved Summaries</span>
       <button class="wm-close" onclick="closeSummaryHistory()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); padding:2px 6px; border-radius:4px;">×</button>
     </div>
     <div id="sh-body" style="overflow-y:auto; flex:1;">
@@ -3035,7 +3035,7 @@
 </div>
 
 <!-- Year-in-Review Report Modal -->
-<div id="annual-report-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeAnnualReport()">
+<div id="annual-report-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeAnnualReport()" role="dialog" aria-modal="true" aria-labelledby="ar-title">
   <div class="modal-dialog" style="max-width:700px; max-height:90vh; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
       <div style="display:flex; align-items:center; gap:10px;">
@@ -3063,10 +3063,10 @@
 </div>
 
 <!-- Annual Report History Modal -->
-<div id="annual-report-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeAnnualReportHistory()">
+<div id="annual-report-history-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeAnnualReportHistory()" role="dialog" aria-modal="true" aria-labelledby="arh-title">
   <div class="modal-dialog" style="max-width:500px; max-height:80vh; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
-      <span style="font-size:16px; font-weight:700;">Saved Annual Reports</span>
+      <span id="arh-title" style="font-size:16px; font-weight:700;">Saved Annual Reports</span>
       <button class="wm-close" onclick="closeAnnualReportHistory()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted); padding:2px 6px; border-radius:4px;">×</button>
     </div>
     <div id="arh-body" style="overflow-y:auto; flex:1;">
@@ -3076,9 +3076,9 @@
 </div>
 
 <!-- Delete Run confirmation modal -->
-<div id="delete-run-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideDeleteModal()">
+<div id="delete-run-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideDeleteModal()" role="dialog" aria-modal="true" aria-labelledby="delete-run-title">
   <div class="modal-dialog" style="max-width:420px;">
-    <div class="modal-title" style="font-size:16px; font-weight:600; margin-bottom:12px;">Delete Import Run?</div>
+    <div id="delete-run-title" class="modal-title" style="font-size:16px; font-weight:600; margin-bottom:12px;">Delete Import Run?</div>
     <p style="margin:0 0 14px; color:var(--text-muted); font-size:13px;">
       Run <strong id="delete-run-modal-id" class="mono"></strong> will be permanently removed,
       including its staged rows.
@@ -3095,10 +3095,10 @@
 </div>
 
 <!-- Keyboard Shortcuts Help Modal -->
-<div id="keyboard-help-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideKeyboardHelp()">
+<div id="keyboard-help-modal" class="modal-overlay hidden" onclick="if(event.target===this)hideKeyboardHelp()" role="dialog" aria-modal="true" aria-labelledby="kb-help-title">
   <div class="modal-dialog" style="max-width:420px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-      <span style="font-size:16px; font-weight:700;">Keyboard Shortcuts</span>
+      <span id="kb-help-title" style="font-size:16px; font-weight:700;">Keyboard Shortcuts</span>
       <button class="wm-close" onclick="hideKeyboardHelp()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted);">×</button>
     </div>
     <div class="kb-help-grid">
@@ -3115,10 +3115,10 @@
 </div>
 
 <!-- Onboarding Modal -->
-<div id="onboarding-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeOnboarding()">
+<div id="onboarding-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeOnboarding()" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
   <div class="modal-dialog" style="max-width:520px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-      <span style="font-size:18px; font-weight:700;">Welcome to Spendly!</span>
+      <span id="onboarding-title" style="font-size:18px; font-weight:700;">Welcome to Spendly!</span>
       <button class="wm-close" onclick="closeOnboarding()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted);">×</button>
     </div>
     <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
@@ -3151,7 +3151,7 @@
 </div>
 
 <!-- ══════════════ CATEGORY DRILL-DOWN MODAL ══════════════ -->
-<div id="category-drilldown-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeCategoryDrilldown()">
+<div id="category-drilldown-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeCategoryDrilldown()" role="dialog" aria-modal="true" aria-labelledby="cat-drill-title">
   <div class="modal-dialog" style="max-width:720px; max-height:70vh; display:flex; flex-direction:column;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-shrink:0;">
       <span id="cat-drill-title" style="font-size:16px; font-weight:700;"></span>
@@ -3168,10 +3168,10 @@
 </div>
 
 <!-- Split Transaction Modal -->
-<div id="split-txn-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSplitModal()">
+<div id="split-txn-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeSplitModal()" role="dialog" aria-modal="true" aria-labelledby="split-txn-title">
   <div class="modal-dialog" style="max-width:560px;">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-      <span style="font-size:16px; font-weight:700;">Split Transaction</span>
+      <span id="split-txn-title" style="font-size:16px; font-weight:700;">Split Transaction</span>
       <button class="wm-close" onclick="closeSplitModal()" style="background:none; border:none; cursor:pointer; font-size:20px; color:var(--text-muted);">×</button>
     </div>
     <p style="margin:0 0 8px; font-size:13px; color:var(--text-muted);">

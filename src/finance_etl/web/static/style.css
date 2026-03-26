@@ -2697,3 +2697,16 @@ tr.acct-row-active > td {
   .sidebar nav a.active { border-left-width: 3px; }
   .content { min-width: 0; }
 }
+
+/* ── Mobile 640px breakpoint ────────────────────────────────── */
+@media (max-width: 640px) {
+  /* 2-column KPI grid instead of auto-fit overflow */
+  .ms-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* Filter bars: stack controls full-width */
+  .filter-more-panel > div { flex-direction: column; }
+  .filter-more-panel .form-group { min-width: 0 !important; width: 100%; }
+
+  /* Transaction table scroll hint */
+  .table-wrap .scroll-hint { display: block; }
+}
