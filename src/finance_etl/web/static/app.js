@@ -38,6 +38,10 @@ document.querySelectorAll('.sidebar nav a').forEach(link => {
 
 function navigate(page) {
   _navSeq++;
+  // Stop any background poll intervals from the previous page
+  if (_renormPollInterval)  { clearInterval(_renormPollInterval);  _renormPollInterval = null; }
+  if (_catNormPoll)         { clearInterval(_catNormPoll);         _catNormPoll = null; }
+  if (_orphanPollInterval)  { clearInterval(_orphanPollInterval);  _orphanPollInterval = null; }
   document.querySelectorAll('.sidebar nav a').forEach(l => { l.classList.remove('active'); l.removeAttribute('aria-current'); });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const link = document.querySelector(`.sidebar nav a[data-page="${page}"]`);
