@@ -2973,7 +2973,7 @@ async function loadTagTotals() {
     if (!totals.length) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
     list.innerHTML = totals.map(t => `
-      <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 8px; background:var(--bg-alt,#f8f9fa); border-radius:4px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 8px; background:var(--bg-alt); border-radius:4px;">
         <span>
           <span class="tag-dot" style="background:${esc(t.color || '#3b82f6')};"></span>
           ${esc(t.name)}
@@ -4940,7 +4940,7 @@ let _editingRuleId = null; // null = creating new rule
 function _makeConditionRow(pattern, matchType, negate) {
   const row = document.createElement('div');
   row.className = 'rf-condition-row';
-  row.style.cssText = 'display:flex; align-items:center; gap:8px; background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:6px 10px;';
+  row.style.cssText = 'display:flex; align-items:center; gap:8px; background:var(--bg-alt); border-radius:6px; padding:6px 10px;';
 
   const sel = document.createElement('select');
   sel.className = 'rf-cond-type';
@@ -7206,7 +7206,7 @@ let _allCatRules = []; // cached for search filtering
 function _makeCatConditionRow(pattern, matchType, negate) {
   const row = document.createElement('div');
   row.className = 'crf-condition-row';
-  row.style.cssText = 'display:flex; align-items:center; gap:8px; background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:6px 10px;';
+  row.style.cssText = 'display:flex; align-items:center; gap:8px; background:var(--bg-alt); border-radius:6px; padding:6px 10px;';
   const sel = document.createElement('select');
   sel.className = 'crf-cond-type';
   sel.style.cssText = 'width:auto; flex-shrink:0; padding:4px 6px; border-radius:5px; border:1px solid var(--border); font-size:12px;';
@@ -8264,7 +8264,7 @@ function _renderMonthlySummary(el, data) {
   if (s.biggest_transaction) {
     const b = s.biggest_transaction;
     const label = b.merchant || b.description;
-    html += `<div style="margin-top:12px; padding:10px; background:var(--bg-alt,#f8f9fa); border-radius:8px; font-size:12px;">
+    html += `<div style="margin-top:12px; padding:10px; background:var(--bg-alt); border-radius:8px; font-size:12px;">
       <span style="font-weight:600;">Biggest Purchase:</span> ${_fmt$(b.amount)} at ${esc(label)}${b.category ? ' (' + esc(b.category) + ')' : ''}${b.date ? ' on ' + esc(b.date) : ''}
     </div>`;
   }

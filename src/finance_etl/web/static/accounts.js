@@ -67,10 +67,10 @@ function _renderAccountsTable(accounts) {
           background:var(--card-bg,#fff); border:1px solid var(--border); border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12);
           min-width:130px; overflow:hidden;">
           ${a.status !== 'closed' ? `<button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none; background:none; cursor:pointer; color:var(--text);"
-            onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
+            onmouseover="this.style.background='var(--bg-alt)'" onmouseout="this.style.background='none'"
             onclick="_toggleAcctMenu('${menuId}'); closeAccount(${a.id})">Close Account</button>` : ''}
           <button style="display:block; width:100%; text-align:left; padding:8px 14px; font-size:12px; border:none; background:none; cursor:pointer; color:var(--danger);"
-            onmouseover="this.style.background='var(--bg-alt,#f1f5f9)'" onmouseout="this.style.background='none'"
+            onmouseover="this.style.background='var(--bg-alt)'" onmouseout="this.style.background='none'"
             onclick="_toggleAcctMenu('${menuId}'); deleteAccount(${a.id})">Delete</button>
         </div>
       </td>

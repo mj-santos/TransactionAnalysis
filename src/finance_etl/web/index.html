@@ -156,7 +156,7 @@
       </div>
       <!-- Budget tracking -->
       <div class="card">
-        <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <div class="card-title flex-between">
           <span>Budget Tracker</span>
           <div style="display:flex; gap:6px;">
             <button class="btn btn-secondary btn-sm" onclick="loadRebalanceSuggestions()">Rebalance</button>
@@ -165,7 +165,7 @@
         </div>
         <div id="dash-budget-list" style="display:flex; flex-direction:column; gap:8px; margin-top:4px;"></div>
         <!-- Budget form (inline) -->
-        <div id="budget-form" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt,#f8f9fa); border-radius:8px;">
+        <div id="budget-form" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt); border-radius:8px;">
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
             <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
               Parent Group
@@ -194,7 +194,7 @@
 
     <!-- Budget Rebalance Suggestions -->
     <div id="rebalance-panel" class="card" style="display:none; margin-bottom:20px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card-title flex-between">
         <span>Budget Rebalance Suggestions</span>
         <div style="display:flex; gap:8px; align-items:center;">
           <span id="rebalance-status" style="font-size:12px; color:var(--text-muted);"></span>
@@ -212,13 +212,13 @@
 
     <!-- Savings Goals -->
     <div class="card" style="margin-bottom:20px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card-title flex-between">
         <span>Savings Goals</span>
         <button class="btn btn-secondary btn-sm" onclick="openSavingsForm()">+ New Goal</button>
       </div>
       <div id="dash-savings-list" style="display:flex; flex-direction:column; gap:10px; margin-top:4px;"></div>
       <!-- Savings goal form (inline, hidden by default) -->
-      <div id="savings-form" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt,#f8f9fa); border-radius:8px;">
+      <div id="savings-form" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt); border-radius:8px;">
         <input type="hidden" id="sf-id" value="" />
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
           <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
@@ -525,7 +525,7 @@
       <div class="bulk-progress-bar" id="cc-bulk-progress"></div>
     </div>
     <!-- Bulk assign category inline panel -->
-    <div id="cc-bulk-category-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px;">
+    <div id="cc-bulk-category-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px;">
       <div style="font-size:13px; margin-bottom:8px;">Assign category to <strong id="cc-bulk-cat-n">0</strong> selected transactions</div>
       <div style="display:flex; gap:8px; align-items:center;">
         <span id="cc-bulk-cat-anchor" style="display:inline-block; min-width:220px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; cursor:pointer; font-size:13px; color:var(--text-muted);">Search categories…</span>
@@ -533,7 +533,7 @@
       </div>
     </div>
     <!-- Bulk assign merchant inline panel -->
-    <div id="cc-bulk-merchant-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px;">
+    <div id="cc-bulk-merchant-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px;">
       <div style="font-size:13px; margin-bottom:8px;">Assign merchant to <strong id="cc-bulk-merchant-n">0</strong> selected transactions</div>
       <div style="display:flex; gap:8px; align-items:center;">
         <div style="position:relative; flex:1;">
@@ -693,7 +693,7 @@
       <div class="bulk-progress-bar" id="bk-bulk-progress"></div>
     </div>
     <!-- Bulk assign category inline panel -->
-    <div id="bk-bulk-category-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px;">
+    <div id="bk-bulk-category-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px;">
       <div style="font-size:13px; margin-bottom:8px;">Assign category to <strong id="bk-bulk-cat-n">0</strong> selected transactions</div>
       <div style="display:flex; gap:8px; align-items:center;">
         <span id="bk-bulk-cat-anchor" style="display:inline-block; min-width:220px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; cursor:pointer; font-size:13px; color:var(--text-muted);">Search categories…</span>
@@ -701,7 +701,7 @@
       </div>
     </div>
     <!-- Bulk assign merchant inline panel -->
-    <div id="bk-bulk-merchant-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px;">
+    <div id="bk-bulk-merchant-panel" style="display:none; margin-bottom:10px; padding:12px 16px; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px;">
       <div style="font-size:13px; margin-bottom:8px;">Assign merchant to <strong id="bk-bulk-merchant-n">0</strong> selected transactions</div>
       <div style="display:flex; gap:8px; align-items:center;">
         <div style="position:relative; flex:1;">
@@ -969,7 +969,7 @@
             <div id="saved-views-list"><span style="font-size:12px;color:var(--text-muted);">No saved views</span></div>
           </div>
           <!-- Save panel -->
-          <div id="save-report-panel" style="display:none; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px; padding:12px; width:100%; box-sizing:border-box; margin-top:4px;">
+          <div id="save-report-panel" style="display:none; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px; padding:12px; width:100%; box-sizing:border-box; margin-top:4px;">
             <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
               <input type="text" id="save-report-name" placeholder="Report name…"
                      style="flex:2; min-width:160px; padding:6px 8px; border-radius:6px; border:1px solid var(--border); font-size:13px;" />
@@ -1082,7 +1082,7 @@
 
     <!-- Backup & Restore (v2) -->
     <div class="card" style="margin-top:20px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card-title flex-between">
         <span>Data Backup &amp; Restore</span>
         <span id="backup-version-badge" class="badge" style="font-size:11px; background:var(--primary); color:#fff; padding:2px 8px; border-radius:4px;">v2</span>
       </div>
@@ -1163,14 +1163,14 @@
 
     <!-- Tag Management -->
     <div class="card" style="margin-top:20px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card-title flex-between">
         <span>Tags</span>
         <button class="btn btn-primary btn-sm" onclick="openTagForm()">+ New Tag</button>
       </div>
       <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
         Create custom tags to label transactions. Tags are separate from categories — one transaction can have multiple tags.
       </p>
-      <div id="tag-form" style="display:none; margin-bottom:12px; padding:12px; background:var(--bg-alt,#f8f9fa); border-radius:8px;">
+      <div id="tag-form" style="display:none; margin-bottom:12px; padding:12px; background:var(--bg-alt); border-radius:8px;">
         <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
           <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
             Name
@@ -1193,7 +1193,7 @@
     </div>
 
     <div class="card" id="logs-panel" style="display:none;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card-title flex-between">
         <span>Backend Logs</span>
         <div style="display:flex; align-items:center; gap:10px;">
           <span id="logs-file" class="mono text-muted" style="font-size:11px;"></span>
@@ -1212,7 +1212,7 @@
 
     <!-- ── Merchant Intelligence ───────────────────────────────── -->
     <div class="card" style="margin-bottom:24px;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card-title flex-between">
         <span>Merchant Intelligence</span>
         <div style="display:flex; gap:8px; align-items:center;">
           <input type="text" id="mi-search" placeholder="Search merchants…"
@@ -1379,7 +1379,7 @@
         <button class="btn btn-secondary btn-sm" onclick="closeRuleForm()">Cancel</button>
         <span id="rf-test-result" style="font-size:12px; color:var(--text-muted);"></span>
       </div>
-      <div id="rf-test-matches" style="display:none; margin-top:8px; font-size:12px; color:var(--text-muted); background:var(--bg-alt,#f8f9fa); border-radius:6px; padding:8px;"></div>
+      <div id="rf-test-matches" style="display:none; margin-top:8px; font-size:12px; color:var(--text-muted); background:var(--bg-alt); border-radius:6px; padding:8px;"></div>
     </div>
 
 
@@ -1517,7 +1517,7 @@
         <span id="crf-status" style="font-size:12px; color:var(--text-muted);"></span>
       </div>
       <!-- Inline test panel -->
-      <div id="crf-test-panel" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt,#f8f9fa); border-radius:8px; border:1px solid var(--border);">
+      <div id="crf-test-panel" style="display:none; margin-top:12px; padding:12px; background:var(--bg-alt); border-radius:8px; border:1px solid var(--border);">
         <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
           <input id="crf-test-input" type="text" placeholder="Enter a raw category to test…"
                  style="flex:1; padding:6px 10px; border-radius:6px; border:1px solid var(--border); font-size:13px; font-family:monospace;" />
@@ -1564,7 +1564,7 @@
 
     <!-- Recurring list -->
     <div class="card">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <div class="card-title flex-between" style="flex-wrap:wrap; gap:8px;">
         <span>Recurring Charges</span>
         <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
           <span id="recurring-search-count" style="font-size:11px; color:var(--text-muted);"></span>
@@ -1611,7 +1611,7 @@
 
     <!-- Suggested Annual Charges -->
     <div class="card" id="annual-suggestions-card" style="margin-top:16px; display:none;">
-      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card-title flex-between">
         <span>Suggested Annual Charges</span>
         <div style="display:flex; gap:6px; align-items:center;">
           <button class="btn btn-secondary btn-sm" style="font-size:11px;" onclick="reanalyzeAnnualSuggestions()">Re-analyze</button>
@@ -3018,7 +3018,7 @@
             <button class="btn btn-primary btn-sm" onclick="_openAddCategoryForm()">+ Add Category</button>
           </div>
           <!-- Inline add-category form -->
-          <div id="util-cat-add-form" style="display:none; background:var(--bg-alt,#f8f9fa); border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:14px;">
+          <div id="util-cat-add-form" style="display:none; background:var(--bg-alt); border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:14px;">
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
               <label style="display:flex; flex-direction:column; gap:4px; font-size:13px;">
                 Subcategory Name
