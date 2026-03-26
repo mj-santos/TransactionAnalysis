@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "finance_etl"
-version = "2.74.0"
+version = "2.75.0"
 description = "Local deterministic ETL + analytics for bank/credit-card transaction CSVs"
 requires-python = ">=3.11"
 dependencies = [
