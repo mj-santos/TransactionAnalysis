@@ -2640,9 +2640,27 @@ tr.acct-row-active > td {
   padding-top: 0;
 }
 .filter-more-panel.open {
-  max-height: 500px;
+  max-height: 600px;
   padding-top: 10px;
 }
+
+/* ── Saved filter preset pills ───────────────────────────────── */
+.filter-preset-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 8px 3px 10px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text);
+  transition: background .15s, color .15s, border-color .15s;
+  user-select: none;
+}
+.filter-preset-pill:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
 
 /* ── Skeleton rows ───────────────────────────────────────────── */
 .skeleton-rows { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }

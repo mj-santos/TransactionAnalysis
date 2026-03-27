@@ -172,16 +172,43 @@ const _debounceGlobalSearch = _debounce(_runGlobalSearch, 300);
 async function _runGlobalSearch() {
   const input = document.getElementById('global-search-input');
   const panel = document.getElementById('global-search-results');
-  const q = (input ? input.value : '').trim();
-  if (q.length < 2) {
+  const raw = (input ? input.value : '').trim();
+
+  // Parse operators out of the query string
+  let q = raw;
+  let catFilter = '', dateFrom = '', dateTo = '';
+
+  const catMatch = q.match(/\bcat:(\S+)/i);
+  if (catMatch) { catFilter = catMatch[1]; q = q.replace(catMatch[0], '').trim(); }
+
+  const dateMatch = q.match(/\bdate:(\d{4}-\d{2})\b/i);
+  if (dateMatch) {
+    const [yr, mo] = dateMatch[1].split('-');
+    const days = new Date(parseInt(yr), parseInt(mo), 0).getDate();
+    dateFrom = `${yr}-${mo}-01`;
+    dateTo   = `${yr}-${mo}-${String(days).padStart(2, '0')}`;
+    q = q.replace(dateMatch[0], '').trim();
+  }
+
+  // Need at least 2-char q, a category, or a date to search
+  const hasQ = q.length >= 2;
+  if (!hasQ && !catFilter && !dateFrom) {
     panel.style.display = 'none';
+    if (input) input.setAttribute('aria-expanded', 'false');
     return;
   }
+
   panel.style.display = '';
+  if (input) input.setAttribute('aria-expanded', 'true');
   panel.innerHTML = '<div class="gs-status">Searching…</div>';
   _gsActiveIdx = -1;
   try {
-    const data = await api('GET', `/transactions/search?q=${encodeURIComponent(q)}&limit=50`);
+    const params = new URLSearchParams({ limit: 50 });
+    if (q)         params.set('q',         q);
+    if (catFilter) params.set('category',   catFilter);
+    if (dateFrom)  params.set('date_from',  dateFrom);
+    if (dateTo)    params.set('date_to',    dateTo);
+    const data = await api('GET', `/transactions/search?${params}`);
     if (!data.rows.length) {
       panel.innerHTML = '<div class="gs-status">No results</div>';
       return;
@@ -250,6 +277,8 @@ function _gsClickResult(el) {
 function _closeGlobalSearch() {
   const panel = document.getElementById('global-search-results');
   if (panel) panel.style.display = 'none';
+  const input = document.getElementById('global-search-input');
+  if (input) input.setAttribute('aria-expanded', 'false');
   _gsActiveIdx = -1;
 }
 
@@ -4136,7 +4165,17 @@ function _buildTxnPageHTML(p, type) {
           <label class="toggle-row" style="margin-bottom:2px;"><input type="checkbox" id="${p}-no-category" onchange="loadTxnTab('${type}')" /> No Category</label>
           <button class="btn btn-success btn-sm" style="margin-bottom:2px;" onclick="markAllReviewed('${type}')">Mark All Reviewed</button>
           <button class="btn btn-secondary btn-sm" style="margin-bottom:2px;" onclick="_saveTxnFilterAsReport('${type}')" title="Save current filters as a reusable report">💾 Save Report</button>
-        </div></div>
+        </div>
+        <div style="border-top:1px solid var(--border); padding-top:10px; margin-top:4px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+          <span class="label-xs">Presets</span>
+          <div id="${p}-presets-list" style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; flex:1;"></div>
+          <div style="display:flex; gap:6px; align-items:center; margin-left:auto;">
+            <input id="${p}-preset-name" type="text" placeholder="Name this filter set…" onkeydown="if(event.key==='Enter')saveFilterPreset('${type}')"
+              style="padding:4px 8px; border:1px solid var(--border); border-radius:4px; font-size:12px; width:170px; background:var(--card-bg); color:var(--text);" />
+            <button class="btn btn-secondary btn-sm" onclick="saveFilterPreset('${type}')">Save</button>
+          </div>
+        </div>
+      </div></div>
     </div>
     <div id="${p}-filter-chips" style="display:none; flex-wrap:wrap; gap:6px; padding:6px 0 2px; align-items:center;"></div>
     <div id="${p}-bulk-bar" class="bulk-bar" style="display:none;">
@@ -4190,6 +4229,8 @@ function _ensureTxnPageBuilt(p, type) {
   document.getElementById(pageId).innerHTML = _buildTxnPageHTML(p, type);
   _srcCtrl[type]  = makeSourceDropdown(`${p}-source-ctrl`, type, () => loadTxnTab(type));
   _acctCtrl[type] = _makeAcctDropdown(`${p}-acct-ctrl`,    type, () => loadTxnTab(type));
+  _restoreTxnFilterState(type);
+  _renderPresets(type);
   _txnPageBuilt[p] = true;
 }
 
@@ -4214,6 +4255,98 @@ function _txnFilters(type) {
   };
 }
 
+// ── Filter persistence ────────────────────────────────────────────────────
+function _filterPersistKey(type) { return `txn_filter_v1_${_pfx(type)}`; }
+
+function _applyFilterValues(type, f) {
+  if (!f) return;
+  const p = _pfx(type);
+  const set = (id, val) => { const el = document.getElementById(`${p}-${id}`); if (el) el.value = val || ''; };
+  const chk = (id, val) => { const el = document.getElementById(`${p}-${id}`); if (el) el.checked = !!val; };
+  set('date-from',  f.date_from);
+  set('date-to',    f.date_to);
+  set('category',   f.category);
+  set('merchant',   f.merchant);
+  set('amount-min', f.amount_min);
+  set('amount-max', f.amount_max);
+  set('subtype',    f.subtype);
+  set('group-by',   f.group_by);
+  set('tag',        f.tag);
+  chk('unreviewed-only', f.unreviewed_only);
+  chk('no-merchant',     f.no_merchant);
+  chk('no-category',     f.no_category);
+  if (f._year) {
+    const yr = document.getElementById(`${p}-year`);
+    if (yr && [...yr.options].some(o => o.value === f._year)) yr.value = f._year;
+  }
+}
+
+function _saveTxnFilterState(type) {
+  const f = _txnFilters(type);
+  f._year = document.getElementById(`${_pfx(type)}-year`)?.value || '';
+  try { localStorage.setItem(_filterPersistKey(type), JSON.stringify(f)); } catch {}
+}
+
+function _restoreTxnFilterState(type) {
+  try {
+    const raw = localStorage.getItem(_filterPersistKey(type));
+    if (raw) _applyFilterValues(type, JSON.parse(raw));
+  } catch {}
+}
+
+// ── Saved filter presets ─────────────────────────────────────────────────
+function _presetsKey(type) { return `txn_presets_v1_${_pfx(type)}`; }
+function _loadPresets(type) {
+  try { return JSON.parse(localStorage.getItem(_presetsKey(type)) || '[]'); } catch { return []; }
+}
+function _savePresets(type, list) {
+  try { localStorage.setItem(_presetsKey(type), JSON.stringify(list)); } catch {}
+}
+
+function saveFilterPreset(type) {
+  const nameEl = document.getElementById(`${_pfx(type)}-preset-name`);
+  const name = nameEl ? nameEl.value.trim() : '';
+  if (!name) { toast('Enter a preset name', 'info'); return; }
+  const presets = _loadPresets(type);
+  if (presets.length >= 8) { toast('Maximum 8 presets. Delete one first.', 'info'); return; }
+  const f = _txnFilters(type);
+  f._year = document.getElementById(`${_pfx(type)}-year`)?.value || '';
+  presets.push({ name, filters: f });
+  _savePresets(type, presets);
+  if (nameEl) nameEl.value = '';
+  _renderPresets(type);
+  toast(`Preset "${name}" saved`, 'success');
+}
+
+function loadFilterPreset(type, idx) {
+  const presets = _loadPresets(type);
+  if (!presets[idx]) return;
+  _applyFilterValues(type, presets[idx].filters);
+  loadTxnTab(type);
+}
+
+function deleteFilterPreset(type, idx) {
+  const presets = _loadPresets(type);
+  presets.splice(idx, 1);
+  _savePresets(type, presets);
+  _renderPresets(type);
+}
+
+function _renderPresets(type) {
+  const container = document.getElementById(`${_pfx(type)}-presets-list`);
+  if (!container) return;
+  const presets = _loadPresets(type);
+  if (!presets.length) {
+    container.innerHTML = '<span style="color:var(--text-muted); font-size:11px; font-style:italic;">No saved presets</span>';
+    return;
+  }
+  container.innerHTML = presets.map((pr, i) =>
+    `<span class="filter-preset-pill" onclick="loadFilterPreset('${type}', ${i})" title="${esc(pr.name)}">
+      ${esc(pr.name)}<button onclick="event.stopPropagation();deleteFilterPreset('${type}',${i})" aria-label="Delete preset" style="background:none;border:none;cursor:pointer;padding:0 0 0 5px;font-size:12px;color:inherit;opacity:.7;line-height:1;">&times;</button>
+    </span>`
+  ).join('');
+}
+
 /**
  * Main loader for Credit Cards / Bank Transactions tabs.
  * reset=true (default): reset pagination and replace table contents.
@@ -4233,6 +4366,7 @@ async function loadTxnTab(type, reset = true) {
   if (reset) st.offset = 0;
 
   const f = _txnFilters(type);
+  _saveTxnFilterState(type);
 
   // Build query string for /transactions (includes pagination + sort)
   const qs = new URLSearchParams({ type, limit: PAGE, offset: st.offset,
@@ -4368,6 +4502,7 @@ function clearTxnFilters(type) {
   ['amount-min','amount-max'].forEach(s => {
     const el = document.getElementById(`${p2}-${s}`); if (el) el.value = '';
   });
+  localStorage.removeItem(_filterPersistKey(type));
   loadTxnTab(type);
 }
 

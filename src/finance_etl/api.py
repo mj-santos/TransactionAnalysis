@@ -1738,52 +1738,72 @@ No cloud services, no external dependencies — all data stays on your machine.
         summary="Global full-text search across all transactions",
     )
     def search_transactions(
-        q:     str = Query(..., min_length=2, description="Search query — text or amount operator (>50, <200, 50-100)"),
-        limit: int = Query(50, le=100, description="Max results"),
+        q:          str           = Query("",   description="Search query — text or amount operator (>50, <200, 50-100)"),
+        category:   Optional[str] = Query(None, description="Filter by category (partial match)"),
+        date_from:  Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+        date_to:    Optional[str] = Query(None, description="End date YYYY-MM-DD"),
+        limit:      int           = Query(50, le=100, description="Max results"),
     ):
         """
         Search across description, merchant, amount, and category_normalized.
 
-        Amount operators:
+        Amount operators in q:
         - ``>50``  — amount greater than (absolute value)
         - ``<200`` — amount less than (absolute value)
         - ``50-100`` — amount in range (absolute value)
         - Plain numbers match exactly (absolute value)
+
+        Additional filters via query params: category (partial match), date_from, date_to.
+        At least one of q (≥2 chars), category, or date_from must be provided.
         """
         import re as _re
 
+        q_stripped = q.strip()
+        if len(q_stripped) < 2 and not category and not date_from:
+            raise HTTPException(status_code=422, detail="Provide q (≥2 chars), category, or date_from")
+
         where: list[str] = ["COALESCE(excluded, FALSE) = FALSE"]
         params: list = []
-        q_stripped = q.strip()
 
-        # Detect amount operator patterns
-        range_match = _re.fullmatch(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", q_stripped)
-        gt_match = _re.fullmatch(r">\s*(\d+(?:\.\d+)?)", q_stripped)
-        lt_match = _re.fullmatch(r"<\s*(\d+(?:\.\d+)?)", q_stripped)
-        exact_num = _re.fullmatch(r"(\d+(?:\.\d{1,2})?)", q_stripped)
+        if category:
+            where.append("LOWER(COALESCE(category_normalized, '')) LIKE ?")
+            params.append(f"%{category.lower()}%")
+        if date_from:
+            where.append("transaction_date >= ?")
+            params.append(date_from)
+        if date_to:
+            where.append("transaction_date <= ?")
+            params.append(date_to)
 
-        if range_match:
-            lo, hi = float(range_match.group(1)), float(range_match.group(2))
-            where.append("ABS(amount) BETWEEN ? AND ?")
-            params.extend([lo, hi])
-        elif gt_match:
-            where.append("ABS(amount) > ?")
-            params.append(float(gt_match.group(1)))
-        elif lt_match:
-            where.append("ABS(amount) < ?")
-            params.append(float(lt_match.group(1)))
-        elif exact_num:
-            where.append("ABS(amount) = ?")
-            params.append(float(exact_num.group(1)))
-        else:
-            # Text search: match across description, merchant, category_normalized
-            term = f"%{q_stripped.lower()}%"
-            where.append(
-                "(LOWER(COALESCE(description, '')) LIKE ?"
-                " OR LOWER(COALESCE(merchant, '')) LIKE ?"
-                " OR LOWER(COALESCE(category_normalized, '')) LIKE ?)"
-            )
-            params.extend([term, term, term])
+        if q_stripped:
+            # Detect amount operator patterns
+            range_match = _re.fullmatch(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", q_stripped)
+            gt_match    = _re.fullmatch(r">\s*(\d+(?:\.\d+)?)", q_stripped)
+            lt_match    = _re.fullmatch(r"<\s*(\d+(?:\.\d+)?)", q_stripped)
+            exact_num   = _re.fullmatch(r"(\d+(?:\.\d{1,2})?)", q_stripped)
+
+            if range_match:
+                lo, hi = float(range_match.group(1)), float(range_match.group(2))
+                where.append("ABS(amount) BETWEEN ? AND ?")
+                params.extend([lo, hi])
+            elif gt_match:
+                where.append("ABS(amount) > ?")
+                params.append(float(gt_match.group(1)))
+            elif lt_match:
+                where.append("ABS(amount) < ?")
+                params.append(float(lt_match.group(1)))
+            elif exact_num:
+                where.append("ABS(amount) = ?")
+                params.append(float(exact_num.group(1)))
+            else:
+                # Text search: match across description, merchant, category_normalized
+                term = f"%{q_stripped.lower()}%"
+                where.append(
+                    "(LOWER(COALESCE(description, '')) LIKE ?"
+                    " OR LOWER(COALESCE(merchant, '')) LIKE ?"
+                    " OR LOWER(COALESCE(category_normalized, '')) LIKE ?)"
+                )
+                params.extend([term, term, term])
 
         where_sql = " WHERE " + " AND ".join(where) if where else ""
         safe_limit = max(1, min(int(limit), 100))
