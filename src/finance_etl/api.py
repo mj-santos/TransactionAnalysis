@@ -1,4 +1,5 @@
 """FastAPI service — uploads, async runs, preview/commit, reports, and web UI."""
+import calendar
 import json
 import re
 import uuid
@@ -5261,6 +5262,45 @@ No cloud services, no external dependencies — all data stays on your machine.
             except Exception:
                 pass
 
+            # MTD forecast (linear projection to month end)
+            from datetime import date as _date
+            _today = _date.today()
+            days_in_month = calendar.monthrange(year, month)[1]
+            if year == _today.year and month == _today.month:
+                days_elapsed = _today.day
+            else:
+                days_elapsed = days_in_month
+            mtd_forecast = round(mtd_spend / days_elapsed * days_in_month, 2) if days_elapsed > 0 else 0.0
+
+            # Category changes vs prior month
+            prev_cat_rows = conn.execute(
+                """
+                SELECT COALESCE(category_normalized, category_parent, category) AS grp,
+                       SUM(resolved_amount) AS total_amount
+                FROM transactions_norm
+                WHERE transaction_subtype = 'spending'
+                  AND YEAR(transaction_date) = ?
+                  AND MONTH(transaction_date) = ?
+                  AND COALESCE(category_normalized, category_parent, category) IS NOT NULL
+                GROUP BY grp
+                """,
+                [prev_year, prev_month],
+            ).fetchall()
+            prev_cat_map = {r[0]: float(r[1]) for r in prev_cat_rows}
+            category_changes = []
+            for c in top_categories:
+                cat = c["category_parent"]
+                cur = c["total_amount"]
+                prev_amt = prev_cat_map.get(cat, 0.0)
+                if prev_amt > 0:
+                    delta_pct = round((cur - prev_amt) / prev_amt * 100, 1)
+                elif cur > 0:
+                    delta_pct = 100.0
+                else:
+                    delta_pct = 0.0
+                category_changes.append({"category": cat, "current": cur, "previous": prev_amt, "delta_pct": delta_pct})
+            category_changes.sort(key=lambda x: abs(x["delta_pct"]), reverse=True)
+
             conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Dashboard query failed: {exc}") from exc
@@ -5281,6 +5321,10 @@ No cloud services, no external dependencies — all data stays on your machine.
             "savings_goals": savings_goals_summary,
             "net_worth": nw_summary,
             "utilization_alerts": utilization_alerts,
+            "mtd_forecast": mtd_forecast,
+            "days_elapsed": days_elapsed,
+            "days_in_month": days_in_month,
+            "category_changes": category_changes,
         }
 
     # -----------------------------------------------------------------------

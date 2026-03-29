@@ -6519,6 +6519,12 @@ function _renderDashboard(data) {
   // Credit utilization alerts
   _renderUtilizationAlerts(data.utilization_alerts || []);
 
+  // MTD forecast
+  _renderForecast(data);
+
+  // Biggest category change vs last month
+  _renderCategoryChanges(data);
+
   // Savings goals
   _renderSavingsGoals(data.savings_goals || []);
 
@@ -6685,6 +6691,42 @@ function _recapSeeDetails(start, end) {
   if (startInput) startInput.value = start;
   if (endInput) endInput.value = end;
   loadTransactions();
+}
+
+// ── MTD Forecast ───────────────────────────────────────────────
+
+function _renderForecast(data) {
+  const el = document.getElementById('dash-forecast');
+  if (!el) return;
+  const { mtd_forecast, days_elapsed, days_in_month } = data;
+  if (!days_elapsed || days_elapsed < 3 || !mtd_forecast) { el.style.display = 'none'; return; }
+  const paceRatio = mtd_forecast / (data.prev_spend || mtd_forecast);
+  const color = paceRatio > 1.1 ? '#ef4444' : paceRatio > 0.9 ? '#f59e0b' : '#22c55e';
+  el.style.display = '';
+  el.innerHTML = `<span style="font-size:11px; color:var(--text-muted);">Projected: <strong style="color:${color};">${_fmt$(mtd_forecast)}</strong> by month end <span style="color:var(--text-muted);">(day ${days_elapsed}/${days_in_month})</span></span>`;
+}
+
+// ── Biggest Category Change ─────────────────────────────────────
+
+function _renderCategoryChanges(data) {
+  const el = document.getElementById('dash-cat-changes');
+  if (!el) return;
+  const changes = data.category_changes || [];
+  if (!changes.length || Math.abs(changes[0].delta_pct) < 10) { el.style.display = 'none'; return; }
+  const top = changes[0];
+  const up = top.delta_pct > 0;
+  const color = up ? '#ef4444' : '#22c55e';
+  const arrow = up ? '▲' : '▼';
+  el.style.display = '';
+  el.innerHTML = `<div style="display:flex; align-items:center; gap:10px; padding:12px 16px;">
+    <span style="font-size:20px; color:${color};">${arrow}</span>
+    <div style="font-size:13px;">
+      <strong>${esc(top.category)}</strong> spending is
+      <span style="color:${color}; font-weight:600;">${Math.abs(top.delta_pct)}% ${up ? 'higher' : 'lower'}</span>
+      than last month
+      <span style="color:var(--text-muted); font-size:12px;">(${_fmt$(top.previous)} → ${_fmt$(top.current)})</span>
+    </div>
+  </div>`;
 }
 
 // ── Budget Pace Indicator ──────────────────────────────────────
