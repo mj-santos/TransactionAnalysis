@@ -26,6 +26,7 @@ async function loadAccounts() {
     const res = await api('GET', '/accounts/');
     _accountsCache = res.accounts || [];
     _renderAccountsTable(_accountsCache);
+    _renderPaymentDueBanner(_accountsCache);
     _populateManageFilters(_accountsCache);
     _loadPaymentSourceTags();
     _populateTagAccountDropdown(_accountsCache);
@@ -1843,6 +1844,7 @@ async function _loadTrendsData() {
     _renderPaymentSummaryChart(paymentSummary);
     _populateAccountTrendSelect();
     loadPayoffProjection();
+    loadPayoffComparison();
     _loadNetWorthTrend();
   } catch (e) {
     toast('Failed to load trends data: ' + e.message, 'error');
@@ -2040,6 +2042,125 @@ function _renderPayoffProjection(data) {
       <td style="text-align:right; font-variant-numeric:tabular-nums;">${_fmt(a.total_cost)}</td>
     </tr>`;
   }).join('');
+}
+
+// ── Debt Payoff Optimizer (Avalanche vs Snowball) ─────────────
+
+async function loadPayoffComparison() {
+  const extra = parseFloat(document.getElementById('payoff-extra-monthly')?.value || '0') || 0;
+  try {
+    const data = await api('GET', `/accounts/analytics/payoff-comparison?extra_monthly=${extra}`);
+    _renderPayoffComparison(data);
+  } catch (e) {
+    const el = document.getElementById('payoff-comparison-recommendation');
+    if (el) el.textContent = 'Could not load payoff comparison.';
+  }
+}
+
+function _renderPayoffComparison(data) {
+  const recEl  = document.getElementById('payoff-comparison-recommendation');
+  const avSum  = document.getElementById('payoff-avalanche-summary');
+  const swSum  = document.getElementById('payoff-snowball-summary');
+  const avList = document.getElementById('payoff-avalanche-list');
+  const swList = document.getElementById('payoff-snowball-list');
+  if (!recEl) return;
+
+  if (!data.total_debts) {
+    recEl.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No liabilities with balances found.</span>';
+    if (avSum) avSum.textContent = '';
+    if (swSum) swSum.textContent = '';
+    if (avList) avList.innerHTML = '';
+    if (swList) swList.innerHTML = '';
+    return;
+  }
+
+  const av = data.avalanche;
+  const sw = data.snowball;
+  const saved = data.interest_saved_by_avalanche;
+
+  // Recommendation banner
+  let recHtml;
+  if (saved > 0) {
+    recHtml = `<div style="padding:10px 14px; background:var(--bg-alt); border-left:4px solid #3b82f6; border-radius:4px; font-size:13px;">
+      <strong>Avalanche saves ${_fmt(saved)} in interest</strong> compared to Snowball.
+      Attack your highest-APR debt first for the best financial outcome.
+    </div>`;
+  } else if (saved < 0) {
+    recHtml = `<div style="padding:10px 14px; background:var(--bg-alt); border-left:4px solid #8b5cf6; border-radius:4px; font-size:13px;">
+      <strong>Snowball saves ${_fmt(Math.abs(saved))} in interest</strong> for this debt mix.
+    </div>`;
+  } else {
+    recHtml = `<div style="padding:10px 14px; background:var(--bg-alt); border-radius:4px; font-size:13px; color:var(--text-muted);">
+      Both strategies produce the same total interest for your current debts.
+    </div>`;
+  }
+  recEl.innerHTML = recHtml;
+
+  // Summary lines
+  const _moLabel = m => m == null ? 'Never' : m >= 24 ? `${(m/12).toFixed(1)} yrs` : `${m} mo`;
+  if (avSum) avSum.textContent = `${_moLabel(av.total_months)} · ${_fmt(av.total_interest)} interest`;
+  if (swSum) swSum.textContent = `${_moLabel(sw.total_months)} · ${_fmt(sw.total_interest)} interest`;
+
+  // Ordered lists
+  const _listItem = d => `<li style="padding:4px 0; border-bottom:1px solid var(--border);">
+    <span style="font-weight:600;">${esc(d.name)}</span>
+    <span style="color:var(--text-muted); font-size:11px; margin-left:6px;">${_fmt(d.balance)} · ${d.apr}% APR</span>
+  </li>`;
+  if (avList) avList.innerHTML = av.order.map(_listItem).join('');
+  if (swList) swList.innerHTML = sw.order.map(_listItem).join('');
+}
+
+// ── Payment Due Alerts Banner ─────────────────────────────────
+
+function _renderPaymentDueBanner(accounts) {
+  const banner = document.getElementById('accounts-due-banner');
+  if (!banner) return;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const in7 = new Date(today); in7.setDate(today.getDate() + 7);
+
+  const overdue = [];
+  const dueSoon = [];
+  accounts.forEach(a => {
+    if (!a.payment_due_date) return;
+    const d = new Date(a.payment_due_date);
+    d.setHours(0, 0, 0, 0);
+    if (d < today) overdue.push(a);
+    else if (d <= in7) dueSoon.push(a);
+  });
+
+  if (!overdue.length && !dueSoon.length) { banner.style.display = 'none'; return; }
+
+  const rows = [
+    ...overdue.map(a => {
+      const daysAgo = Math.round((today - new Date(a.payment_due_date)) / 86400000);
+      const label = daysAgo === 0 ? 'Due today' : `${daysAgo}d overdue`;
+      return `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;">
+        <span><strong>${esc(a.name)}</strong> <span style="color:var(--danger); font-size:12px;">${label}</span></span>
+        <span style="color:var(--danger); font-weight:600;">${a.minimum_payment_amount ? _fmt(a.minimum_payment_amount) : '—'}</span>
+      </div>`;
+    }),
+    ...dueSoon.map(a => {
+      const daysLeft = Math.round((new Date(a.payment_due_date) - today) / 86400000);
+      const label = daysLeft === 0 ? 'Due today' : daysLeft === 1 ? 'Due tomorrow' : `Due in ${daysLeft}d`;
+      return `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0;">
+        <span><strong>${esc(a.name)}</strong> <span style="color:var(--warning); font-size:12px;">${label}</span></span>
+        <span style="font-weight:600;">${a.minimum_payment_amount ? _fmt(a.minimum_payment_amount) : '—'}</span>
+      </div>`;
+    }),
+  ].join('');
+
+  const borderColor = overdue.length ? 'var(--danger)' : 'var(--warning)';
+  banner.style.display = '';
+  banner.innerHTML = `<div class="card" style="padding:12px 16px; border-left:4px solid ${borderColor};">
+    <div style="font-weight:700; font-size:13px; margin-bottom:8px;">
+      ${overdue.length ? `⚠ ${overdue.length} overdue payment${overdue.length > 1 ? 's' : ''}` : ''}
+      ${overdue.length && dueSoon.length ? ' · ' : ''}
+      ${dueSoon.length ? `${dueSoon.length} due within 7 days` : ''}
+    </div>
+    ${rows}
+  </div>`;
 }
 
 function _renderAnnualFees(data) {

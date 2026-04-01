@@ -231,6 +231,104 @@ def get_payoff_projection(conn, strategy: str = "minimum") -> list[dict]:
     return results
 
 
+def get_payoff_comparison(conn, extra_monthly: float = 0.0) -> dict:
+    """
+    Avalanche vs Snowball debt payoff comparison.
+
+    Avalanche: attack highest-APR debt first.
+    Snowball: attack lowest-balance debt first.
+    Extra minimums freed when a debt is paid off roll forward to the next focus debt.
+
+    Returns both strategies' attack order, total months, total interest, and
+    the interest saved by choosing avalanche over snowball.
+    """
+    rows = conn.execute("""
+        SELECT id, name, institution, liability_type,
+               balance, interest_rate, minimum_payment_amount, monthly_payment
+        FROM nw_accounts
+        WHERE (status = 'active' OR status IS NULL)
+        AND is_asset = FALSE
+        AND ABS(balance) > 0
+        ORDER BY name
+    """).fetchall()
+
+    debts = []
+    for r in rows:
+        bal = abs(float(r[4])) if r[4] else 0
+        apr = float(r[5]) if r[5] else 0
+        min_pay = float(r[6]) if r[6] else 0
+        monthly_pay = float(r[7]) if r[7] else 0
+        base = min_pay or monthly_pay or max(bal * 0.02, 10.0)
+        debts.append({
+            "id": r[0], "name": r[1], "institution": r[2],
+            "liability_type": r[3],
+            "balance": round(bal, 2),
+            "apr": apr,
+            "base_payment": round(base, 2),
+        })
+
+    def _simulate(ordered):
+        remaining = [d["balance"] for d in ordered]
+        rates = [d["apr"] / 100.0 / 12.0 for d in ordered]
+        bases = [d["base_payment"] for d in ordered]
+        total_interest = 0.0
+        months = 0
+        rolling_extra = extra_monthly
+
+        while any(r > 0.01 for r in remaining) and months < 360:
+            months += 1
+            for i in range(len(remaining)):
+                if remaining[i] < 0.01:
+                    continue
+                interest = remaining[i] * rates[i]
+                total_interest += interest
+                remaining[i] += interest
+                payment = min(bases[i], remaining[i])
+                remaining[i] = max(remaining[i] - payment, 0)
+                if remaining[i] < 0.01:
+                    remaining[i] = 0
+                    rolling_extra += bases[i]
+            for i in range(len(remaining)):
+                if remaining[i] > 0.01:
+                    pay = min(rolling_extra, remaining[i])
+                    remaining[i] = max(remaining[i] - pay, 0)
+                    rolling_extra -= pay
+                    if remaining[i] < 0.01:
+                        remaining[i] = 0
+                        rolling_extra += bases[i]
+                    break
+
+        return (months if months < 360 else None), round(total_interest, 2)
+
+    def _order_summary(ordered):
+        return [{"id": d["id"], "name": d["name"], "balance": d["balance"],
+                 "apr": d["apr"], "base_payment": d["base_payment"]}
+                for d in ordered]
+
+    av_order = sorted(debts, key=lambda d: d["apr"], reverse=True)
+    sw_order = sorted(debts, key=lambda d: d["balance"])
+    av_months, av_interest = _simulate(av_order)
+    sw_months, sw_interest = _simulate(sw_order)
+    interest_saved = round(sw_interest - av_interest, 2)
+
+    return {
+        "extra_monthly": extra_monthly,
+        "total_debts": len(debts),
+        "avalanche": {
+            "order": _order_summary(av_order),
+            "total_months": av_months,
+            "total_interest": av_interest,
+        },
+        "snowball": {
+            "order": _order_summary(sw_order),
+            "total_months": sw_months,
+            "total_interest": sw_interest,
+        },
+        "interest_saved_by_avalanche": interest_saved,
+        "recommendation": "avalanche" if interest_saved > 0 else "snowball" if interest_saved < 0 else "equal",
+    }
+
+
 def get_annual_fees(conn) -> dict:
     """
     Annual fee calendar: which accounts have fees and when.

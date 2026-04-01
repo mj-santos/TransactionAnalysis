@@ -65,6 +65,7 @@ from .analytics import (
     get_balance_trends,
     get_benefits_value,
     get_interest_cost,
+    get_payoff_comparison,
     get_payoff_projection,
     get_payment_history_summary,
     get_upcoming_due,
@@ -378,6 +379,15 @@ def route_payoff_projection(strategy: str = Query("minimum", pattern="^(minimum|
     conn = _get_conn()
     try:
         return get_payoff_projection(conn, strategy)
+    finally:
+        conn.close()
+
+
+@router.get("/analytics/payoff-comparison", summary="Avalanche vs snowball debt payoff comparison")
+def route_payoff_comparison(extra_monthly: float = Query(0.0, ge=0, description="Extra monthly payment beyond minimums")):
+    conn = _get_conn()
+    try:
+        return get_payoff_comparison(conn, extra_monthly)
     finally:
         conn.close()
 
