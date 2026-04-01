@@ -616,3 +616,61 @@ def detect_annual_fee_suggestions(
     # Sort by amount descending (biggest fees first)
     suggestions.sort(key=lambda s: s["amount"], reverse=True)
     return suggestions
+
+
+def detect_price_changes(conn, threshold_pct: float = 10.0) -> list[dict[str, Any]]:
+    """Detect recurring merchants whose most recent charge differs significantly
+    from their historical median.
+
+    Only considers merchants that would qualify as recurring (MIN_OCCURRENCES+).
+    Requires at least 4 data points so the historical median is meaningful.
+
+    Returns a list of dicts sorted by abs(delta_pct) descending.
+    """
+    rows = conn.execute("""
+        SELECT merchant,
+               transaction_date,
+               ABS(amount) AS abs_amount
+        FROM   transactions_norm
+        WHERE  merchant IS NOT NULL
+          AND  merchant != ''
+          AND  COALESCE(excluded, FALSE) = FALSE
+        ORDER  BY merchant, transaction_date
+    """).fetchall()
+
+    groups: dict[str, list[tuple[str, float]]] = {}
+    for merchant, txn_date, abs_amt in rows:
+        groups.setdefault(merchant, []).append((str(txn_date), float(abs_amt)))
+
+    changes = []
+    for merchant, txns in groups.items():
+        if len(txns) < 4:
+            continue
+
+        # Sort chronologically
+        txns_sorted = sorted(txns, key=lambda t: t[0])
+        amounts = [t[1] for t in txns_sorted]
+
+        latest_amt = amounts[-1]
+        historical = amounts[:-1]
+        hist_median = _median(historical)
+
+        if hist_median <= 0:
+            continue
+
+        delta_pct = (latest_amt - hist_median) / hist_median * 100.0
+        if abs(delta_pct) < threshold_pct:
+            continue
+
+        changes.append({
+            "merchant": merchant,
+            "old_amount": round(hist_median, 2),
+            "new_amount": round(latest_amt, 2),
+            "delta_pct": round(delta_pct, 1),
+            "direction": "up" if delta_pct > 0 else "down",
+            "last_date": txns_sorted[-1][0],
+            "occurrences": len(txns_sorted),
+        })
+
+    changes.sort(key=lambda c: abs(c["delta_pct"]), reverse=True)
+    return changes

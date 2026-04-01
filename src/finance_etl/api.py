@@ -6446,6 +6446,21 @@ No cloud services, no external dependencies — all data stays on your machine.
                                 detail=f"Undo failed: {exc}") from exc
         return {"status": "restored", "suggestion_id": suggestion_id}
 
+    @app.get("/recurring/price-changes", tags=["recurring"],
+             summary="Detect recurring merchants with significant price changes")
+    def get_recurring_price_changes(threshold: float = Query(10.0, ge=1.0, le=100.0)):
+        """Return recurring merchants whose latest charge differs from their
+        historical median by more than *threshold* percent (default 10 %)."""
+        from finance_etl.recurring import detect_price_changes
+        from finance_etl.db import get_connection as _gc
+        try:
+            conn = _gc(db_path, read_only=True)
+            changes = detect_price_changes(conn, threshold_pct=threshold)
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Price change detection failed: {exc}") from exc
+        return {"changes": changes, "count": len(changes)}
+
     @app.get("/recurring/deleted", tags=["recurring"],
              summary="List deleted (suppressed) recurring charges")
     def list_deleted_recurring():

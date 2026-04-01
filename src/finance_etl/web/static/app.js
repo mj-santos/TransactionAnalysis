@@ -1888,11 +1888,47 @@ async function loadRecurringTransactions() {
     }
 
     loadAnnualSuggestions();
+    _loadPriceChangeAlerts();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Error: ${err.message}`;
     const listEl2 = document.getElementById('recurring-list');
     if (listEl2) listEl2.innerHTML = `<p style="color:var(--danger);">Failed to load: ${esc(err.message)}</p>`;
   }
+}
+
+async function _loadPriceChangeAlerts() {
+  const el = document.getElementById('recurring-price-alerts');
+  if (!el) return;
+  try {
+    const data = await api('GET', '/recurring/price-changes');
+    _renderPriceChangeAlerts(data.changes || []);
+  } catch (_) {
+    el.style.display = 'none';
+  }
+}
+
+function _renderPriceChangeAlerts(changes) {
+  const el = document.getElementById('recurring-price-alerts');
+  if (!el) return;
+  if (!changes.length) { el.style.display = 'none'; return; }
+
+  const rows = changes.map(c => {
+    const sign = c.direction === 'up' ? '▲' : '▼';
+    const color = c.direction === 'up' ? 'var(--danger)' : '#0d9488';
+    const pct = Math.abs(c.delta_pct).toFixed(1);
+    return `<div style="display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid var(--border);">
+      <span style="flex:1; font-weight:500;">${esc(c.merchant)}</span>
+      <span style="color:var(--text-muted); font-size:12px;">was $${c.old_amount.toFixed(2)}</span>
+      <span style="font-weight:600; color:${color};">${sign} $${c.new_amount.toFixed(2)} <span style="font-size:11px;">(${pct}%)</span></span>
+      <span style="font-size:11px; color:var(--text-muted);">${c.last_date}</span>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `<div class="card" style="border-left:4px solid var(--warning);">
+    <div class="card-title" style="color:var(--warning); margin-bottom:8px;">⚠ Price Changes Detected</div>
+    <div style="font-size:13px;">${rows}</div>
+  </div>`;
+  el.style.display = '';
 }
 
 // ── Filter state setters ──────────────────────────────────────
