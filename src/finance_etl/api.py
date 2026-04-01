@@ -5517,6 +5517,40 @@ No cloud services, no external dependencies — all data stays on your machine.
                 for r in cat_rows
             ]
 
+            # ── Savings rate per month ──────────────────────────────
+            for m in monthly:
+                m["savings_rate"] = (
+                    round(m["net"] / m["income"] * 100, 1) if m["income"] > 0 else None
+                )
+
+            # ── Income sources (top merchants by income amount) ─────
+            income_src_rows = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(merchant, description, 'Unknown') AS source,
+                    SUM(amount)  AS total_income,
+                    COUNT(*)     AS occurrences,
+                    AVG(amount)  AS avg_amount
+                FROM transactions_norm
+                WHERE transaction_date >= ? AND transaction_date <= ?
+                  AND {INCOME_FILTER}
+                  {transfer_clause}
+                GROUP BY source
+                ORDER BY total_income DESC
+                LIMIT 10
+                """,
+                [d_from.isoformat(), d_to.isoformat()],
+            ).fetchall()
+            income_sources = [
+                {
+                    "source": r[0],
+                    "total": float(r[1]),
+                    "count": int(r[2]),
+                    "avg": round(float(r[3]), 2),
+                }
+                for r in income_src_rows
+            ]
+
             # ── Month-over-month delta ──────────────────────────────
             # Compare the most recent full month to the one before it
             mom_delta = None
@@ -5554,9 +5588,11 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "total_spending": total_spending,
                 "net": net,
                 "transaction_count": txn_count,
+                "savings_rate": round(net / total_income * 100, 1) if total_income > 0 else None,
             },
             "monthly": monthly,
             "by_category": by_category,
+            "income_sources": income_sources,
             "mom_delta": mom_delta,
             "include_transfers": include_transfers,
         }

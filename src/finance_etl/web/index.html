@@ -457,6 +457,11 @@
         <div id="cf-mom-delta" style="font-size:18px; font-weight:700; margin-top:4px;">—</div>
         <div id="cf-mom-detail" style="font-size:12px; color:var(--text-muted); margin-top:4px;"></div>
       </div>
+      <div class="card" style="padding:16px 20px;">
+        <div style="font-size:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em;">Savings Rate</div>
+        <div id="cf-savings-rate" style="font-size:28px; font-weight:700; margin-top:4px;">—</div>
+        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">net ÷ income</div>
+      </div>
     </div>
 
     <!-- Chart + Category breakdown -->
@@ -472,20 +477,27 @@
       </div>
     </div>
 
-    <!-- Monthly detail table -->
-    <div class="card">
-      <div class="card-title">Monthly Detail</div>
-      <table class="tbl" style="font-size:13px;">
-        <thead>
-          <tr>
-            <th>Month</th>
-            <th class="text-right">Income</th>
-            <th class="text-right">Spending</th>
-            <th class="text-right">Net</th>
-          </tr>
-        </thead>
-        <tbody id="cf-table-body"></tbody>
-      </table>
+    <!-- Income sources + Monthly detail table -->
+    <div style="display:grid; grid-template-columns:1fr 2fr; gap:16px; margin-bottom:20px;">
+      <div class="card">
+        <div class="card-title">Income Sources</div>
+        <div id="cf-income-sources" style="padding:8px 16px;"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Monthly Detail</div>
+        <table class="tbl" style="font-size:13px;">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th class="text-right">Income</th>
+              <th class="text-right">Spending</th>
+              <th class="text-right">Net</th>
+              <th class="text-right">Savings Rate</th>
+            </tr>
+          </thead>
+          <tbody id="cf-table-body"></tbody>
+        </table>
+      </div>
     </div>
   </section>
 

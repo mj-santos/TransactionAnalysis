@@ -8749,11 +8749,21 @@ function _renderCashFlow(data) {
     set('cf-mom-detail', 'Not enough data');
   }
 
+  // Savings rate KPI
+  const sr = s.savings_rate;
+  const srColor = sr == null ? 'var(--text)' : sr >= 20 ? '#22c55e' : sr >= 0 ? '#f59e0b' : '#ef4444';
+  set('cf-savings-rate', sr != null
+    ? `<span style="color:${srColor};">${sr}%</span>`
+    : '<span style="color:var(--text-muted);">—</span>');
+
   // Bar chart
   _renderCfChart(data.monthly);
 
   // Category breakdown
   _renderCfCategories(data.by_category);
+
+  // Income sources
+  _renderIncomeSources(data.income_sources || []);
 
   // Monthly detail table
   _renderCfTable(data.monthly);
@@ -8844,19 +8854,53 @@ function _renderCfTable(monthly) {
   if (!tbody) return;
 
   if (!monthly.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted" style="padding:20px;">No data.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:20px;">No data.</td></tr>';
     return;
   }
 
   tbody.innerHTML = monthly.map(m => {
     const netColor = m.net >= 0 ? 'color:#22c55e;' : 'color:#ef4444;';
     const label = m.month.slice(0, 7);
+    const sr = m.savings_rate;
+    const srColor = sr == null ? 'var(--text-muted)' : sr >= 20 ? '#22c55e' : sr >= 0 ? '#f59e0b' : '#ef4444';
+    const srDisplay = sr != null ? `${sr}%` : '—';
     return `<tr>
       <td>${label}</td>
       <td class="text-right" style="color:#22c55e;">${_fmt$(m.income)}</td>
       <td class="text-right" style="color:#ef4444;">${_fmt$(m.spending)}</td>
       <td class="text-right" style="${netColor} font-weight:600;">${m.net >= 0 ? '+' : ''}${_fmt$(m.net)}</td>
+      <td class="text-right" style="color:${srColor}; font-weight:600;">${srDisplay}</td>
     </tr>`;
+  }).join('');
+}
+
+// ── Income Sources Breakdown ───────────────────────────────────
+
+function _renderIncomeSources(sources) {
+  const el = document.getElementById('cf-income-sources');
+  if (!el) return;
+
+  if (!sources.length) {
+    el.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">No income data for this period.</span>';
+    return;
+  }
+
+  const maxTotal = Math.max(...sources.map(s => s.total), 1);
+  el.innerHTML = sources.map(s => {
+    const pct = Math.round(s.total / maxTotal * 100);
+    const regularBadge = s.count >= 2
+      ? `<span style="font-size:10px; color:var(--text-muted); margin-left:4px;">${s.count}×</span>`
+      : '';
+    return `<div style="margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:2px;">
+        <span style="font-weight:500;">${esc(s.source)}${regularBadge}</span>
+        <span style="font-weight:600; color:#22c55e;">${_fmt$(s.total)}</span>
+      </div>
+      <div style="background:var(--border); border-radius:4px; height:5px;">
+        <div style="background:#22c55e; border-radius:4px; height:5px; width:${pct}%;"></div>
+      </div>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">avg ${_fmt$(s.avg)} per transaction</div>
+    </div>`;
   }).join('');
 }
 
