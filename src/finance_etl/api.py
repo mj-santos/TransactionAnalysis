@@ -2194,7 +2194,7 @@ No cloud services, no external dependencies — all data stays on your machine.
         Supported fields: notes (TEXT | null), category_normalized (TEXT),
         category_parent (TEXT), category_override (BOOL), excluded (BOOL)
         """
-        allowed = {"notes", "category_normalized", "category_parent", "category_override", "excluded"}
+        allowed = {"notes", "merchant", "category_normalized", "category_parent", "category_override", "excluded"}
         updates = {k: v for k, v in body.items() if k in allowed}
         if not updates:
             raise HTTPException(status_code=400, detail=f"No valid fields. Allowed: {sorted(allowed)}")

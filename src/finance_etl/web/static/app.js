@@ -4764,9 +4764,11 @@ function _renderTxnBody(p, rows, cols, append, type) {
         const badge = isOverride ? ' <span class="override-badge" onclick="event.stopPropagation(); _resetCategoryOverride(this)" title="Click to reset to rule-based category">edited</span>' : '';
         return `<td${cls} onclick="inlineCategoryEdit(this,'${esc(fp)}')" data-override="${isOverride}" data-col="${c}" title="Click to edit" style="cursor:pointer;${displayStyle}"><span>${esc(displayVal)}</span>${badge}</td>`;
       }
-      // Tag merchant column for Fix-for-all lookup
+      // Inline merchant edit: click to edit in-place
       if (c === 'merchant' && fp) {
-        return `<td${cls} data-col="merchant">${esc(val)}</td>`;
+        const displayVal = val || '—';
+        const displayStyle = val ? '' : ' color:var(--text-muted);';
+        return `<td${cls} data-col="merchant" onclick="inlineMerchantEdit(this,'${esc(fp)}')" title="Click to edit merchant" style="cursor:pointer;${displayStyle}">${esc(displayVal)}</td>`;
       }
       // Prepend split badge to description
       if (c === 'description' && isSplitChild) {
@@ -8962,8 +8964,11 @@ document.addEventListener('keydown', e => {
     const fp = trs[_kbHighlightIdx].dataset.fp;
     if (fp) markReviewed(fp);
   } else if (e.key === 'c' && _kbHighlightIdx >= 0 && _kbHighlightIdx < trs.length) {
-    const catCell = trs[_kbHighlightIdx].querySelector('td[ondblclick]');
-    if (catCell) catCell.ondblclick();
+    const catCell = trs[_kbHighlightIdx].querySelector('td[onclick*="inlineCategoryEdit"]');
+    if (catCell) catCell.click();
+  } else if (e.key === 'm' && _kbHighlightIdx >= 0 && _kbHighlightIdx < trs.length) {
+    const merchCell = trs[_kbHighlightIdx].querySelector('td[data-col="merchant"]');
+    if (merchCell) merchCell.click();
   } else if (e.key === 'x' && _kbHighlightIdx >= 0 && _kbHighlightIdx < trs.length) {
     const cb = trs[_kbHighlightIdx].querySelector('.bulk-check');
     if (cb) { cb.checked = !cb.checked; bulkToggleRow(cb); }
@@ -9509,6 +9514,51 @@ function inlineCategoryEdit(td, fp) {
       toast('Category removed.', 'info');
     },
   });
+}
+
+// ── Transaction Row Inline Merchant Edit ──────────────────────────────────
+
+function inlineMerchantEdit(td, fp) {
+  if (td.querySelector('input')) return; // already open
+  const current = td.dataset.col === 'merchant' && td.textContent.trim() !== '—'
+    ? td.textContent.trim() : '';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = current;
+  input.style.cssText = 'width:100%;padding:2px 4px;font-size:inherit;border:1px solid var(--primary);border-radius:4px;background:var(--card-bg,#fff);color:var(--text);';
+  td.innerHTML = '';
+  td.appendChild(input);
+  input.focus();
+  input.select();
+
+  let _committed = false;
+
+  async function _save() {
+    if (_committed) return;
+    _committed = true;
+    const newVal = input.value.trim();
+    if (!newVal || newVal === current) { _cancel(); return; }
+    try {
+      await api('PATCH', '/transactions/' + fp, { merchant: newVal });
+      td.textContent = newVal;
+      td.style.color = '';
+      toast('Merchant updated.', 'success');
+    } catch (err) {
+      toast('Failed: ' + err.message, 'error');
+      _cancel();
+    }
+  }
+
+  function _cancel() {
+    td.textContent = current || '—';
+    td.style.color = current ? '' : 'var(--text-muted)';
+  }
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); _save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); _committed = true; _cancel(); }
+  });
+  input.addEventListener('blur', _save);
 }
 
 function _updateTxnCategoryCell(td, category, overridden) {
