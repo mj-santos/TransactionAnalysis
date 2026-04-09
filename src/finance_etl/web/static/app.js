@@ -4175,6 +4175,7 @@ function _buildTxnPageHTML(p, type) {
         <div class="form-group" style="margin:0; min-width:170px;"><label style="font-size:11px;">Account</label><div id="${p}-acct-ctrl" class="source-ctrl-wrap"></div></div>
         <button class="btn btn-secondary btn-sm" onclick="clearTxnFilters('${type}')">✕ Clear</button>
         <button class="btn btn-secondary btn-sm" onclick="loadTxnTab('${type}')">↻ Refresh</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportTxnCsv('${type}')" title="Export filtered results as CSV">⬇ CSV</button>
       </div>
       <div id="${p}-more-filters" class="filter-more-panel">
         <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; border-top:1px solid var(--border); padding-top:10px;">
@@ -4214,6 +4215,7 @@ function _buildTxnPageHTML(p, type) {
       </div></div>
     </div>
     <div id="${p}-filter-chips" style="display:none; flex-wrap:wrap; gap:6px; padding:6px 0 2px; align-items:center;"></div>
+    <div id="${p}-budget-banner" style="display:none; margin-bottom:8px;"></div>
     <div id="${p}-bulk-bar" class="bulk-bar" style="display:none;">
       <div class="bulk-status-row" id="${p}-bulk-status" style="display:none;" aria-live="polite"></div>
       <span id="${p}-bulk-count" style="font-weight:600;">0 selected</span>
@@ -4321,9 +4323,28 @@ function _saveTxnFilterState(type) {
   const f = _txnFilters(type);
   f._year = document.getElementById(`${_pfx(type)}-year`)?.value || '';
   try { localStorage.setItem(_filterPersistKey(type), JSON.stringify(f)); } catch {}
+  // Encode non-empty filters into URL hash for bookmarking/sharing
+  try {
+    const hp = new URLSearchParams({ type });
+    Object.entries(f).forEach(([k, v]) => { if (v && v !== false) hp.set(k, String(v)); });
+    history.replaceState(null, '', '#' + hp.toString());
+  } catch {}
 }
 
 function _restoreTxnFilterState(type) {
+  // URL hash takes priority (shared link) over localStorage (persisted state)
+  try {
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+      const params = new URLSearchParams(hash);
+      if (params.get('type') === type) {
+        const f = {};
+        for (const [k, v] of params) f[k] = v === 'true' ? true : v === 'false' ? false : v;
+        _applyFilterValues(type, f);
+        return;
+      }
+    }
+  } catch {}
   try {
     const raw = localStorage.getItem(_filterPersistKey(type));
     if (raw) _applyFilterValues(type, JSON.parse(raw));
@@ -4381,6 +4402,45 @@ function _renderPresets(type) {
       ${esc(pr.name)}<button onclick="event.stopPropagation();deleteFilterPreset('${type}',${i})" aria-label="Delete preset" style="background:none;border:none;cursor:pointer;padding:0 0 0 5px;font-size:12px;color:inherit;opacity:.7;line-height:1;">&times;</button>
     </span>`
   ).join('');
+}
+
+async function exportTxnCsv(type) {
+  const st = _txnState[type];
+  const f  = _txnFilters(type);
+  const qs = new URLSearchParams({ type, limit: 10000, offset: 0,
+                                   sort_by: st.sortBy, sort_dir: st.sortDir });
+  if (f.date_from)       qs.set('date_from',       f.date_from);
+  if (f.date_to)         qs.set('date_to',         f.date_to);
+  if (f.account)         qs.set('account',         f.account);
+  if (f.category)        qs.set('category',        f.category);
+  if (f.merchant)        qs.set('merchant',        f.merchant);
+  if (f.subtype)         qs.set('subtype',         f.subtype);
+  if (f.group_by)        qs.set('group_by',        f.group_by);
+  if (f.source && f.source !== 'all') qs.set('source', f.source);
+  if (f.unreviewed_only) qs.set('unreviewed_only', 'true');
+  if (f.no_merchant)     qs.set('no_merchant',     'true');
+  if (f.no_category)     qs.set('no_category',     'true');
+  if (f.tag)             qs.set('tag',             f.tag);
+  if (f.amount_min)      qs.set('amount_min',      f.amount_min);
+  if (f.amount_max)      qs.set('amount_max',      f.amount_max);
+  try {
+    const data = await api('GET', `/transactions?${qs}`);
+    const rows = data.rows || [];
+    const cols = data.columns || [];
+    if (!rows.length) { toast('No transactions to export.', 'info'); return; }
+    const csv = [cols, ...rows.map(r => cols.map(c => r[c] ?? ''))].map(r =>
+      r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+    ).join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `transactions_${type}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`Exported ${rows.length.toLocaleString()} rows.`, 'success');
+  } catch (err) {
+    toast('Export failed: ' + err.message, 'error');
+  }
 }
 
 /**
@@ -4481,6 +4541,7 @@ async function loadTxnTab(type, reset = true) {
       document.getElementById(`${p}-totals-warn`),
     );
     _renderTxnFilterChips(type);
+    _updateTxnBudgetBanner(type, f);
 
     // Render Card Financial Summary panel for credit card tab
     if (type === 'credit_card') _renderCcFinancialSummary(totals);
@@ -6575,6 +6636,9 @@ function _renderDashboard(data) {
   // Budget pace indicators
   _renderBudgetPace(data.budgets_vs_actual || []);
 
+  // Budget history sparklines (async, non-blocking)
+  _loadBudgetHistory();
+
   // Recent transactions
   const tbody = document.getElementById('dash-recent-tbody');
   if (tbody) {
@@ -6793,6 +6857,40 @@ function _renderBudgetPace(bva) {
     paceEl.style.cssText = 'font-size:11px; color:var(--text-muted); margin-top:2px;';
     paceEl.innerHTML = `At this pace: <span style="color:${paceColor}; font-weight:600;">${_fmt$(projected)}</span> by month end <span style="font-size:10px; color:${paceColor};">(${paceLabel})</span>`;
     rows[i].appendChild(paceEl);
+  });
+}
+
+// ── Budget History Sparklines ──────────────────────────────────
+
+async function _loadBudgetHistory() {
+  const budgetList = document.getElementById('dash-budget-list');
+  if (!budgetList || !budgetList.children.length) return;
+  try {
+    const data = await api('GET', '/budgets/history?months=6');
+    _renderBudgetSparklines(data.budgets || []);
+  } catch (_) {}
+}
+
+function _renderBudgetSparklines(budgets) {
+  const budgetList = document.getElementById('dash-budget-list');
+  if (!budgetList) return;
+  const rows = Array.from(budgetList.children);
+  budgets.forEach((b, i) => {
+    if (i >= rows.length) return;
+    const history = b.history || [];
+    if (!history.length) return;
+    const maxPct = Math.max(...history.map(h => h.pct || 0), 100);
+    const bars = history.map(h => {
+      const pct = h.pct || 0;
+      const h_px = Math.max(Math.round(pct / maxPct * 24), 1);
+      const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
+      const label = `${h.month}: $${h.actual.toFixed(0)} (${pct}%)`;
+      return `<div title="${label}" style="width:10px; height:${h_px}px; background:${color}; border-radius:2px; align-self:flex-end;"></div>`;
+    }).join('');
+    const sparkEl = document.createElement('div');
+    sparkEl.style.cssText = 'display:flex; gap:3px; align-items:flex-end; height:26px; margin-top:4px;';
+    sparkEl.innerHTML = bars + `<span style="font-size:10px; color:var(--text-muted); align-self:flex-end; margin-left:4px;">6mo</span>`;
+    rows[i].appendChild(sparkEl);
   });
 }
 
@@ -7439,6 +7537,55 @@ function closeBudgetForm() {
   const bfCat = document.getElementById('bf-category');
   if (bfCat) bfCat.innerHTML = '<option value="">— All in parent —</option>';
 }
+let _budgetsCache = null;
+let _budgetsCacheTs = 0;
+
+async function _updateTxnBudgetBanner(type, f) {
+  const el = document.getElementById(`${_pfx(type)}-budget-banner`);
+  if (!el) return;
+  const cat = (f.category || '').trim();
+  if (!cat) { el.style.display = 'none'; return; }
+
+  try {
+    const now = Date.now();
+    if (!_budgetsCache || now - _budgetsCacheTs > 60000) {
+      _budgetsCache = (await api('GET', '/budgets')).budgets || [];
+      _budgetsCacheTs = now;
+    }
+    // Match on parent (category_parent) or category field
+    const match = _budgetsCache.find(b =>
+      b.parent.toLowerCase() === cat.toLowerCase() ||
+      (b.category || '').toLowerCase() === cat.toLowerCase()
+    );
+    if (!match) { el.style.display = 'none'; return; }
+
+    // Fetch current month actual from dashboard summary budgets_vs_actual
+    // Use history endpoint for single budget — fetch current month slice
+    const hist = await api('GET', `/budgets/history?months=1`);
+    const bh = (hist.budgets || []).find(b => b.id === match.id);
+    const actual = bh ? (bh.history[0]?.actual ?? 0) : 0;
+    const pct = match.monthly_amount > 0 ? Math.round(actual / match.monthly_amount * 100) : 0;
+    const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
+    const remaining = match.monthly_amount - actual;
+    const label = pct >= 100
+      ? `Over budget by ${_fmt$(Math.abs(remaining))}`
+      : `${_fmt$(remaining)} remaining`;
+
+    el.innerHTML = `<div style="display:flex; align-items:center; gap:10px; padding:8px 12px;
+        background:var(--bg-alt); border-left:3px solid ${color}; border-radius:6px; font-size:12px;">
+      <span style="font-weight:600;">${esc(match.parent)} budget:</span>
+      <span>${_fmt$(actual)} of ${_fmt$(match.monthly_amount)} (${pct}%)</span>
+      <div style="flex:1; background:var(--border); border-radius:4px; height:6px; max-width:140px;">
+        <div style="background:${color}; border-radius:4px; height:6px; width:${Math.min(pct,100)}%;"></div>
+      </div>
+      <span style="color:${color}; font-weight:600;">${label}</span>
+    </div>`;
+    el.style.display = '';
+  } catch (_) {
+    el.style.display = 'none';
+  }
+}
+
 async function saveBudget() {
   const parent = document.getElementById('bf-parent').value.trim();
   const category = document.getElementById('bf-category').value.trim() || null;
@@ -8753,12 +8900,29 @@ async function loadCashFlow() {
 
   try {
     const data = await api('GET', url);
+    _cfData = data;
     _renderCashFlow(data);
   } catch (err) {
     const el = document.getElementById('cf-income');
     if (el) el.textContent = 'Error';
     toast(`Cash flow: ${err.message}`, 'error');
   }
+}
+
+let _cfData = null;
+
+function exportCashflowCsv() {
+  if (!_cfData || !(_cfData.monthly || []).length) { toast('Load cashflow data first.', 'info'); return; }
+  const cols = ['month', 'income', 'spending', 'net', 'savings_rate'];
+  const rows = _cfData.monthly.map(m => cols.map(c => m[c] ?? ''));
+  const csv  = [cols, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `cashflow_${new Date().toISOString().slice(0, 7)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${_cfData.monthly.length} months.`, 'success');
 }
 
 function _renderCashFlow(data) {

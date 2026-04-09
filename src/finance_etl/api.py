@@ -4182,6 +4182,70 @@ No cloud services, no external dependencies — all data stays on your machine.
             conn.close()
         return {"status": "deleted"}
 
+    @app.get("/budgets/history", tags=["budgets"],
+             summary="Budget vs actual for each goal over the last N months")
+    def get_budgets_history(months: int = Query(6, ge=1, le=24)):
+        """Return per-budget monthly history (actual vs budget) for the last N months."""
+        import datetime as _dt
+        today = _dt.date.today()
+        # Build list of (year, month) for the last N months ending with current month
+        month_list = []
+        for i in range(months - 1, -1, -1):
+            # step back i months from today
+            m = today.month - i
+            y = today.year
+            while m <= 0:
+                m += 12
+                y -= 1
+            month_list.append((y, m))
+
+        try:
+            conn = get_connection(db_path, read_only=True)
+            budget_rows = conn.execute(
+                "SELECT id, parent, category, monthly_amount FROM budget_goals ORDER BY parent, category"
+            ).fetchall()
+            result = []
+            for bid, parent, category, monthly_amount in budget_rows:
+                history = []
+                for y, m in month_list:
+                    if category:
+                        actual_row = conn.execute(
+                            """SELECT COALESCE(SUM(resolved_amount), 0)
+                               FROM transactions_norm
+                               WHERE transaction_subtype = 'spending'
+                                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?
+                                 AND category_parent = ? AND category_normalized = ?""",
+                            [y, m, parent, category],
+                        ).fetchone()
+                    else:
+                        actual_row = conn.execute(
+                            """SELECT COALESCE(SUM(resolved_amount), 0)
+                               FROM transactions_norm
+                               WHERE transaction_subtype = 'spending'
+                                 AND YEAR(transaction_date) = ? AND MONTH(transaction_date) = ?
+                                 AND category_parent = ?""",
+                            [y, m, parent],
+                        ).fetchone()
+                    actual = float(actual_row[0]) if actual_row else 0.0
+                    monthly_f = float(monthly_amount)
+                    pct = round(actual / monthly_f * 100, 1) if monthly_f > 0 else None
+                    history.append({
+                        "month": f"{y:04d}-{m:02d}",
+                        "actual": round(actual, 2),
+                        "pct": pct,
+                    })
+                result.append({
+                    "id": bid,
+                    "parent": parent,
+                    "category": category,
+                    "monthly_amount": float(monthly_amount),
+                    "history": history,
+                })
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Budget history failed: {exc}") from exc
+        return {"budgets": result}
+
     # -----------------------------------------------------------------------
     # Budget rebalancing
     # -----------------------------------------------------------------------
