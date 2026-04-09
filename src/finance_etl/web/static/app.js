@@ -445,6 +445,9 @@ function resetImports() {
   document.getElementById('run-status').className = 'run-status'; // hide
   document.getElementById('rs-counts').innerHTML = '';
   document.getElementById('rs-actions').innerHTML = '';
+  ['overlap-banner', 'import-summary-card'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.remove();
+  });
   toast('Import reset — upload a new file to start again.', 'info', 2500);
 }
 
@@ -462,6 +465,7 @@ function pollRun(runId, cb, interval = 1500) {
       } else if (status === 'staged') {
         setRunStatus('staged', runId, s.counts, 'Preview ready — review and commit or discard.');
         loadPreview(runId);
+        _loadOverlapWarning(runId);
         if (cb) cb(s);
       } else if (status === 'committing') {
         setRunStatus('running', runId, s.counts, 'Committing to ledger…');
@@ -479,6 +483,7 @@ function pollRun(runId, cb, interval = 1500) {
 function onRunComplete(run) {
   if (run.status === 'success') {
     toast('Import complete!', 'success');
+    _loadImportSummary(run.run_id);
     // Show duplicate detection banner if any found
     if (run.duplicate_count > 0) {
       _showDuplicateBanner(run.duplicate_count, run.duplicate_reasons || []);
@@ -488,6 +493,46 @@ function onRunComplete(run) {
     toast(`Import failed: ${run.error || '(unknown error)'}`, 'error');
     maybeShowLogsOnError();
   }
+}
+
+async function _loadOverlapWarning(runId) {
+  try {
+    const d = await api('GET', `/runs/${runId}/overlap`);
+    if (!d.overlap_count) return;
+    const pct = d.staged_count > 0 ? Math.round(d.overlap_count / d.staged_count * 100) : 0;
+    const banner = document.createElement('div');
+    banner.id = 'overlap-banner';
+    banner.style.cssText = 'margin:8px 0; padding:10px 14px; background:#fef9c3; border-left:4px solid #f59e0b; border-radius:6px; font-size:13px;';
+    banner.innerHTML = `⚠️ <strong>${d.overlap_count} existing transaction${d.overlap_count !== 1 ? 's' : ''}</strong> already in your ledger `
+      + `from <strong>${esc(d.bank_name || 'this account')}</strong> `
+      + `in this date range (${esc(d.date_min || '')} – ${esc(d.date_max || '')}) — ${pct}% overlap. `
+      + `Duplicates will be skipped on commit, but review the preview below.`;
+    const rc = document.getElementById('run-status');
+    const existing = document.getElementById('overlap-banner');
+    if (existing) existing.remove();
+    if (rc) rc.after(banner);
+  } catch (_) {}
+}
+
+async function _loadImportSummary(runId) {
+  if (!runId) return;
+  try {
+    const d = await api('GET', `/runs/${runId}/summary`);
+    if (!d.count) return;
+    const dateRange = (d.date_min && d.date_max) ? `${d.date_min} – ${d.date_max}` : '';
+    const parts = [`<strong>${d.count}</strong> transactions imported`];
+    if (dateRange) parts.push(dateRange);
+    if (d.total_spending > 0) parts.push(`$${d.total_spending.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})} spending`);
+    if (d.total_income > 0) parts.push(`$${d.total_income.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})} income`);
+    const card = document.createElement('div');
+    card.id = 'import-summary-card';
+    card.style.cssText = 'margin:8px 0; padding:10px 14px; background:var(--bg-alt); border-left:4px solid #22c55e; border-radius:6px; font-size:13px;';
+    card.innerHTML = '✅ ' + parts.join(' · ');
+    const rc = document.getElementById('run-status');
+    const existing = document.getElementById('import-summary-card');
+    if (existing) existing.remove();
+    if (rc) rc.after(card);
+  } catch (_) {}
 }
 
 function _showDuplicateBanner(count, reasons) {
@@ -3538,12 +3583,15 @@ function renderWizardStep1() {
 
   // Info grid
   const firstFile = wizard.files[0] || {};
+  const dr = firstFile.date_range;
+  const drValue = dr ? `${dr.min} – ${dr.max}` : '—';
   document.getElementById('w-info-grid').innerHTML = [
-    { label: 'Files',    value: wizard.files.length },
-    { label: 'Columns',  value: wizard.headers.length },
-    { label: 'Encoding', value: firstFile.encoding || '—' },
+    { label: 'Files',     value: wizard.files.length },
+    { label: 'Columns',   value: wizard.headers.length },
+    { label: 'Encoding',  value: firstFile.encoding || '—' },
     { label: 'Delimiter', value: firstFile.delimiter === '\t' ? 'TAB' : (firstFile.delimiter || '—') },
     { label: 'Est. rows', value: firstFile.row_count_estimate ?? '—' },
+    { label: 'Date range', value: drValue },
   ].map(({ label, value }) => `
     <div class="info-cell">
       <div class="ic-label">${label}</div>

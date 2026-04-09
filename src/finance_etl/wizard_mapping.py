@@ -614,6 +614,24 @@ def extract_csv_headers(
     # every remaining column so that unusual header names never block detection.
     suggested_date_format = _detect_date_format_any_col(headers, sample_rows, suggestions)
 
+    # ── Date range scan — read full file to find min/max date values ─────────
+    date_range: dict | None = None
+    date_col = (suggestions or {}).get("transaction_date") or (suggestions or {}).get("date")
+    if date_col and date_col in headers:
+        try:
+            date_vals: list[str] = []
+            with open(file_path, encoding=encoding, errors="replace", newline="") as _f:
+                _reader = csv.DictReader(_f, delimiter=delimiter)
+                for _row in _reader:
+                    v = (_row.get(date_col) or "").strip()
+                    if v:
+                        date_vals.append(v)
+            if date_vals:
+                date_vals.sort()
+                date_range = {"min": date_vals[0], "max": date_vals[-1]}
+        except Exception:
+            pass
+
     return {
         "headers":               headers,
         "sample_rows":           sample_rows,
@@ -624,6 +642,7 @@ def extract_csv_headers(
         "suggested_date_format": suggested_date_format,
         "cc_format":             cc_format,    # 'two_col' | 'single_col' | None
         "bank_format":           bank_format,  # 'two_col' | 'single_col' | None
+        "date_range":            date_range,   # {"min": str, "max": str} | None
     }
 
 

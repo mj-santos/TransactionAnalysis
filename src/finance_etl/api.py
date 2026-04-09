@@ -879,6 +879,7 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "row_count_estimate":    header_info.get("row_count_estimate"),
                 "suggestions":           header_info.get("suggestions"),
                 "suggested_date_format": header_info.get("suggested_date_format"),
+                "date_range":            header_info.get("date_range"),
                 "matched_profile":       matched_summary,
                 "preprocess_banner":     preprocess_result.get("banner"),
                 "preprocess_metadata":   preprocess_result.get("metadata") or {},
@@ -1140,6 +1141,81 @@ No cloud services, no external dependencies — all data stays on your machine.
             "count":     len(row_dicts),
             "truncated": len(row_dicts) == limit,
         }
+
+    @app.get("/runs/{run_id}/overlap", tags=["runs"],
+             summary="Count existing transactions that overlap with a staged run")
+    def run_overlap_check(run_id: str):
+        """Return how many transactions already in the ledger fall in the same
+        account + date range as the staged run — a signal that re-importing may
+        create duplicates."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            meta = conn.execute(
+                """SELECT bank_name, account_name,
+                          MIN(transaction_date_raw), MAX(transaction_date_raw),
+                          COUNT(*)
+                   FROM transactions_stage WHERE run_id = ?
+                   GROUP BY bank_name, account_name LIMIT 1""",
+                [run_id],
+            ).fetchone()
+            if not meta:
+                conn.close()
+                return {"overlap_count": 0, "staged_count": 0}
+            bank, acct, date_min, date_max, staged_count = meta
+            date_min_s = str(date_min)[:10] if date_min else None
+            date_max_s = str(date_max)[:10] if date_max else None
+            overlap = 0
+            if bank and date_min_s and date_max_s:
+                row = conn.execute(
+                    """SELECT COUNT(*) FROM transactions_norm
+                       WHERE bank_name = ?
+                         AND CAST(transaction_date AS TEXT) >= ?
+                         AND CAST(transaction_date AS TEXT) <= ?""",
+                    [bank, date_min_s, date_max_s],
+                ).fetchone()
+                overlap = int(row[0]) if row else 0
+            conn.close()
+            return {
+                "overlap_count": overlap,
+                "staged_count": int(staged_count),
+                "bank_name": bank,
+                "account_name": acct,
+                "date_min": date_min_s,
+                "date_max": date_max_s,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/runs/{run_id}/summary", tags=["runs"],
+             summary="Enriched import summary for a completed run")
+    def run_import_summary(run_id: str):
+        """Return date range and spend/income totals for transactions loaded in
+        a given run — used to render the post-import success card."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            row = conn.execute(
+                """SELECT COUNT(*),
+                          MIN(CAST(transaction_date AS TEXT)),
+                          MAX(CAST(transaction_date AS TEXT)),
+                          SUM(CASE WHEN transaction_subtype = 'spending'
+                                   THEN resolved_amount ELSE 0 END),
+                          SUM(CASE WHEN amount > 0 AND statement_type = 'bank'
+                                   THEN amount ELSE 0 END)
+                   FROM transactions_norm WHERE run_id = ?""",
+                [run_id],
+            ).fetchone()
+            conn.close()
+            if not row or not row[0]:
+                return {"count": 0}
+            return {
+                "count":          int(row[0]),
+                "date_min":       str(row[1])[:10] if row[1] else None,
+                "date_max":       str(row[2])[:10] if row[2] else None,
+                "total_spending": round(float(row[3] or 0), 2),
+                "total_income":   round(float(row[4] or 0), 2),
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post(
         "/runs/{run_id}/commit",
