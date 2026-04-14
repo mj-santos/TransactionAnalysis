@@ -72,7 +72,7 @@ function navigate(page) {
   if (page === 'settings')           loadSettings();
   if (page === 'credit-cards')       { _ensureTxnPageBuilt('cc', 'credit_card'); _restoreMoreFilters('credit_card'); loadTxnTab('credit_card'); }
   if (page === 'bank-transactions')  { _ensureTxnPageBuilt('bk', 'bank'); _restoreMoreFilters('bank'); loadTxnTab('bank'); }
-  if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); _clearSuggestions(); }
+  if (page === 'merchant-rules')     { loadMerchantAnalytics(); loadMerchantRules(); _clearSuggestions(); loadUnlabeledDescriptions(); }
   if (page === 'category-rules')     { loadCategoryRules(); }
   if (page === 'recurring-transactions') { loadRecurringTransactions(); }
   if (page === 'accounts')           { loadAccounts(); }
@@ -5366,12 +5366,14 @@ function _renderMerchantAnalyticsData(data, listEl) {
     return `<div class="mi-row">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <div style="display:flex; align-items:center; gap:8px;">
-          <span class="mi-merchant-name">${esc(m.merchant)}</span>${accelBadge}
+          <span class="mi-merchant-name" style="cursor:pointer; text-decoration:underline dotted;" onclick="_navigateToMerchantTransactions(${JSON.stringify(m.merchant)})" title="View transactions for ${esc(m.merchant)}">${esc(m.merchant)}</span>${accelBadge}
         </div>
         <div style="display:flex; align-items:center; gap:12px;">
           ${sparkline}
           <span class="mi-trend" style="color:${trendColor};" title="MoM trend: ${m.trend_pct}%">${trendArrow} ${Math.abs(m.trend_pct)}%</span>
           <span class="mi-amount">${_fmt$(m.total_spend)}</span>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 7px;" onclick="_navigateToMerchantTransactions(${JSON.stringify(m.merchant)})">→ Txns</button>
+          <button class="btn btn-secondary btn-sm" style="font-size:11px; padding:2px 7px;" onclick="_openRuleFormForDescription(${JSON.stringify(m.merchant)})">+ Rule</button>
         </div>
       </div>
       <div class="mi-bar-track"><div class="mi-bar-fill" style="width:${barPct}%;"></div></div>
@@ -5381,6 +5383,69 @@ function _renderMerchantAnalyticsData(data, listEl) {
       </div>
     </div>`;
   }).join('');
+}
+
+function _navigateToMerchantTransactions(merchant) {
+  // Navigate to bank-transactions filtered by merchant; show toast if also in CC
+  navigate('bank-transactions');
+  setTimeout(() => {
+    const el = document.getElementById('bk-merchant');
+    if (el) { el.value = merchant; loadTxnTab('bank'); }
+  }, 150);
+}
+
+function _openRuleFormForDescription(description) {
+  // Pre-fill the rule form with this description as a contains pattern
+  openRuleForm(null);
+  setTimeout(() => {
+    const patternEl = document.querySelector('.rf-cond-pattern');
+    if (patternEl) patternEl.value = description;
+    const merchantEl = document.getElementById('rf-merchant');
+    if (merchantEl && !merchantEl.value) merchantEl.value = _descriptionToMerchant(description);
+    document.getElementById('rule-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 80);
+}
+
+function _descriptionToMerchant(desc) {
+  // Heuristic: take first 2–3 significant words, title-case them
+  return (desc || '')
+    .replace(/[^a-zA-Z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2)
+    .slice(0, 3)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+async function loadUnlabeledDescriptions() {
+  const listEl = document.getElementById('unlabeled-list');
+  const countEl = document.getElementById('unlabeled-count');
+  if (!listEl) return;
+  listEl.innerHTML = '<span style="color:var(--text-muted); font-size:13px;">Loading…</span>';
+  try {
+    const data = await api('GET', '/merchants/unlabeled?limit=30');
+    const items = data.items || [];
+    if (countEl) {
+      countEl.textContent = String(items.length);
+      countEl.style.display = items.length ? '' : 'none';
+    }
+    if (!items.length) {
+      listEl.innerHTML = '<span style="color:#22c55e; font-size:13px;">✓ All transactions have a merchant assigned.</span>';
+      return;
+    }
+    listEl.innerHTML = items.map(it => {
+      const total = it.total_abs > 0 ? ` · $${it.total_abs.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}` : '';
+      return `<div style="display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:6px; background:var(--bg-alt); font-size:12px;">
+        <span style="flex:1; font-family:monospace; font-size:11px; color:var(--text);">${esc(it.description)}</span>
+        <span style="color:var(--text-muted); white-space:nowrap;">${it.count}× ${total}</span>
+        <span style="color:var(--text-muted); white-space:nowrap; font-size:11px;">${it.last_seen || ''}</span>
+        <button class="btn btn-secondary btn-sm" style="white-space:nowrap; font-size:11px;"
+          onclick="_openRuleFormForDescription(${JSON.stringify(it.description)})">+ Create Rule</button>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    listEl.innerHTML = `<span style="color:var(--danger); font-size:13px;">Error: ${esc(err.message)}</span>`;
+  }
 }
 
 // ── Merchant Rules page ───────────────────────────────────────

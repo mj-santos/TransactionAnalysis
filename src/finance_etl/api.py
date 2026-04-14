@@ -2236,6 +2236,45 @@ No cloud services, no external dependencies — all data stays on your machine.
         return {"updated": updated, "failed": failed, "previous_values": previous_values}
 
     # ── Merchant search (type-ahead) ────────────────────────────────────────
+    @app.get("/merchants/unlabeled", tags=["merchant"],
+             summary="Top raw descriptions with no merchant assigned, ordered by frequency")
+    def get_unlabeled_descriptions(limit: int = Query(30, ge=1, le=200)):
+        """Return distinct raw descriptions from transactions_norm that have no
+        merchant value, sorted by occurrence count descending.  Used to power
+        the Unlabeled Descriptions quick-fix panel on the Merchant Rules page."""
+        try:
+            conn = get_connection(db_path, read_only=True)
+            rows = conn.execute(
+                """SELECT description, COUNT(*) AS cnt,
+                          SUM(ABS(resolved_amount)) AS total_abs,
+                          MIN(CAST(transaction_date AS TEXT)) AS first_seen,
+                          MAX(CAST(transaction_date AS TEXT)) AS last_seen
+                   FROM transactions_norm
+                   WHERE (merchant IS NULL OR merchant = '')
+                     AND description IS NOT NULL AND description != ''
+                     AND COALESCE(excluded, FALSE) = FALSE
+                   GROUP BY description
+                   ORDER BY cnt DESC
+                   LIMIT ?""",
+                [limit],
+            ).fetchall()
+            conn.close()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {
+            "items": [
+                {
+                    "description": r[0],
+                    "count": int(r[1]),
+                    "total_abs": round(float(r[2] or 0), 2),
+                    "first_seen": str(r[3])[:10] if r[3] else None,
+                    "last_seen":  str(r[4])[:10] if r[4] else None,
+                }
+                for r in rows
+            ],
+            "total": len(rows),
+        }
+
     @app.get("/merchants/search", tags=["merchant"],
              summary="Search distinct merchants by name for type-ahead")
     def search_merchants(

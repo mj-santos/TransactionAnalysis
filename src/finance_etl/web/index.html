@@ -987,6 +987,26 @@
       </div>
     </div>
 
+    <!-- Unlabeled Descriptions -->
+    <div class="card" id="panel-unlabeled" style="margin-bottom:24px;">
+      <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
+        <div class="card-title" style="display:flex; align-items:center;">
+          <span>Unlabeled Transaction Descriptions</span>
+          <span class="badge-count" id="unlabeled-count" style="display:none;"></span>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span style="font-size:12px; color:var(--text-muted);">Descriptions with no merchant — create a rule to fix them</span>
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); loadUnlabeledDescriptions()">↻ Refresh</button>
+          <span class="collapse-arrow">▼</span>
+        </div>
+      </div>
+      <div class="card-collapsible-body">
+        <div id="unlabeled-list" style="margin-top:12px; display:flex; flex-direction:column; gap:6px; max-height:400px; overflow-y:auto;">
+          <span style="color:var(--text-muted); font-size:13px;">Click "↻ Refresh" to load.</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Merchant Normalization Rules -->
     <div class="card" id="panel-merchant-rules" style="margin-bottom:24px;">
       <div class="card-header-toggle" onclick="toggleCardCollapse(this)">
