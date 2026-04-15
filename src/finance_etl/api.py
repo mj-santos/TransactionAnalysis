@@ -1557,6 +1557,20 @@ No cloud services, no external dependencies — all data stays on your machine.
         marker = data_root / ".spendly_version"
 
         if action in ("new_session", "import"):
+            # Save a portable JSON backup BEFORE wiping, so recurring overrides,
+            # dismissals, rules, and all other user data can be restored later
+            # via /backup/restore — not just via the binary DuckDB in the zip.
+            archive_dir = data_root / "archive"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            try:
+                if Path(db_path).exists():
+                    json_payload = _create_export_payload()
+                    json_path = archive_dir / f"spendly_backup_{ts}.json"
+                    json_path.write_bytes(json_payload)
+            except Exception:
+                pass  # non-fatal — zip still captures the raw DB
+
             # Dirs (relative to repo root / cwd) to archive
             archive_targets = [
                 Path(db_path).parent,                    # data/db
@@ -1568,9 +1582,6 @@ No cloud services, no external dependencies — all data stays on your machine.
                 Path(mappings_dir),                      # config/mappings
             ]
 
-            archive_dir = data_root / "archive"
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             zip_path = archive_dir / f"spendly_data_{ts}.zip"
 
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
