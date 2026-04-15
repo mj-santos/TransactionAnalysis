@@ -1738,7 +1738,7 @@ No cloud services, no external dependencies — all data stays on your machine.
 
         _ns = "COALESCE(amount, 0)"
         try:
-            conn = get_connection(db_path)
+            conn = get_connection(db_path, read_only=True)
             if group_fields:
                 # Feature 3 aggregations
                 # INCOME_FILTER — see query_helpers.py

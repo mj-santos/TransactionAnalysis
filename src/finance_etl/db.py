@@ -420,6 +420,7 @@ CREATE TABLE IF NOT EXISTS annual_reports (
     )""",
 
     # ── Recurring payment log (mark-as-paid on upcoming bills widget) ───────
+    "CREATE SEQUENCE IF NOT EXISTS seq_recurring_payment_log_id",
     """CREATE TABLE IF NOT EXISTS recurring_payment_log (
         id               BIGINT DEFAULT nextval('seq_recurring_payment_log_id') PRIMARY KEY,
         merchant         TEXT   NOT NULL,
@@ -432,7 +433,6 @@ CREATE TABLE IF NOT EXISTS annual_reports (
         created_at       TEXT   NOT NULL,
         UNIQUE(merchant, occurrence_date)
     )""",
-    "CREATE SEQUENCE IF NOT EXISTS seq_recurring_payment_log_id",
 
     # ── Saved reports (user-defined reusable filter+groupby presets) ──────
     "CREATE SEQUENCE IF NOT EXISTS seq_saved_reports_id",
@@ -509,7 +509,10 @@ def _bootstrap_schema(conn) -> None:
         try:
             conn.execute(migration)
         except Exception:
-            conn.rollback()  # clear aborted-txn state; DuckDB requires this after any failed execute
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     # Tracked (expensive) migrations — skipped once applied
     import datetime as _dt
@@ -523,4 +526,7 @@ def _bootstrap_schema(conn) -> None:
                 [mid, _dt.datetime.utcnow().isoformat()],
             )
         except Exception:
-            conn.rollback()  # clear aborted-txn state
+            try:
+                conn.rollback()
+            except Exception:
+                pass
