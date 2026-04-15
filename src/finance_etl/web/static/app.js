@@ -1860,6 +1860,7 @@ async function maybeShowLogsOnError() {
 
 // ── Recurring — data cache & filter state ─────────────────────
 let _recurringPatterns = [];   // full active list from last fetch
+let _priceChangeMap   = {};   // merchant → price-change object
 let _recurringFilterState = {
   query: '',
   frequency: null,   // null = all
@@ -1942,38 +1943,17 @@ async function loadRecurringTransactions() {
 }
 
 async function _loadPriceChangeAlerts() {
-  const el = document.getElementById('recurring-price-alerts');
-  if (!el) return;
   try {
     const data = await api('GET', '/recurring/price-changes');
-    _renderPriceChangeAlerts(data.changes || []);
+    _priceChangeMap = {};
+    for (const c of (data.changes || [])) {
+      _priceChangeMap[c.merchant] = c;
+    }
+    // Re-render the list so rows pick up inline badges
+    _applyRecurringFilters();
   } catch (_) {
-    el.style.display = 'none';
+    // non-fatal — list renders fine without badges
   }
-}
-
-function _renderPriceChangeAlerts(changes) {
-  const el = document.getElementById('recurring-price-alerts');
-  if (!el) return;
-  if (!changes.length) { el.style.display = 'none'; return; }
-
-  const rows = changes.map(c => {
-    const sign = c.direction === 'up' ? '▲' : '▼';
-    const color = c.direction === 'up' ? 'var(--danger)' : '#0d9488';
-    const pct = Math.abs(c.delta_pct).toFixed(1);
-    return `<div style="display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid var(--border);">
-      <span style="flex:1; font-weight:500;">${esc(c.merchant)}</span>
-      <span style="color:var(--text-muted); font-size:12px;">was $${c.old_amount.toFixed(2)}</span>
-      <span style="font-weight:600; color:${color};">${sign} $${c.new_amount.toFixed(2)} <span style="font-size:11px;">(${pct}%)</span></span>
-      <span style="font-size:11px; color:var(--text-muted);">${c.last_date}</span>
-    </div>`;
-  }).join('');
-
-  el.innerHTML = `<div class="card" style="border-left:4px solid var(--warning);">
-    <div class="card-title" style="color:var(--warning); margin-bottom:8px;">⚠ Price Changes Detected</div>
-    <div style="font-size:13px;">${rows}</div>
-  </div>`;
-  el.style.display = '';
 }
 
 // ── Filter state setters ──────────────────────────────────────
@@ -2158,6 +2138,17 @@ function _renderRecurringList(patterns, container) {
         <div style="font-size:11px; color:var(--text-muted);">Your share: $${yourShare}</div>`;
     } else {
       amountCell = `<div style="font-weight:600; font-variant-numeric:tabular-nums;">$${Number(p.median_amount).toFixed(2)}</div>`;
+    }
+
+    // Inline price-change badge
+    const pc = _priceChangeMap[p.merchant];
+    if (pc) {
+      const sign  = pc.direction === 'up' ? '▲' : '▼';
+      const color = pc.direction === 'up' ? 'var(--danger)' : '#0d9488';
+      const pct   = Math.abs(pc.delta_pct).toFixed(1);
+      amountCell += `<div style="font-size:11px; color:${color}; margin-top:2px; font-variant-numeric:tabular-nums;"
+        title="Was $${Number(pc.old_amount).toFixed(2)} · changed ${esc(pc.last_date)}"
+      >${sign} was $${Number(pc.old_amount).toFixed(2)} <span style="opacity:0.8;">(${pct}%)</span></div>`;
     }
 
     html += `<tr id="rec-row-${CSS.escape(mKey)}" style="border-bottom:1px solid var(--border); cursor:default;">
