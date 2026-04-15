@@ -509,7 +509,7 @@ def _bootstrap_schema(conn) -> None:
         try:
             conn.execute(migration)
         except Exception:
-            conn.execute("ROLLBACK")  # clear aborted-txn state before next statement
+            conn.rollback()  # clear aborted-txn state; DuckDB requires this after any failed execute
 
     # Tracked (expensive) migrations — skipped once applied
     import datetime as _dt
@@ -523,4 +523,4 @@ def _bootstrap_schema(conn) -> None:
                 [mid, _dt.datetime.utcnow().isoformat()],
             )
         except Exception:
-            conn.execute("ROLLBACK")  # clear aborted-txn state before next statement
+            conn.rollback()  # clear aborted-txn state
