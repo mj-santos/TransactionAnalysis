@@ -1971,7 +1971,7 @@ No cloud services, no external dependencies — all data stays on your machine.
             FROM transactions_norm{where_sql}
         """
         try:
-            conn = get_connection(db_path)
+            conn = get_connection(db_path, read_only=True)
             row = conn.execute(sql, params).fetchone()
             conn.close()
         except Exception as exc:
