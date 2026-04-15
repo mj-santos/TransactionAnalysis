@@ -1512,6 +1512,96 @@ No cloud services, no external dependencies — all data stays on your machine.
             ver = "unknown"
         return {"version": ver}
 
+    @app.get("/startup-check", tags=["ui"], summary="Check if this is a post-install first launch")
+    def startup_check():
+        """
+        Compares the installed version marker (data/.spendly_version) against the
+        running package version.  Returns post_install=True whenever they differ
+        or the marker is absent — i.e. on every fresh install or upgrade.
+        has_data=True when the DuckDB file already exists on disk.
+        """
+        import importlib.metadata as _im
+        try:
+            current = _im.version("finance_etl")
+        except Exception:
+            current = "unknown"
+
+        data_root = Path(db_path).parent.parent
+        marker = data_root / ".spendly_version"
+        saved = marker.read_text().strip() if marker.exists() else None
+        post_install = saved != current
+        has_data = Path(db_path).exists()
+        return {"post_install": post_install, "has_data": has_data, "version": current}
+
+    @app.post("/startup-action", tags=["ui"], summary="Handle post-install startup choice")
+    def startup_action(body: dict):
+        """
+        action='existing'   — accept current data as-is, write version marker.
+        action='new_session' — archive all local data to a zip, start clean.
+        action='import'     — same archive as new_session; UI will redirect to import.
+        """
+        import importlib.metadata as _im
+        import zipfile, shutil
+        from datetime import datetime
+
+        action = body.get("action", "existing")
+        if action not in ("existing", "new_session", "import"):
+            raise HTTPException(status_code=400, detail="action must be existing | new_session | import")
+
+        try:
+            current = _im.version("finance_etl")
+        except Exception:
+            current = "unknown"
+
+        data_root = Path(db_path).parent.parent
+        marker = data_root / ".spendly_version"
+
+        if action in ("new_session", "import"):
+            # Dirs (relative to repo root / cwd) to archive
+            archive_targets = [
+                Path(db_path).parent,                    # data/db
+                data_root / "raw",
+                data_root / "reports",
+                data_root / "master",
+                data_root / "profiles",
+                data_root / "validation",
+                Path(mappings_dir),                      # config/mappings
+            ]
+
+            archive_dir = data_root / "archive"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_path = archive_dir / f"spendly_data_{ts}.zip"
+
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for target in archive_targets:
+                    if not target.exists():
+                        continue
+                    if target.is_file():
+                        zf.write(target, target.name)
+                    else:
+                        for fp in target.rglob("*"):
+                            if fp.is_file():
+                                zf.write(fp, fp.relative_to(target.parent))
+
+            # Delete originals and recreate empty dirs
+            for target in archive_targets:
+                if target.exists():
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                # Recreate the directory (not config/mappings files — just the dir)
+                if not target.suffix:          # it's a directory path
+                    target.mkdir(parents=True, exist_ok=True)
+
+            marker.write_text(current)
+            return {"ok": True, "archived_to": str(zip_path)}
+
+        # action == "existing"
+        marker.write_text(current)
+        return {"ok": True}
+
     @app.get(
         "/settings",
         tags=["ui"],

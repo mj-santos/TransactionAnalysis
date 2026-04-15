@@ -10736,5 +10736,48 @@ async function _ensureCategoryTaxonomy() {
   return _categoryTaxonomy;
 }
 
-// Trigger onboarding check after initial load
-setTimeout(_checkOnboarding, 1500);
+// ── Startup Modal (post-install) ───────────────────────────────
+
+async function _checkStartup() {
+  try {
+    const data = await api('GET', '/startup-check');
+    if (data.post_install) {
+      const modal = document.getElementById('startup-modal');
+      if (modal) modal.classList.remove('hidden');
+      return true;   // startup modal is showing — skip onboarding
+    }
+  } catch {
+    // If the endpoint fails (old server?), fall through to normal onboarding
+  }
+  return false;
+}
+
+async function startupAction(action) {
+  const cards = document.querySelectorAll('.startup-option-card');
+  const status = document.getElementById('startup-modal-status');
+  cards.forEach(c => { c.disabled = true; });
+  if (status) status.textContent = 'Working…';
+
+  try {
+    await api('POST', '/startup-action', { action });
+  } catch (err) {
+    if (status) status.textContent = 'Error: ' + err.message;
+    cards.forEach(c => { c.disabled = false; });
+    return;
+  }
+
+  const modal = document.getElementById('startup-modal');
+  if (modal) modal.classList.add('hidden');
+
+  if (action === 'import') {
+    navigate('import');
+  } else {
+    _checkOnboarding();
+  }
+}
+
+// Trigger startup check, then onboarding if no startup modal shown
+setTimeout(async () => {
+  const startupShown = await _checkStartup();
+  if (!startupShown) _checkOnboarding();
+}, 1500);

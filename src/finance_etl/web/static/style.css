@@ -2087,6 +2087,28 @@ tr.bulk-selected > td:first-child {
   font-weight: 600;
 }
 
+/* ── Startup Modal ─────────────────────────────────────────── */
+.startup-option-card {
+  width: 100%;
+  padding: 16px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg, #fff);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--text);
+}
+.startup-option-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent);
+}
+.startup-option-card:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Onboarding ────────────────────────────────────────────── */
 .onboarding-step {
   padding: 16px 20px;

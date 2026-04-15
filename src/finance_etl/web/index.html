@@ -3190,6 +3190,56 @@
   </div>
 </div>
 
+<!-- Startup Modal (post-install) -->
+<div id="startup-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="startup-modal-title">
+  <div class="modal-dialog" style="max-width:580px;">
+    <div style="text-align:center; margin-bottom:20px;">
+      <div style="font-size:28px; margin-bottom:8px;">👋</div>
+      <span id="startup-modal-title" style="font-size:20px; font-weight:700;">Spendly was just updated</span>
+      <p style="font-size:13px; color:var(--text-muted); margin-top:8px;">
+        Choose how you'd like to start this session. Your previous data can always be found in <code>data/archive/</code>.
+      </p>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:12px;">
+
+      <!-- New Session -->
+      <button id="startup-btn-new" class="startup-option-card" onclick="startupAction('new_session')">
+        <div style="display:flex; align-items:flex-start; gap:14px; text-align:left;">
+          <div style="font-size:24px; flex-shrink:0;">🗂️</div>
+          <div>
+            <div style="font-weight:700; font-size:15px; margin-bottom:4px;">New Session</div>
+            <div style="font-size:12px; color:var(--text-muted);">Archive all existing local data and start completely fresh. Nothing is deleted — it's all zipped to <code>data/archive/</code>.</div>
+          </div>
+        </div>
+      </button>
+
+      <!-- Existing Session -->
+      <button id="startup-btn-existing" class="startup-option-card" onclick="startupAction('existing')">
+        <div style="display:flex; align-items:flex-start; gap:14px; text-align:left;">
+          <div style="font-size:24px; flex-shrink:0;">✅</div>
+          <div>
+            <div style="font-weight:700; font-size:15px; margin-bottom:4px;">Continue Existing Session</div>
+            <div style="font-size:12px; color:var(--text-muted);">Keep using your current local data as-is. Pick this if you upgraded and want everything to stay the same.</div>
+          </div>
+        </div>
+      </button>
+
+      <!-- Import Data -->
+      <button id="startup-btn-import" class="startup-option-card" onclick="startupAction('import')">
+        <div style="display:flex; align-items:flex-start; gap:14px; text-align:left;">
+          <div style="font-size:24px; flex-shrink:0;">📥</div>
+          <div>
+            <div style="font-weight:700; font-size:15px; margin-bottom:4px;">Import Data</div>
+            <div style="font-size:12px; color:var(--text-muted);">Archive existing local data and go straight to the Import page to bring in new statements.</div>
+          </div>
+        </div>
+      </button>
+
+    </div>
+    <p id="startup-modal-status" style="font-size:12px; color:var(--text-muted); text-align:center; margin-top:14px; min-height:16px;"></p>
+  </div>
+</div>
+
 <!-- Onboarding Modal -->
 <div id="onboarding-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeOnboarding()" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
   <div class="modal-dialog" style="max-width:520px;">
