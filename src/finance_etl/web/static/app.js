@@ -2614,6 +2614,7 @@ async function acceptAnnualSuggestion(sid) {
     });
     _removeAnnualSuggestionRow(sid);
     toast(`Added "${s.label}" to recurring charges`, 'success', 3000);
+    _recurringLoadedAt = 0;   // bust cache so the new charge appears immediately
     loadRecurringTransactions();
   } catch (err) {
     toast(`Accept failed: ${err.message}`, 'error');
@@ -2650,6 +2651,7 @@ async function submitEditSuggestion(sid) {
     });
     _removeAnnualSuggestionRow(sid);
     toast(`Added "${label}" to recurring charges`, 'success', 3000);
+    _recurringLoadedAt = 0;   // bust cache so the new charge appears immediately
     loadRecurringTransactions();
   } catch (err) {
     toast(`Save failed: ${err.message}`, 'error');

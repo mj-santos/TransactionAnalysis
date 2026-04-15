@@ -6599,8 +6599,8 @@ No cloud services, no external dependencies — all data stays on your machine.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         now = _dt.datetime.utcnow().isoformat()
+        conn = _gc(db_path)
         try:
-            conn = _gc(db_path)
             # Use label as merchant_key for the override
             conn.execute(
                 "DELETE FROM recurring_overrides WHERE merchant_key = ?",
@@ -6625,10 +6625,11 @@ No cloud services, no external dependencies — all data stays on your machine.
                 "VALUES (?, ?)",
                 [suggestion_id, now],
             )
-            conn.close()
         except Exception as exc:
             raise HTTPException(status_code=500,
                                 detail=f"Accept failed: {exc}") from exc
+        finally:
+            conn.close()
 
         return {"status": "accepted", "label": label}
 
