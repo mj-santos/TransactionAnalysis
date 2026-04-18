@@ -1636,6 +1636,110 @@ No cloud services, no external dependencies — all data stays on your machine.
         _save_ui_settings(app.state.ui_settings)
         return dict(app.state.ui_settings)
 
+    # -----------------------------------------------------------------------
+    # In-app update (Docker only)
+    # -----------------------------------------------------------------------
+
+    def _run_git(*args) -> tuple[int, str, str]:
+        import subprocess
+        r = subprocess.run(
+            ["git", *args],
+            cwd="/app",
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+    def _git_available() -> bool:
+        try:
+            code, _, _ = _run_git("rev-parse", "--git-dir")
+            return code == 0
+        except Exception:
+            return False
+
+    @app.get("/system/update-check", tags=["ui"], summary="Check for available updates")
+    def system_update_check():
+        if not _git_available():
+            return {"available": False, "reason": "not_git_repo"}
+
+        _run_git("fetch", "origin")
+
+        _, local_sha, _ = _run_git("rev-parse", "HEAD")
+        _, remote_sha, _ = _run_git("rev-parse", "origin/main")
+
+        if not local_sha or not remote_sha:
+            return {"available": False, "reason": "git_error"}
+
+        if local_sha == remote_sha:
+            try:
+                from importlib.metadata import version as _pkg_version
+                current = _pkg_version("finance_etl")
+            except Exception:
+                current = "unknown"
+            return {"available": False, "current_version": current, "latest_version": current}
+
+        _, commits_behind_str, _ = _run_git(
+            "rev-list", "--count", f"HEAD..origin/main"
+        )
+        commits_behind = int(commits_behind_str) if commits_behind_str.isdigit() else 0
+
+        _, raw_toml, _ = _run_git("show", "origin/main:pyproject.toml")
+        latest_version = "unknown"
+        for line in raw_toml.splitlines():
+            if line.strip().startswith("version"):
+                parts = line.split("=", 1)
+                if len(parts) == 2:
+                    latest_version = parts[1].strip().strip('"').strip("'")
+                break
+
+        _, changelog, _ = _run_git(
+            "log", "--oneline", f"HEAD..origin/main", "--max-count=10"
+        )
+
+        try:
+            from importlib.metadata import version as _pkg_version
+            current_version = _pkg_version("finance_etl")
+        except Exception:
+            current_version = "unknown"
+
+        return {
+            "available": True,
+            "current_version": current_version,
+            "latest_version": latest_version,
+            "commits_behind": commits_behind,
+            "changelog": changelog,
+        }
+
+    @app.post("/system/update", tags=["ui"], summary="Pull latest code and restart")
+    def system_update():
+        if not _git_available():
+            raise HTTPException(status_code=400, detail="Not a git repository — update not available.")
+
+        code, _, err = _run_git("pull", "origin", "main")
+        if code != 0:
+            raise HTTPException(status_code=500, detail=f"git pull failed: {err}")
+
+        import subprocess, sys, threading
+
+        pip_result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "."],
+            cwd="/app",
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if pip_result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"pip install failed: {pip_result.stderr}")
+
+        def _restart():
+            import time, os
+            time.sleep(1)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        threading.Thread(target=_restart, daemon=True).start()
+        return {"ok": True, "restarting": True}
+
     @app.get(
         "/logs",
         tags=["ui"],

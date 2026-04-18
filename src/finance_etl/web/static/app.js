@@ -1809,9 +1809,10 @@ async function loadSettings() {
   } catch (err) {
     document.getElementById('settings-status').textContent = `Failed to load settings: ${err.message}`;
   }
-  // Load backup status and tags in parallel (non-blocking)
+  // Load backup status, tags, and update badge in parallel (non-blocking)
   loadBackupStatus();
   loadTags();
+  _loadUpdateBadge();
 }
 
 async function saveSettings() {
@@ -1843,6 +1844,61 @@ async function refreshLogs() {
     document.getElementById('logs-output').textContent = data.lines && data.lines.length ? data.lines.join('\n') : 'No log lines yet.';
   } catch (err) {
     document.getElementById('logs-output').textContent = `Failed to load logs: ${err.message}`;
+  }
+}
+
+async function _loadUpdateBadge() {
+  try {
+    const data = await api('GET', '/version');
+    const badge = document.getElementById('update-current-badge');
+    if (badge) badge.textContent = `v${data.version}`;
+  } catch (_) {}
+}
+
+async function checkForUpdates() {
+  const status = document.getElementById('update-status');
+  const installBtn = document.getElementById('update-install-btn');
+  const detail = document.getElementById('update-detail');
+  const changelog = document.getElementById('update-changelog');
+  installBtn.style.display = 'none';
+  detail.style.display = 'none';
+  status.textContent = 'Checking…';
+  try {
+    const data = await api('GET', '/system/update-check');
+    if (data.reason === 'not_git_repo') {
+      status.textContent = 'Not available — container not started with source mounts.';
+      return;
+    }
+    const badge = document.getElementById('update-current-badge');
+    if (badge) badge.textContent = `v${data.current_version}`;
+    if (!data.available) {
+      status.textContent = `Already up to date (v${data.current_version}).`;
+      return;
+    }
+    status.textContent = `v${data.latest_version} available — ${data.commits_behind} commit${data.commits_behind === 1 ? '' : 's'} ahead.`;
+    installBtn.style.display = '';
+    if (data.changelog) {
+      changelog.textContent = data.changelog;
+      detail.style.display = '';
+    }
+  } catch (err) {
+    status.textContent = `Check failed: ${err.message}`;
+  }
+}
+
+async function installUpdate() {
+  const status = document.getElementById('update-status');
+  const installBtn = document.getElementById('update-install-btn');
+  installBtn.disabled = true;
+  status.textContent = 'Pulling update and reinstalling… this may take 30–60 seconds.';
+  try {
+    await api('POST', '/system/update');
+    status.textContent = 'Update applied. Restarting — page will reload in 8 seconds…';
+    installBtn.style.display = 'none';
+    setTimeout(() => location.reload(), 8000);
+  } catch (err) {
+    status.textContent = `Update failed: ${err.message}`;
+    installBtn.disabled = false;
   }
 }
 

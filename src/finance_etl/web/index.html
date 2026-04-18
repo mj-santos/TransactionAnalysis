@@ -885,6 +885,25 @@
       </div>
     </div>
 
+    <!-- Software Update -->
+    <div class="card" style="margin-top:20px;">
+      <div class="card-title flex-between">
+        <span>Software Update</span>
+        <span id="update-current-badge" class="badge" style="font-size:11px; background:var(--bg-alt); color:var(--text-muted); padding:2px 8px; border-radius:4px;"></span>
+      </div>
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:14px;">
+        Check for a newer version of Spendly. Requires the container to have been started with source mounts (Docker Compose).
+      </p>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+        <button class="btn btn-secondary btn-sm" onclick="checkForUpdates()">Check for Updates</button>
+        <button id="update-install-btn" class="btn btn-primary btn-sm" style="display:none;" onclick="installUpdate()">Update Now</button>
+        <span id="update-status" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+      <div id="update-detail" style="display:none; font-size:12px; background:var(--bg-alt); border-radius:6px; padding:10px 12px;">
+        <div id="update-changelog" style="white-space:pre-wrap; font-family:monospace; color:var(--text-muted);"></div>
+      </div>
+    </div>
+
     <div class="card" id="logs-panel" style="display:none;">
       <div class="card-title flex-between">
         <span>Backend Logs</span>

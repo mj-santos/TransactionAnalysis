@@ -12,6 +12,9 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+      - ./.git:/app/.git
+      - ./src:/app/src
+      - ./pyproject.toml:/app/pyproject.toml
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:${FINANCE_ETL_API_PORT:-8000}/reports', timeout=2)\""]
       interval: 30s
